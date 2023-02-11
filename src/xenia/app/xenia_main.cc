@@ -118,7 +118,7 @@ DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount",
 
 DECLARE_bool(force_mount_devkit);
 
-DEFINE_transient_path(target, 
+DEFINE_transient_path(target,
                       "",
                       "Specifies the target .xex or .iso to execute.",
                       "General");

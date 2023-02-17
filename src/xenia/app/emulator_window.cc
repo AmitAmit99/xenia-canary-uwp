@@ -43,6 +43,9 @@
 #include "build/version.h"
 #include "xenia-canary-uwp/UWPUtil.h"
 #include "xenia-canary-uwp/XeniaUWP.h"
+#include "xenia/config.h"
+#include "xenia/base/cvar.h"
+#include "xenia/ui/d3d12/d3d12_immediate_drawer.h"
 
 DECLARE_bool(debug);
 
@@ -64,7 +67,7 @@ DEFINE_bool(controller_hotkeys, false,
 
 DECLARE_bool(skip_frontend);
 
-DEFINE_bool(skip_frontend, true,
+DEFINE_bool(skip_frontend, false,
             "Skip the UWP frontend and launch with a file-picker.", "General");
 
 DEFINE_string(

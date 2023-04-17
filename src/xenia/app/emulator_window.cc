@@ -2349,6 +2349,420 @@ void EmulatorWindow::ClearDialogs() {
   }
 
   imgui_drawer_.get()->ClearDialogs();
+}
+
+void EmulatorWindow::RunTitle(std::filesystem::path path) {
+  // ... (rest of the code remains the same)
+        if (ImGui::Selectable("2x", scale_value == 2)) {
+          cscale_x->SetConfigValue(2);
+          cscale_y->SetConfigValue(2);
+          config::SaveConfig();
+        }
+
+        if (ImGui::Selectable("3x", scale_value == 3)) {
+          cscale_x->SetConfigValue(3);
+          cscale_y->SetConfigValue(3);
+          config::SaveConfig();
+        }
+
+        ImGui::EndCombo();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = cscale_x->description();
+      }
+
+      auto cl = dynamic_cast<cvar::ConfigVar<std::string>*>(cvar::ConfigVars->find("cl")->second);
+      std::string cl_text = (std::string)cl->GetTypedConfigValue();
+      if (cl_text != cl_buffer) {
+        cl->SetConfigValue(cl_buffer);
+        config::SaveConfig();
+      }
+
+      if (ImGui::Button("Set CL")) {
+        UWP::ShowKeyboard();
+        ImGui::SetKeyboardFocusHere();
+      }
+
+      ImGui::SameLine();
+      ImGui::InputText("##cl-text", cl_buffer, 128);
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = cl->description();
+      }
+
+      auto cvsync = dynamic_cast<cvar::ConfigVar<bool>*>(cvar::ConfigVars->find("vsync")->second);
+      if (ImGui::Checkbox("V-Sync", cvsync->current_value())) {
+        cvsync->SetConfigValue(!cvsync->GetTypedConfigValue());
+        config::SaveConfig();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = cvsync->description();
+      }
+        
+      auto c2xmsaa = dynamic_cast<cvar::ConfigVar<bool>*>(cvar::ConfigVars->find("native_2x_msaa")->second);
+      if (ImGui::Checkbox("Native 2X MSAA", c2xmsaa->current_value())) {
+        c2xmsaa->SetConfigValue(!c2xmsaa->GetTypedConfigValue());
+        config::SaveConfig();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = c2xmsaa->description();
+      }
+
+      auto cmount_cache = dynamic_cast<cvar::ConfigVar<bool>*>(
+          cvar::ConfigVars->find("mount_cache")->second);
+      if (ImGui::Checkbox("Toggle Mount Cache",
+                          cmount_cache->current_value())) {
+        cmount_cache->SetConfigValue(!cmount_cache->GetTypedConfigValue());
+        config::SaveConfig();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = cmount_cache->description();
+      }
+
+      auto cdxbc = dynamic_cast<cvar::ConfigVar<bool>*>(cvar::ConfigVars->find("dxbc_switch")->second);
+      if (ImGui::Checkbox("Toggle DXBC Switch", cdxbc->current_value())) {
+        cdxbc->SetConfigValue(!cdxbc->GetTypedConfigValue());
+        config::SaveConfig();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = cdxbc->description();
+      }
+
+      auto cclear_memory_page= dynamic_cast<cvar::ConfigVar<bool>*>(
+          cvar::ConfigVars->find("d3d12_clear_memory_page_state")->second);
+      if (ImGui::Checkbox("Toggle Clear Memory Page State", cclear_memory_page->current_value())) {
+        cclear_memory_page->SetConfigValue(
+            !cclear_memory_page->GetTypedConfigValue());
+        config::SaveConfig();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = cclear_memory_page->description();
+      }
+
+      auto callowinvalid = dynamic_cast<cvar::ConfigVar<bool>*>(
+          cvar::ConfigVars->find("gpu_allow_invalid_fetch_constants")->second);
+      if (ImGui::Checkbox("Toggle Allow Invalid Fetch Constants",
+                          callowinvalid->current_value())) {
+        callowinvalid->SetConfigValue(
+            !callowinvalid->GetTypedConfigValue());
+        config::SaveConfig();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = callowinvalid->description();
+      }
+
+      auto creadback_resolve = dynamic_cast<cvar::ConfigVar<bool>*>(
+          cvar::ConfigVars->find("d3d12_readback_resolve")->second);
+      if (ImGui::Checkbox("Readback Resolve",
+                          creadback_resolve->current_value())) {
+        creadback_resolve->SetConfigValue(
+            !creadback_resolve->GetTypedConfigValue());
+        config::SaveConfig();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = creadback_resolve->description();
+      }
+
+      auto c_host_guest_stacksync = dynamic_cast<cvar::ConfigVar<bool>*>(
+          cvar::ConfigVars->find("enable_host_guest_stack_synchronization")->second);
+      if (ImGui::Checkbox("Toggle Host Guest Stack Sync",
+                          c_host_guest_stacksync->current_value())) {
+        c_host_guest_stacksync->SetConfigValue(
+            !c_host_guest_stacksync->GetTypedConfigValue());
+        config::SaveConfig();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = c_host_guest_stacksync->description();
+      }
+
+      auto cpostscaling = dynamic_cast<cvar::ConfigVar<std::string>*>(
+          cvar::ConfigVars->find("postprocess_scaling_and_sharpening")->second);
+      std::string cpostscaling_value = cpostscaling->GetTypedConfigValue();
+      if (ImGui::BeginCombo(
+              "Scaling & Sharpening Effect",
+              (cpostscaling_value == "" ? "None"
+                                        : cpostscaling_value.c_str()))) {
+        if (ImGui::Selectable("None", cpostscaling_value == "")) {
+            cpostscaling->SetConfigValue("");
+            config::SaveConfig();
+        }
+
+        if (ImGui::Selectable("Billinear", cpostscaling_value == "billinear")) {
+            cpostscaling->SetConfigValue("billinear");
+            config::SaveConfig();
+        }
+
+        if (ImGui::Selectable("CAS", cpostscaling_value == "cas")) {
+            cpostscaling->SetConfigValue("cas");
+            config::SaveConfig();
+        }
+
+        if (ImGui::Selectable("FSR", cpostscaling_value == "fsr")) {
+            cpostscaling->SetConfigValue("fsr");
+            config::SaveConfig();
+        }
+
+        ImGui::EndCombo();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = cpostscaling->description();
+      }
+
+      auto cpostaa = dynamic_cast<cvar::ConfigVar<std::string>*>(
+          cvar::ConfigVars->find("postprocess_antialiasing")->second);
+      std::string postaa_value = cpostaa->GetTypedConfigValue();
+      if (ImGui::BeginCombo("Anti-Aliasing", (postaa_value == "" ? "None" : postaa_value.c_str()))) {
+        if (ImGui::Selectable("None", postaa_value == "")) {
+            cpostaa->SetConfigValue("");
+            config::SaveConfig();
+        }
+
+        if (ImGui::Selectable("FXAA", postaa_value == "fxaa")) {
+            cpostaa->SetConfigValue("fxaa");
+            config::SaveConfig();
+        }
+
+        if (ImGui::Selectable("FXAA Extreme", postaa_value == "fxaa_extreme")) {
+            cpostaa->SetConfigValue("fxaa_extreme");
+            config::SaveConfig();
+        }
+
+        ImGui::EndCombo();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = cpostaa->description();
+      }
+
+      auto cfsr_max_upsampling = dynamic_cast<cvar::ConfigVar<uint32_t>*>(
+          cvar::ConfigVars->find("postprocess_ffx_fsr_max_upsampling_passes")->second);
+      uint32_t fsr_max_upsampling_value =
+          cfsr_max_upsampling->GetTypedConfigValue();
+      char value_label[32];
+      snprintf(value_label, 32, "%dx", fsr_max_upsampling_value);
+      if (ImGui::BeginCombo("PostFX FSR Max Upsampling Passes", value_label)) {
+        if (ImGui::Selectable("1x", fsr_max_upsampling_value == 1)) {
+            cfsr_max_upsampling->SetConfigValue(1);
+            config::SaveConfig();
+        }
+
+        if (ImGui::Selectable("2x", fsr_max_upsampling_value == 2)) {
+            cfsr_max_upsampling->SetConfigValue(2);
+            config::SaveConfig();
+        }
+
+        if (ImGui::Selectable("3x", fsr_max_upsampling_value == 3)) {
+            cfsr_max_upsampling->SetConfigValue(3);
+            config::SaveConfig();
+        }
+
+        if (ImGui::Selectable("4x", fsr_max_upsampling_value == 4)) {
+            cfsr_max_upsampling->SetConfigValue(4);
+            config::SaveConfig();
+        }
+
+        ImGui::EndCombo();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = cfsr_max_upsampling->description();
+      }
+
+      auto cffx_cas_additional = dynamic_cast<cvar::ConfigVar<double>*>(
+          cvar::ConfigVars->find("postprocess_ffx_cas_additional_sharpness")
+              ->second);
+      float cas_additional = (float) cffx_cas_additional->GetTypedConfigValue();
+      if (ImGui::SliderFloat("PostFX CAS Additional Sharpness", &cas_additional,
+                             0, 1.0f, "%f")) {
+        cffx_cas_additional->SetConfigValue((double) cas_additional);
+        config::SaveConfig();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = cffx_cas_additional->description();
+      }
+
+      auto cffx_fsr_sharpness_reduction = dynamic_cast<cvar::ConfigVar<double>*>(
+          cvar::ConfigVars->find("postprocess_ffx_fsr_sharpness_reduction")
+              ->second);
+      float cfsr_sharpness_reduction =
+          (float) cffx_fsr_sharpness_reduction->GetTypedConfigValue();
+      if (ImGui::SliderFloat("PostFX FSR Sharpenss Reduction",
+                             &cfsr_sharpness_reduction, 0, 1.0f, "%f")) {
+        cffx_fsr_sharpness_reduction->SetConfigValue((double) cfsr_sharpness_reduction);
+        config::SaveConfig();
+      }
+
+      if (ImGui::IsItemFocused()) {
+        tooltip = cffx_fsr_sharpness_reduction->description();
+      }
+
+      ImGui::Spacing();
+      ImGui::Separator();
+
+      ImGui::TextWrapped(tooltip.c_str());
+
+      ImGui::EndTabItem();
+    }
+
+    if (ImGui::BeginTabItem("Paths", nullptr)) {
+      if (ImGui::BeginListBox("##folders")) {
+        for (auto path : UWP::GetPaths()) {
+          if (ImGui::Selectable(path.c_str())) {
+            selectedPath = path;
+          }
+        }
+        ImGui::EndListBox();
+      }
+
+      if (selectedPath == "") {
+        ImGui::BeginDisabled();
+      }
+
+      if (ImGui::Button("Remove Path")) {
+        if (selectedPath != "") {
+          auto paths = UWP::GetPaths();
+          paths.erase(std::remove(paths.begin(), paths.end(), selectedPath), paths.end());
+          UWP::SetGamePaths(paths);
+          selectedPath = "";
+        }
+      }
+
+      if (selectedPath == "") {
+        ImGui::EndDisabled();
+      }
+
+      ImGui::SameLine();
+      if (ImGui::Button("Add Path")) {
+        imgui_drawer()->SetIgnoreInput(true);
+        UWP::SelectFolder([this](std::string path) {
+          if (path != "") {
+            if (!UWP::TestPathPermissions(path)) {
+              show_path_warning_ = true;
+            } else {
+              auto paths = UWP::GetPaths();
+              paths.push_back(path);
+              UWP::SetGamePaths(paths);
+            }
+          }
+
+          imgui_drawer()->SetIgnoreInput(false);
+        });
+      }
+
+      ImGui::Spacing();
+      ImGui::Separator();
+
+      auto ccache_root = dynamic_cast<cvar::ConfigVar<std::filesystem::path>*>(
+          cvar::ConfigVars->find("cache_root")->second);
+      auto ccontent_root =
+          dynamic_cast<cvar::ConfigVar<std::filesystem::path>*>(
+          cvar::ConfigVars->find("content_root")->second);
+      auto cstorage_root =
+          dynamic_cast<cvar::ConfigVar<std::filesystem::path>*>(
+          cvar::ConfigVars->find("storage_root")->second);
+
+      if (ImGui::Button("Set Config Folders Path")) {
+        imgui_drawer()->SetIgnoreInput(true);
+        UWP::SelectFolder([this, ccache_root, ccontent_root,
+                           cstorage_root](std::string path) {
+          if (path != "") {
+            if (!UWP::TestPathPermissions(path)) {
+              ImGui::OpenPopup("Warning");
+            } else {
+              ccache_root->SetConfigValue(
+                  std::filesystem::path(path + "\\cache"));
+              ccontent_root->SetConfigValue(
+                  std::filesystem::path(path + "\\content"));
+              cstorage_root->SetConfigValue(
+                  std::filesystem::path(path + "\\storage"));
+              config::SaveConfig();
+            }
+          }
+
+          imgui_drawer()->SetIgnoreInput(false);
+        });
+      }
+
+      ImGui::SameLine();
+      if (ImGui::Button("Reset Config Folders Path")) {
+        ccache_root->SetConfigValue("");
+        ccontent_root->SetConfigValue("");
+        cstorage_root->SetConfigValue("");
+        config::SaveConfig();
+      }
+
+      ImGui::Spacing();
+      ImGui::Separator();
+      ImGui::TextWrapped(
+          "Note: Please remember to do your USB filesystem setup, or paths to "
+          "your USB will not work properly!");
+
+      if (show_path_warning_) {
+        ImGui::OpenPopup("Warning");
+        show_path_warning_ = false;
+        ImGui::SetNextWindowSize(
+            ImVec2(1600 * display_scale, 150 * display_scale));
+      }
+
+      if (ImGui::BeginPopupModal("Warning")) {
+        ImGui::TextWrapped("The folder path you have selected is not writable! Please check that you have the correct permissions for the folder you have selected.");
+        ImGui::Separator();
+        if (ImGui::Button("OK")) {
+          ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+      }
+
+      ImGui::EndTabItem();
+    }
+
+    if (ImGui::BeginTabItem("Extra", nullptr)) {
+      if (ImGui::Button("Install Additional Content..")) {
+        emulator_window_.installing_additional_content_ = true;
+        emulator_window_.InstallContent();
+      }
+
+      if (ImGui::Button("Open File..")) {
+        emulator_window_.FileOpen();
+      }
+
+      if (emulator_window_.installing_additional_content_ &&
+          !ImGui::IsPopupOpen("Installing..")) {
+        ImGui::OpenPopup("Installing..");
+        ImGui::SetNextWindowSize(
+            ImVec2(1600 * display_scale, 150 * display_scale));
+      }
+
+      if (ImGui::BeginPopupModal("Installing..")) {
+        ImGui::TextWrapped(
+            "Installing custom content. Please hold, this may take up to 30 seconds.");
+        
+        if (!emulator_window_.installing_additional_content_) {
+          ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+      }
+
+      ImGui::EndTabItem();
+    }
+
+    ImGui::EndTabBar();
+  }
+
+  imgui_drawer_.get()->ClearDialogs();
   emulator_->kernel_state()->xam_state()->xam_dialogs_shown_ = 0;
 }
 

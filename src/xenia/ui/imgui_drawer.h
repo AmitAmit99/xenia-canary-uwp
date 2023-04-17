@@ -62,6 +62,8 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
     SetImmediateDrawer(new_immediate_drawer);
   }
 
+  void SetIgnoreInput(bool ignore);
+  bool GetIgnoreInput();
   void Draw(UIDrawContext& ui_draw_context) override;
 
   void ClearDialogs();

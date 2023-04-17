@@ -2352,5 +2352,22 @@ void EmulatorWindow::ClearDialogs() {
   emulator_->kernel_state()->xam_state()->xam_dialogs_shown_ = 0;
 }
 
+std::shared_ptr<ui::ImmediateTexture>
+EmulatorWindow::WinRTFrontendDialog::GetOrCreateBackground() {
+  if (background_tex_ != nullptr) {
+    return background_tex_;
+  }
+
+  int width = 0, height = 0, comp = 0;
+  auto data = stbi_load("Assets/background.png", &width, &height, &comp, 4);
+
+  auto tex = emulator_window_.immediate_drawer_->CreateTexture(
+      static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+      xe::ui::ImmediateTextureFilter::kLinear, false, data);
+
+  background_tex_ = std::move(tex);
+  return background_tex_;
+}
+
 }  // namespace app
 }  // namespace xe

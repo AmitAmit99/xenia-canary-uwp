@@ -3114,8 +3114,8 @@ void EmulatorWindow::RunTitle(std::filesystem::path path) {
 
       if (ImGui::BeginTabItem("About", nullptr)) {
         ImGui::TextWrapped(
-            "Xenia UWP 1.1.3 - A fork of Xenia introducing Xbox support and a big "
-            "picture frontend.\n"
+            "Xenia UWP 1.1.3\nA fork of Xenia introducing Xbox support and a big "
+            "picture frontend.\n\n"
             "Xenia's Website: https://xenia.jp/\n"
             "Xenia's Patreon: https://www.patreon.com/xenia_project\n\n"
             "This Xbox fork was developed by SirMangler.\n"

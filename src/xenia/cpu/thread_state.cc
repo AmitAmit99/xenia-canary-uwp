@@ -93,6 +93,10 @@ ThreadState::ThreadState(Processor* processor, uint32_t thread_id,
 
   // Set initial registers.
   context_->r[1] = stack_base;
+
+  // constant register, used by hv only i think
+  context_->r[2] = 0x20000000;
+
   context_->r[13] = pcr_address;
   // VSCR - Vector Status and Control Register
   // NJ bit (bit 16) = 1: Non-Java IEEE mode (default for Xbox 360)

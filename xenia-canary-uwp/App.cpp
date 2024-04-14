@@ -1,4 +1,5 @@
 #define NOMINMAX
+
 #include <windows.h>
 
 #include <iostream>
@@ -24,8 +25,6 @@
 #include "XeniaUWP.h"
 #include "UWPUtil.h"
 #include "WinRTKeyboard.h"
-
-    //#include "xenia/base/main_win.h"
 
 using namespace winrt;
 

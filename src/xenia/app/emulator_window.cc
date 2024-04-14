@@ -9,9 +9,19 @@
 
 #include "xenia/app/emulator_window.h"
 
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <utility>
+
+#include "third_party/cpptoml/include/cpptoml.h"
+#include "third_party/fmt/include/fmt/format.h"
 #include "third_party/imgui/imgui.h"
-#include "third_party/stb/stb_image_write.h"
-#include "third_party/tomlplusplus/toml.hpp"
+
+#include "third_party/stb/stb_image.h"
+
 #include "xenia/base/assert.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
@@ -24,16 +34,14 @@
 #include "xenia/cpu/processor.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
+#include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/hid/input_system.h"
-#include "xenia/kernel/xam/profile_manager.h"
 #include "xenia/kernel/xam/xam_module.h"
-#include "xenia/kernel/xam/xam_state.h"
-#include "xenia/ui/file_picker.h"
+//#include "xenia/ui/file_picker.h"
 #include "xenia/ui/graphics_provider.h"
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
-#include "xenia/ui/imgui_host_notification.h"
 #include "xenia/ui/immediate_drawer.h"
 #include "xenia/ui/presenter.h"
 #include "xenia/ui/ui_event.h"
@@ -59,9 +67,7 @@ DECLARE_bool(guide_button);
 
 DECLARE_bool(clear_memory_page_state);
 
-DECLARE_string(readback_resolve);
-
-DECLARE_bool(readback_memexport);
+DECLARE_bool(d3d12_readback_resolve);
 
 DEFINE_bool(fullscreen, false, "Whether to launch the emulator in fullscreen.",
             "Display");
@@ -154,10 +160,6 @@ DEFINE_int32(recent_titles_entry_amount, 10,
              "Allows user to define how many titles is saved in list of "
              "recently played titles.",
              "General");
-DEFINE_bool(disable_doubleclick_fullscreen, false,
-            "Allows the user to disable the behavior where a fast double-click "
-            "causes Xenia to enter fullscreen mode.",
-            "General");
 
 namespace xe {
 namespace app {
@@ -172,21 +174,20 @@ using xe::ui::UIEvent;
 using namespace xe::hid;
 using namespace xe::gpu;
 
-constexpr std::string_view kRecentlyPlayedTitlesFilename = "recent.toml";
-constexpr std::string_view kBaseTitle = "Xenia-canary";
+const std::string kRecentlyPlayedTitlesFilename = "recent.toml";
+const std::string kBaseTitle = "Xenia-canary";
 
 EmulatorWindow::EmulatorWindow(Emulator* emulator,
-                               ui::WindowedAppContext& app_context,
-                               uint32_t width, uint32_t height)
+                               ui::WindowedAppContext& app_context)
     : emulator_(emulator),
       app_context_(app_context),
       window_listener_(*this),
-      window_(ui::Window::Create(app_context, kBaseTitle, width, height)),
+      window_(ui::Window::Create(app_context, kBaseTitle, 1280, 720)),
       imgui_drawer_(
           std::make_unique<ui::ImGuiDrawer>(window_.get(), kZOrderImGui)),
       display_config_game_config_load_callback_(
           new DisplayConfigGameConfigLoadCallback(*emulator, *this)) {
-  base_title_ = std::string(kBaseTitle) +
+  base_title_ = kBaseTitle +
 #ifdef DEBUG
 #if _NO_DEBUG_HEAP == 1
                 " DEBUG"
@@ -196,7 +197,8 @@ EmulatorWindow::EmulatorWindow(Emulator* emulator,
 #endif
                 " ("
 #ifdef XE_BUILD_IS_PR
-                "PR#" XE_BUILD_PR_NUMBER " - "
+                "PR#" XE_BUILD_PR_NUMBER " " XE_BUILD_PR_REPO
+                " " XE_BUILD_PR_BRANCH "@" XE_BUILD_PR_COMMIT_SHORT " against "
 #endif
                 XE_BUILD_BRANCH "@" XE_BUILD_COMMIT_SHORT " on " XE_BUILD_DATE
                 ")";
@@ -212,11 +214,10 @@ EmulatorWindow::EmulatorWindow(Emulator* emulator,
 }
 
 std::unique_ptr<EmulatorWindow> EmulatorWindow::Create(
-    Emulator* emulator, ui::WindowedAppContext& app_context, uint32_t width,
-    uint32_t height) {
+    Emulator* emulator, ui::WindowedAppContext& app_context) {
   assert_true(app_context.IsInUIThread());
   std::unique_ptr<EmulatorWindow> emulator_window(
-      new EmulatorWindow(emulator, app_context, width, height));
+      new EmulatorWindow(emulator, app_context));
   if (!emulator_window->Initialize()) {
     return nullptr;
   }
@@ -270,14 +271,6 @@ void EmulatorWindow::ShutdownGraphicsSystemPresenterPainting() {
 }
 
 void EmulatorWindow::OnEmulatorInitialized() {
-  if (!emulator_->kernel_state()
-           ->xam_state()
-           ->profile_manager()
-           ->GetAccountCount()) {
-    new NoProfileDialog(imgui_drawer_.get(), this);
-    disable_hotkeys_ = true;
-  }
-
   emulator_initialized_ = true;
   window_->SetMainMenuEnabled(true);
   // When the user can see that the emulator isn't initializing anymore (the
@@ -293,11 +286,9 @@ void EmulatorWindow::OnEmulatorInitialized() {
   }
 
   // Create a thread to listen for controller hotkeys.
-  if (cvars::controller_hotkeys) {
-    Gamepad_HotKeys_Listener =
-        threading::Thread::Create({}, [&] { GamepadHotKeys(); });
-    Gamepad_HotKeys_Listener->set_name("Gamepad HotKeys Listener");
-  }
+  Gamepad_HotKeys_Listener =
+      threading::Thread::Create({}, [&] { GamepadHotKeys(); });
+  Gamepad_HotKeys_Listener->set_name("Gamepad HotKeys Listener");
 }
 
 void EmulatorWindow::EmulatorWindowListener::OnClosing(ui::UIEvent& e) {
@@ -348,7 +339,6 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
     ImGui::End();
     return;
   }
-
   // Even if the close button has been pressed, still paint everything not to
   // have one frame with an empty window.
 
@@ -368,11 +358,11 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
       ImGui::RadioButton("None", &new_swap_post_effect_index,
                          int(gpu::CommandProcessor::SwapPostEffect::kNone));
       ImGui::RadioButton(
-          "NVIDIA Fast Approximate Anti-Aliasing (FXAA) [Normal Quality]",
+          "NVIDIA Fast Approximate Anti-Aliasing 3.11 (FXAA), normal quality",
           &new_swap_post_effect_index,
           int(gpu::CommandProcessor::SwapPostEffect::kFxaa));
       ImGui::RadioButton(
-          "NVIDIA Fast Approximate Anti-Aliasing (FXAA) [Extreme Quality]",
+          "NVIDIA Fast Approximate Anti-Aliasing 3.11 (FXAA), extreme quality",
           &new_swap_post_effect_index,
           int(gpu::CommandProcessor::SwapPostEffect::kFxaaExtreme));
       gpu::CommandProcessor::SwapPostEffect new_swap_post_effect =
@@ -406,7 +396,7 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
       // Filtering effect.
       int new_effect_index = int(new_presenter_config.GetEffect());
       ImGui::RadioButton(
-          "None / Bilinear", &new_effect_index,
+          "None / bilinear", &new_effect_index,
           int(ui::Presenter::GuestOutputPaintConfig::Effect::kBilinear));
       ImGui::RadioButton(
           "AMD FidelityFX Contrast Adaptive Sharpening (CAS)",
@@ -480,8 +470,8 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
               new_presenter_config.GetFsrSharpnessReduction();
           ImGui::TextUnformatted(
               "FSR sharpness reduction when upscaling (lower is sharper):");
-          const auto label = fmt::format(
-              "{} %%", static_cast<int>(fsr_sharpness_reduction * 100));
+          const auto label =
+              fmt::format("{:.3f} stops", fsr_sharpness_reduction);
           // Power 2.0 scaling as the reduction is in stops, used in exp2.
           fsr_sharpness_reduction = sqrt(2.f * fsr_sharpness_reduction);
           ImGui::SliderFloat(
@@ -508,13 +498,11 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
                 ? "CAS additional sharpness when not upscaling (higher is "
                   "sharper):"
                 : "CAS additional sharpness (higher is sharper):");
-        const auto label = fmt::format(
-            "{} %%", static_cast<int>(cas_additional_sharpness * 100));
         ImGui::SliderFloat(
             "##CASAdditionalSharpness", &cas_additional_sharpness,
             ui::Presenter::GuestOutputPaintConfig::kCasAdditionalSharpnessMin,
             ui::Presenter::GuestOutputPaintConfig::kCasAdditionalSharpnessMax,
-            label.c_str(), ImGuiSliderFlags_NoInput);
+            "%.3f");
         ImGui::SameLine();
         if (ImGui::Button("Reset##ResetCASAdditionalSharpness")) {
           cas_additional_sharpness = ui::Presenter::GuestOutputPaintConfig ::
@@ -582,156 +570,6 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
   }
 }
 
-void EmulatorWindow::ContentInstallDialog::OnDraw(ImGuiIO& io) {
-  ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowSize(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-
-  bool dialog_open = true;
-  if (!ImGui::Begin(
-          fmt::format("Installation Progress###{}", window_id_).c_str(),
-          &dialog_open,
-          ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize |
-              ImGuiWindowFlags_HorizontalScrollbar)) {
-    Close();
-    ImGui::End();
-    return;
-  }
-
-  bool is_everything_installed = true;
-  for (const auto& entry : *installation_entries_) {
-    ImGui::BeginTable(fmt::format("table_{}", entry.name_).c_str(), 2);
-    ImGui::TableNextRow(0);
-    ImGui::TableSetColumnIndex(0);
-    if (entry.icon_) {
-      ImGui::Image(reinterpret_cast<ImTextureID>(entry.icon_.get()),
-                   ui::default_image_icon_size);
-    } else {
-      ImGui::Dummy(ui::default_image_icon_size);
-    }
-    ImGui::TableNextColumn();
-
-    ImGui::Text("Name: %s", entry.name_.c_str());
-    ImGui::Text("Installation Path:");
-    ImGui::SameLine();
-    if (ImGui::TextLink(
-            xe::path_to_utf8(entry.data_installation_path_).c_str())) {
-      LaunchFileExplorer(emulator_window_.emulator_->content_root() /
-                         entry.data_installation_path_);
-    }
-
-    if (entry.content_type_ != xe::XContentType::kInvalid) {
-      ImGui::Text("Content Type: %s",
-                  XContentTypeMap.at(entry.content_type_).c_str());
-    }
-
-    std::string result = fmt::format(
-        "Status: {}", xe::Emulator::installStateStringName[static_cast<uint8_t>(
-                          entry.installation_state_)]);
-
-    if (entry.installation_state_ == xe::Emulator::InstallState::failed) {
-      result += fmt::format(" - {} ({:08X})",
-                            entry.installation_error_message_.c_str(),
-                            entry.installation_result_);
-    }
-
-    ImGui::Text("%s", result.c_str());
-    ImGui::EndTable();
-
-    if (entry.content_size_ > 0) {
-      ImGui::ProgressBar(static_cast<float>(entry.currently_installed_size_) /
-                         entry.content_size_);
-
-      if (entry.currently_installed_size_ != entry.content_size_ &&
-          entry.installation_result_ == X_ERROR_SUCCESS) {
-        is_everything_installed = false;
-      }
-    } else {
-      ImGui::ProgressBar(0.0f);
-    }
-
-    if (installation_entries_->size() > 1) {
-      ImGui::Separator();
-    }
-  }
-  ImGui::Spacing();
-
-  ImGui::BeginDisabled(!is_everything_installed);
-  if (ImGui::Button("Close")) {
-    ImGui::EndDisabled();
-    Close();
-    ImGui::End();
-    return;
-  }
-  ImGui::EndDisabled();
-
-  if (!dialog_open && is_everything_installed) {
-    Close();
-    ImGui::End();
-    return;
-  }
-  ImGui::End();
-}
-
-void EmulatorWindow::XMPConfigDialog::OnDraw(ImGuiIO& io) {
-  ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowSize(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-
-  bool dialog_open = true;
-  if (!ImGui::Begin("Audio Player Menu", &dialog_open,
-                    ImGuiWindowFlags_NoCollapse |
-                        ImGuiWindowFlags_AlwaysAutoResize |
-                        ImGuiWindowFlags_HorizontalScrollbar)) {
-    Close();
-    ImGui::End();
-    return;
-  }
-
-  auto audio_player = emulator_window_.emulator_->audio_media_player();
-  using xmp_state = kernel::xam::apps::XmpApp::State;
-  if (audio_player) {
-    ImGui::Text("Audio player status:");
-    ImGui::SameLine();
-    switch (audio_player->GetState()) {
-      case xmp_state::kIdle:
-        ImGui::Text("Idle");
-        break;
-      case xmp_state::kPaused:
-        ImGui::Text("Paused");
-        break;
-      case xmp_state::kPlaying:
-        ImGui::Text("Playing");
-        break;
-      default:
-        break;
-    }
-
-    if (audio_player->IsPlaying()) {
-      if (ImGui::Button("Pause")) {
-        audio_player->Pause();
-      }
-    } else if (audio_player->IsPaused()) {
-      if (ImGui::Button("Resume")) {
-        audio_player->Continue();
-      }
-    }
-
-    volume_ =
-        emulator_window_.emulator_->audio_media_player()->GetVolume()->load();
-
-    if (ImGui::SliderFloat("Audio player volume", &volume_, 0.0f, 1.0f)) {
-      audio_player->SetVolume(volume_);
-    }
-  }
-
-  ImGui::End();
-
-  if (!dialog_open) {
-    Close();
-    emulator_window_.xmp_config_dialog_.release();
-    return;
-  }
-}
-
 bool EmulatorWindow::Initialize() {
   window_->AddListener(&window_listener_);
   window_->AddInputListener(&window_listener_, kZOrderEmulatorWindowInput);
@@ -742,26 +580,17 @@ bool EmulatorWindow::Initialize() {
   auto main_menu = MenuItem::Create(MenuItem::Type::kNormal);
   auto file_menu = MenuItem::Create(MenuItem::Type::kPopup, "&File");
   auto recent_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Open Recent");
-  auto zar_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Zar Package");
   FillRecentlyLaunchedTitlesMenu(recent_menu.get());
   {
     file_menu->AddChild(
         MenuItem::Create(MenuItem::Type::kString, "&Open...", "Ctrl+O",
                          std::bind(&EmulatorWindow::FileOpen, this)));
     file_menu->AddChild(std::move(recent_menu));
-    file_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
+
     file_menu->AddChild(
         MenuItem::Create(MenuItem::Type::kString, "Install Content...",
                          std::bind(&EmulatorWindow::InstallContent, this)));
-    zar_menu->AddChild(
-        MenuItem::Create(MenuItem::Type::kString, "Create",
-                         std::bind(&EmulatorWindow::CreateZarchive, this)));
-    zar_menu->AddChild(
-        MenuItem::Create(MenuItem::Type::kString, "Extract",
-                         std::bind(&EmulatorWindow::ExtractZarchive, this)));
-    file_menu->AddChild(std::move(zar_menu));
 #ifdef DEBUG
-    file_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
     file_menu->AddChild(
         MenuItem::Create(MenuItem::Type::kString, "Close",
                          std::bind(&EmulatorWindow::FileClose, this)));
@@ -776,15 +605,6 @@ bool EmulatorWindow::Initialize() {
                          [this]() { window_->RequestClose(); }));
   }
   main_menu->AddChild(std::move(file_menu));
-
-  // Profile Menu
-  auto profile_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Profile");
-  {
-    profile_menu->AddChild(MenuItem::Create(
-        MenuItem::Type::kString, "&Show Profile Menu", "",
-        std::bind(&EmulatorWindow::ToggleProfilesConfigDialog, this)));
-  }
-  main_menu->AddChild(std::move(profile_menu));
 
   // CPU menu.
   auto cpu_menu = MenuItem::Create(MenuItem::Type::kPopup, "&CPU");
@@ -847,9 +667,6 @@ bool EmulatorWindow::Initialize() {
     display_menu->AddChild(
         MenuItem::Create(MenuItem::Type::kString, "&Fullscreen", "F11",
                          std::bind(&EmulatorWindow::ToggleFullscreen, this)));
-    display_menu->AddChild(
-        MenuItem::Create(MenuItem::Type::kString, "&Take Screenshot", "F12",
-                         std::bind(&EmulatorWindow::TakeScreenshot, this)));
   }
   main_menu->AddChild(std::move(display_menu));
 
@@ -864,15 +681,6 @@ bool EmulatorWindow::Initialize() {
         std::bind(&EmulatorWindow::DisplayHotKeysConfig, this)));
   }
   main_menu->AddChild(std::move(hid_menu));
-
-  // XMP menu
-  auto xmp_menu = MenuItem::Create(MenuItem::Type::kPopup, "&XMP");
-  {
-    xmp_menu->AddChild(MenuItem::Create(
-        MenuItem::Type::kString, "&Show XMP Menu", "",
-        std::bind(&EmulatorWindow::ToggleXMPConfigDialog, this)));
-  }
-  main_menu->AddChild(std::move(xmp_menu));
 
   // Help menu.
   auto help_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Help");
@@ -891,8 +699,8 @@ bool EmulatorWindow::Initialize() {
     help_menu->AddChild(MenuItem::Create(
         MenuItem::Type::kString, "Recent changes on GitHub...", []() {
           LaunchWebBrowser(
-              "https://github.com/xenia-canary/xenia-canary/"
-              "compare/" XE_BUILD_COMMIT "..." XE_BUILD_BRANCH);
+              "https://github.com/xenia-project/xenia/compare/" XE_BUILD_COMMIT
+              "..." XE_BUILD_BRANCH);
         }));
     help_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
     help_menu->AddChild(MenuItem::Create(
@@ -1044,10 +852,6 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
     case ui::VirtualKey::kF11: {
       ToggleFullscreen();
     } break;
-    case ui::VirtualKey::kF12: {
-      TakeScreenshot();
-    } break;
-
     case ui::VirtualKey::kEscape: {
       // Allow users to escape fullscreen (but not enter it).
       if (!window_->IsFullscreen()) {
@@ -1098,105 +902,20 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
 }
 
 void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
-  if (imgui_drawer_->IsAnyDialogOpen()) {
-    return;
-  }
-
-  if (e.button() == ui::MouseEvent::Button::kLeft) {
-    ToggleFullscreenOnDoubleClick();
-  }
+  ToggleFullscreenOnDoubleClick();
 }
 
 void EmulatorWindow::OnMouseUp(const ui::MouseEvent& e) {
   last_mouse_up = steady_clock::now();
 }
 
-void EmulatorWindow::TakeScreenshot() {
-  xe::ui::RawImage image;
-
-  imgui_drawer_->EnableNotifications(false);
-
-  if (!GetGraphicsSystemPresenter()->CaptureGuestOutput(image) ||
-      GetGraphicsSystemPresenter() == nullptr) {
-    XELOGE("Failed to capture guest output for screenshot");
-    return;
-  }
-
-  imgui_drawer_->EnableNotifications(true);
-  ExportScreenshot(image);
-}
-
-void EmulatorWindow::ExportScreenshot(const xe::ui::RawImage& image) {
-  auto t = std::time(nullptr);
-
-  // The format is: Year-Month-DayTHours-Minutes-Seconds based off ISO 8601
-  std::string datetime =
-      fmt::format("{:%Y-%m-%dT%H-%M-%S}", *std::localtime(&t));
-
-  // Get the title id of the game because some titles contain characters that
-  // cannot be used as a directory
-  std::string title_id;
-  if (emulator()->title_id()) {
-    title_id = fmt::format("{:08X}", emulator()->title_id());
-  } else {
-    XELOGE("Failed to get the current title id");
-    return;
-  }
-
-  // Find where xenia.exe or xenia_canary.exe is located and create a
-  // screenshots folder
-  auto screenshot_path =
-      (xe::filesystem::GetExecutableFolder() / "screenshots" / title_id);
-
-  if (!std::filesystem::exists(screenshot_path)) {
-    std::filesystem::create_directories(screenshot_path);
-  }
-
-  std::string filename = fmt::format("{} - {}.png", title_id, datetime);
-  SaveImage(screenshot_path / filename, image);
-
-  const std::string notification_text =
-      fmt::format("Screenshot saved: {}", filename);
-
-  app_context_.CallInUIThread([&, notification_text]() {
-    new xe::ui::HostNotificationWindow(imgui_drawer(), "Screenshot Created!",
-                                       notification_text, 0);
-  });
-}
-
-// Converts a RawImage into a PNG file
-void EmulatorWindow::SaveImage(const std::filesystem::path& filepath,
-                               const xe::ui::RawImage& image) {
-  auto file = std::ofstream(filepath, std::ios::binary);
-  if (!file.is_open()) {
-    XELOGE("Failed to open file for writing: {}", filepath);
-    return;
-  }
-
-  auto result = stbi_write_png_to_func(
-      [](void* context, void* data, int size) {
-        auto file = reinterpret_cast<std::ofstream*>(context);
-        file->write(reinterpret_cast<const char*>(data), size);
-      },
-      &file, image.width, image.height, 4, image.data.data(),
-      (int)image.stride);
-  if (result == 0) {
-    XELOGE("Failed to write PNG to file: {}", filepath);
-    return;
-  }
-}
-
 void EmulatorWindow::ToggleFullscreenOnDoubleClick() {
-  if (cvars::disable_doubleclick_fullscreen) {
-    return;
-  }
-
   // this function tests if user has double clicked.
   // if double click was achieved the fullscreen gets toggled
   const auto now = steady_clock::now();  // current mouse event time
-  constexpr int16_t mouse_down_max_threshold = 250;
-  constexpr int16_t mouse_up_max_threshold = 250;
-  constexpr int16_t mouse_up_down_max_delta = 100;
+  const int16_t mouse_down_max_threshold = 250;
+  const int16_t mouse_up_max_threshold = 250;
+  const int16_t mouse_up_down_max_delta = 100;
   // max delta to prevent 'chaining' of double clicks with next mouse events
 
   const auto last_mouse_down_delta = diff_in_ms(now, last_mouse_down);
@@ -1278,228 +997,70 @@ void EmulatorWindow::InstallContent() {
     paths = file_picker->selected_files();
   }
 
-  if (paths.empty()) {
-    return;
-  }
-
-  std::shared_ptr<std::vector<Emulator::ContentInstallEntry>>
-      content_installation_status =
-          std::make_shared<std::vector<Emulator::ContentInstallEntry>>();
-
-  for (const auto& path : paths) {
-    content_installation_status->push_back({path});
-  }
-
-  for (auto& entry : *content_installation_status) {
-    emulator_->ProcessContentPackageHeader(entry.path_, entry);
-  }
-
-  auto installationThread = std::thread([this, content_installation_status] {
-    for (auto& entry : *content_installation_status) {
-      emulator_->InstallContentPackage(entry.path_, entry);
-    }
-  });
-  installationThread.detach();
-
-  new ContentInstallDialog(imgui_drawer_.get(), *this,
-                           content_installation_status);
-}
-
-void EmulatorWindow::ExtractZarchive() {
-  std::vector<std::filesystem::path> zarchive_files;
-  std::filesystem::path extract_dir;
-
-  auto file_picker = xe::ui::FilePicker::Create();
-  file_picker->set_mode(ui::FilePicker::Mode::kOpen);
-  file_picker->set_type(ui::FilePicker::Type::kFile);
-  file_picker->set_multi_selection(true);
-  file_picker->set_title("Select Zar Package");
-  file_picker->set_extensions({
-      {"Zarchive Files (*.zar)", "*.zar"},
-  });
-
-  if (file_picker->Show(window_.get())) {
-    zarchive_files = file_picker->selected_files();
-  }
-
-  if (zarchive_files.empty()) {
-    return;
-  }
-
-  file_picker->set_type(ui::FilePicker::Type::kDirectory);
-  file_picker->set_title("Select Directory to Extract");
-
-  if (file_picker->Show(window_.get())) {
-    extract_dir = file_picker->selected_files().front();
-  }
-
-  if (extract_dir.empty()) {
-    return;
-  }
-
-  std::string extract_overview = "";
-
-  for (auto& zarchive_file_path : zarchive_files) {
-    extract_overview += "\n" + path_to_utf8(zarchive_file_path);
-  }
-
-  app_context_.CallInUIThread([&]() {
-    new xe::ui::HostNotificationWindow(imgui_drawer(), "Extracting...",
-                                       string_util::trim(extract_overview), 0);
-  });
-
-  auto run = [this, extract_dir, zarchive_files]() -> void {
-    std::string summary = "";
-
-    for (auto& zarchive_file_path : zarchive_files) {
+  if (!paths.empty()) {
+    for (auto path : paths) {
       // Normalize the path and make absolute.
-      auto abs_path = std::filesystem::absolute(zarchive_file_path);
-      std::filesystem::path abs_extract_dir;
-
-      if (zarchive_files.size() > 1) {
-        abs_extract_dir =
-            std::filesystem::absolute((extract_dir / abs_path.stem()));
-      } else {
-        abs_extract_dir = std::filesystem::absolute(extract_dir);
-      }
-
-      XELOGI("Extracting zar package: {}\n",
-             zarchive_file_path.filename().string());
-
-      auto result =
-          emulator_->ExtractZarchivePackage(abs_path, abs_extract_dir);
+      auto abs_path = std::filesystem::absolute(path);
+      auto result = emulator_->InstallContentPackage(abs_path);
 
       if (result != X_STATUS_SUCCESS) {
-        std::error_code ec;
+        XELOGE("Failed to install content! Error code: {:08X}", result);
 
-        if (!std::filesystem::is_empty(abs_extract_dir)) {
-          std::filesystem::remove(abs_extract_dir, ec);
-        }
-
-        summary += fmt::format("\nFailed: {}", zarchive_file_path);
-
-        XELOGE("Failed to extract Zarchive package.", result);
-      } else {
-        summary += fmt::format("\nSuccess: {}", abs_extract_dir);
+        xe::ui::ImGuiDialog::ShowMessageBox(
+            imgui_drawer_.get(), "Failed to install content!",
+            "Failed to install content!\n\nCheck xenia.log for technical "
+            "details.");
       }
     }
-
-    new xe::ui::HostNotificationWindow(imgui_drawer(), "Zar Extraction Summary",
-                                       string_util::trim(summary), 0);
-  };
-
-  auto zarThread = std::thread(run);
-  zarThread.detach();
-}
-
-void EmulatorWindow::CreateZarchive() {
-  std::vector<std::filesystem::path> content_dirs;
-  std::filesystem::path zarchive_dir;
-
-  auto file_picker = xe::ui::FilePicker::Create();
-  file_picker->set_mode(ui::FilePicker::Mode::kOpen);
-  file_picker->set_type(ui::FilePicker::Type::kDirectory);
-  file_picker->set_multi_selection(true);
-  file_picker->set_title("Select Contents");
-
-  if (file_picker->Show(window_.get())) {
-    content_dirs = file_picker->selected_files();
   }
-
-  if (content_dirs.empty()) {
-    return;
-  }
-
-  if (content_dirs.size() == 1) {
-    file_picker->set_mode(ui::FilePicker::Mode::kSave);
-    file_picker->set_type(ui::FilePicker::Type::kFile);
-    file_picker->set_multi_selection(false);
-    file_picker->set_file_name(content_dirs.front().stem().string());
-    file_picker->set_default_extension("zar");
-    file_picker->set_title("Zarchive File");
-    file_picker->set_extensions({
-        {"Zarchive File (*.zar)", "*.zar"},
-    });
-  } else {
-    file_picker->set_title("Output Directory");
-  }
-
-  if (file_picker->Show(window_.get())) {
-    zarchive_dir = file_picker->selected_files().front();
-  }
-
-  if (zarchive_dir.empty()) {
-    return;
-  }
-
-  std::string create_overview = "";
-
-  std::map<std::filesystem::path, std::filesystem::path> zarchive_files{};
-
-  for (auto& content_path : content_dirs) {
-    // Normalize the path and make absolute.
-    auto abs_content_dir = std::filesystem::absolute(content_path);
-    std::filesystem::path abs_zarchive_file;
-
-    if (content_dirs.size() > 1) {
-      abs_zarchive_file = std::filesystem::absolute(
-          (zarchive_dir / abs_content_dir.stem()).replace_extension("zar"));
-    } else {
-      abs_zarchive_file = std::filesystem::absolute(zarchive_dir);
+#else
+  imgui_drawer()->SetIgnoreInput(true);
+  UWP::SelectFiles([=](std::vector<std::string> files) {
+    imgui_drawer()->SetIgnoreInput(false);
+    if (files.empty()) {
+      installing_additional_content_ = false;
+      return;
     }
 
-    zarchive_files[content_path] = abs_zarchive_file;
-
-    create_overview += "\n" + path_to_utf8(abs_zarchive_file);
-  }
-
-  app_context_.CallInUIThread([&]() {
-    new xe::ui::HostNotificationWindow(imgui_drawer(), "Creating...",
-                                       string_util::trim(create_overview), 0);
-  });
-
-  auto run = [this, zarchive_files]() -> void {
-    std::string summary = "";
-
-    for (auto const& [content_path, zarchive_file] : zarchive_files) {
+    for (auto path : files) {
       // Normalize the path and make absolute.
-      auto abs_content_dir = std::filesystem::absolute(content_path);
+      auto abs_path = std::filesystem::absolute(path);
+      auto result = emulator_->InstallContentPackage(abs_path);
 
-      XELOGI("Creating zar package: {}\n", zarchive_file.filename().string());
+      if (result != X_STATUS_SUCCESS) {
+        XELOGE("Failed to install content! Error code: {:08X}", result);
 
-      auto result =
-          emulator_->CreateZarchivePackage(abs_content_dir, zarchive_file);
-
-      if (result != X_ERROR_SUCCESS) {
-        std::error_code ec;
-
-        // delete incomplete output file
-        std::filesystem::remove(zarchive_file, ec);
-
-        summary += fmt::format("\nFailed: {}", abs_content_dir);
-
-        XELOGE("Failed to create Zarchive package.", result);
-      } else {
-        summary += fmt::format("\nSuccess: {}", zarchive_file);
+        xe::ui::ImGuiDialog::ShowMessageBox(
+            imgui_drawer_.get(), "Failed to install content!",
+            "Failed to install content!\n\nCheck xenia.log for technical "
+            "details.");
       }
     }
 
-    new xe::ui::HostNotificationWindow(imgui_drawer(), "Zar Creation Summary",
-                                       string_util::trim(summary), 0);
-  };
-
-  auto zarThread = std::thread(run);
-  zarThread.detach();
+    installing_additional_content_ = false;
+  });
+#endif
 }
 
 void EmulatorWindow::ShowContentDirectory() {
-  auto content_root = emulator_->content_root();
+  std::filesystem::path target_path;
 
-  if (!std::filesystem::exists(content_root)) {
-    std::filesystem::create_directories(content_root);
+  auto content_root = emulator_->content_root();
+  if (!emulator_->is_title_open() || !emulator_->kernel_state()) {
+    target_path = content_root;
+  } else {
+    // TODO(gibbed): expose this via ContentManager?
+    auto title_id =
+        fmt::format("{:08X}", emulator_->kernel_state()->title_id());
+    auto package_root = content_root / title_id;
+    target_path = package_root;
   }
 
-  LaunchFileExplorer(content_root);
+  if (!std::filesystem::exists(target_path)) {
+    std::filesystem::create_directories(target_path);
+  }
+
+  LaunchFileExplorer(target_path);
 }
 
 void EmulatorWindow::CpuTimeScalarReset() {
@@ -1568,52 +1129,18 @@ void EmulatorWindow::ToggleDisplayConfigDialog() {
   }
 }
 
-void EmulatorWindow::ToggleProfilesConfigDialog() {
-  if (!profile_config_dialog_) {
-    disable_hotkeys_ = true;
-    emulator_->kernel_state()->BroadcastNotification(kXNotificationSystemUI, 1);
-    profile_config_dialog_ =
-        std::make_unique<ProfileConfigDialog>(imgui_drawer_.get(), this);
-    emulator_->kernel_state()->xam_state()->xam_dialogs_shown_++;
-  } else {
-    disable_hotkeys_ = false;
-    emulator_->kernel_state()->BroadcastNotification(kXNotificationSystemUI, 0);
-    if (profile_config_dialog_->IsClosing()) {
-      profile_config_dialog_.release();
-    } else {
-      profile_config_dialog_.reset();
-    }
-    emulator_->kernel_state()->xam_state()->xam_dialogs_shown_--;
-  }
-}
-
-void EmulatorWindow::ToggleXMPConfigDialog() {
-  if (!xmp_config_dialog_) {
-    xmp_config_dialog_ = std::unique_ptr<XMPConfigDialog>(
-        new XMPConfigDialog(imgui_drawer_.get(), *this));
-  } else {
-    xmp_config_dialog_.reset();
-  }
-}
-
 void EmulatorWindow::ToggleControllerVibration() {
   auto input_sys = emulator()->input_system();
   if (input_sys) {
     auto input_lock = input_sys->lock();
 
     input_sys->ToggleVibration();
-
-    if (emulator_->kernel_state()) {
-      emulator_->kernel_state()->BroadcastNotification(
-          kXNotificationSystemProfileSettingChanged,
-          static_cast<uint32_t>(input_sys->GetConnectedSlots().count()));
-    }
   }
 }
 
 void EmulatorWindow::ShowCompatibility() {
   const std::string_view base_url =
-      "https://github.com/xenia-canary/game-compatibility/issues";
+      "https://github.com/xenia-project/game-compatibility/issues";
   std::string url;
   // Avoid searching for a title ID of "00000000".
   uint32_t title_id = emulator_->title_id();
@@ -1626,16 +1153,16 @@ void EmulatorWindow::ShowCompatibility() {
 }
 
 void EmulatorWindow::ShowFAQ() {
-  LaunchWebBrowser("https://github.com/xenia-canary/xenia-canary/wiki/FAQ");
+  LaunchWebBrowser("https://github.com/xenia-project/xenia/wiki/FAQ");
 }
 
 void EmulatorWindow::ShowBuildCommit() {
 #ifdef XE_BUILD_IS_PR
   LaunchWebBrowser(
-      "https://github.com/xenia-canary/xenia-canary/pull/" XE_BUILD_PR_NUMBER);
+      "https://github.com/xenia-project/xenia/pull/" XE_BUILD_PR_NUMBER);
 #else
   LaunchWebBrowser(
-      "https://github.com/xenia-canary/xenia-canary/commit/" XE_BUILD_COMMIT);
+      "https://github.com/xenia-project/xenia/commit/" XE_BUILD_COMMIT);
 #endif
 }
 
@@ -1645,17 +1172,17 @@ void EmulatorWindow::UpdateTitle() {
 
   // Title information, if available
   if (emulator()->is_title_open()) {
-    sb.AppendFormat(" | [{:08X}", emulator()->title_id());
+    sb.AppendFormat(u8" | [{:08X}", emulator()->title_id());
     auto title_version = emulator()->title_version();
     if (!title_version.empty()) {
-      sb.Append(" v");
+      sb.Append(u8" v");
       sb.Append(title_version);
     }
-    sb.Append("]");
+    sb.Append(u8"]");
 
     auto title_name = emulator()->title_name();
     if (!title_name.empty()) {
-      sb.Append(" ");
+      sb.Append(u8" ");
       sb.Append(title_name);
     }
   }
@@ -1665,28 +1192,28 @@ void EmulatorWindow::UpdateTitle() {
   if (graphics_system) {
     auto graphics_name = graphics_system->name();
     if (!graphics_name.empty()) {
-      sb.Append(" <");
+      sb.Append(u8" <");
       sb.Append(graphics_name);
-      sb.Append(">");
+      sb.Append(u8">");
     }
   }
 
   if (Clock::guest_time_scalar() != 1.0) {
-    sb.AppendFormat(" (@{:.2f}x)", Clock::guest_time_scalar());
+    sb.AppendFormat(u8" (@{:.2f}x)", Clock::guest_time_scalar());
   }
 
   if (initializing_shader_storage_) {
-    sb.Append(" (Preloading shaders\u2026)");
+    sb.Append(u8" (Preloading shaders\u2026)");
   }
 
   patcher::Patcher* patcher = emulator()->patcher();
   if (patcher && patcher->IsAnyPatchApplied()) {
-    sb.Append(" [Patches Applied]");
+    sb.Append(u8" [Patches Applied]");
   }
 
   patcher::PluginLoader* pluginloader = emulator()->plugin_loader();
   if (pluginloader && pluginloader->IsAnyPluginLoaded()) {
-    sb.Append(" [Plugins Loaded]");
+    sb.Append(u8" [Plugins Loaded]");
   }
 
   window_->SetTitle(sb.to_string_view());
@@ -1804,16 +1331,10 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
   // Default return value
   EmulatorWindow::ControllerHotKey Unknown_hotkey = {};
 
-  if (buttons == 0) {
-    return Unknown_hotkey;
-  }
-
-  if (disable_hotkeys_.load()) {
-    return Unknown_hotkey;
-  }
+  if (buttons == 0) return Unknown_hotkey;
 
   // Hotkey cool-down to prevent toggling too fast
-  constexpr std::chrono::milliseconds delay(75);
+  const std::chrono::milliseconds delay(75);
 
   // If the Xbox Gamebar is enabled or the Guide button is disabled then
   // replace the Guide button with the Back button without redeclaring the key
@@ -1839,9 +1360,6 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
     }
   }
 
-  std::string notificationTitle = "";
-  std::string notificationDesc = "";
-
   EmulatorWindow::ControllerHotKey button_combination = it->second;
 
   switch (button_combination.function) {
@@ -1852,100 +1370,59 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
       xe::threading::Sleep(delay);
       break;
     case ButtonFunctions::RunTitle: {
-      if (selected_title_index == -1) {
-        selected_title_index++;
-      }
+      if (selected_title_index == -1) selected_title_index++;
 
-      if (selected_title_index < recently_launched_titles_.size()) {
-        app_context().CallInUIThread([this]() {
-          RunTitle(
-              recently_launched_titles_[selected_title_index].path_to_file);
-        });
-      }
+      app_context().CallInUIThread([this]() {
+        RunTitle(recently_launched_titles_[selected_title_index].path_to_file);
+      });
     } break;
     case ButtonFunctions::ClearMemoryPageState:
-      ToggleGPUSetting(GPUSetting::ClearMemoryPageState);
+      ToggleGPUSetting(gpu_cvar::ClearMemoryPageState);
 
       // Assume the user wants ClearCaches as well
       if (cvars::clear_memory_page_state) {
         GpuClearCaches();
       }
 
-      notificationTitle = "Toggle Clear Memory Page State";
-      notificationDesc =
-          cvars::clear_memory_page_state ? "Enabled" : "Disabled";
-
       // Extra Sleep
       xe::threading::Sleep(delay);
       break;
     case ButtonFunctions::ReadbackResolve:
-      CycleReadbackResolve();
-
-      notificationTitle = "Readback Resolve Mode";
-      notificationDesc = cvars::readback_resolve;
+      ToggleGPUSetting(gpu_cvar::ReadbackResolve);
 
       // Extra Sleep
       xe::threading::Sleep(delay);
       break;
     case ButtonFunctions::CpuTimeScalarSetHalf:
       CpuTimeScalarSetHalf();
-
-      notificationTitle = "Time Scalar";
-      notificationDesc =
-          fmt::format("Decreased to {}", Clock::guest_time_scalar());
       break;
     case ButtonFunctions::CpuTimeScalarSetDouble:
       CpuTimeScalarSetDouble();
-
-      notificationTitle = "Time Scalar";
-      notificationDesc =
-          fmt::format("Increased to {}", Clock::guest_time_scalar());
       break;
     case ButtonFunctions::CpuTimeScalarReset:
       CpuTimeScalarReset();
-
-      notificationTitle = "Time Scalar";
-      notificationDesc = fmt::format("Reset to {}", Clock::guest_time_scalar());
       break;
     case ButtonFunctions::ClearGPUCache:
       GpuClearCaches();
 
-      notificationTitle = "Clear GPU Cache";
-      notificationDesc = "Complete";
+      // Extra Sleep
+      xe::threading::Sleep(delay);
+      break;
+    case ButtonFunctions::ToggleControllerVibration:
+      ToggleControllerVibration();
 
       // Extra Sleep
       xe::threading::Sleep(delay);
       break;
-    case ButtonFunctions::ToggleControllerVibration: {
-      ToggleControllerVibration();
-
-      bool vibration = false;
-
-      auto input_sys = emulator()->input_system();
-      if (input_sys) {
-        vibration = input_sys->GetVibrationCvar();
-      }
-
-      notificationTitle = "Toggle Controller Vibration";
-      notificationDesc = vibration ? "Enabled" : "Disabled";
-
-      // Extra Sleep
-      xe::threading::Sleep(delay);
-    } break;
     case ButtonFunctions::IncTitleSelect:
       selected_title_index++;
       break;
     case ButtonFunctions::DecTitleSelect:
       selected_title_index--;
       break;
-    case ButtonFunctions::ToggleLogging: {
-      logging::ToggleLogLevel();
-
-      notificationTitle = "Toggle Logging";
-
-      LogLevel level = static_cast<LogLevel>(logging::internal::GetLogLevel());
-      notificationDesc = level == LogLevel::Disabled ? "Disabled" : "Enabled";
-    } break;
+    case ButtonFunctions::ToggleLogging:
+      logging::internal::ToggleLogLevel();
+      break;
     case ButtonFunctions::Unknown:
     default:
       break;
@@ -1954,12 +1431,11 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
   if ((button_combination.function == ButtonFunctions::IncTitleSelect ||
        button_combination.function == ButtonFunctions::DecTitleSelect) &&
       recently_launched_titles_.size() > 0) {
-    selected_title_index =
-        std::clamp(selected_title_index, 0,
-                   static_cast<int32_t>(recently_launched_titles_.size() - 1));
+    selected_title_index = std::clamp(
+        selected_title_index, 0, (int)recently_launched_titles_.size() - 1);
 
     // Must clear dialogs to prevent stacking
-    ClearDialogs();
+    imgui_drawer_.get()->ClearDialogs();
 
     // Titles may contain Unicode characters such as At World’s End
     // Must use ImGUI font that can render these Unicode characters
@@ -1982,14 +1458,6 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
                                         title);
   }
 
-  if (!notificationTitle.empty()) {
-    app_context_.CallInUIThread(
-        [imgui_drawer = imgui_drawer(), notificationTitle, notificationDesc]() {
-          new xe::ui::HostNotificationWindow(imgui_drawer, notificationTitle,
-                                             notificationDesc, 0);
-        });
-  }
-
   xe::threading::Sleep(delay);
 
   return it->second;
@@ -1998,7 +1466,7 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
 void EmulatorWindow::VibrateController(xe::hid::InputSystem* input_sys,
                                        uint32_t user_index,
                                        bool toggle_rumble) {
-  constexpr std::chrono::milliseconds rumble_duration(100);
+  const std::chrono::milliseconds rumble_duration(100);
 
   // Hold lock while sleeping this thread for the duration of the rumble,
   // otherwise the rumble may fail.
@@ -2020,32 +1488,23 @@ void EmulatorWindow::VibrateController(xe::hid::InputSystem* input_sys,
 void EmulatorWindow::GamepadHotKeys() {
   X_INPUT_STATE state;
 
-  constexpr std::chrono::milliseconds thread_delay(75);
+  const std::chrono::milliseconds thread_delay(75);
 
   auto input_sys = emulator_->input_system();
 
   if (input_sys) {
     while (true) {
-      // Collect controller states while holding the lock
-      std::array<std::pair<bool, X_INPUT_STATE>, XUserMaxUserCount>
-          controller_states;
-      {
-        auto input_lock = input_sys->lock();
-        for (uint32_t user_index = 0; user_index < XUserMaxUserCount;
-             ++user_index) {
-          X_RESULT result = input_sys->GetState(
-              user_index, X_INPUT_FLAG::X_INPUT_FLAG_GAMEPAD, &state);
-          controller_states[user_index] = {result == X_ERROR_SUCCESS, state};
-        }
-      }  // Lock is released here when input_lock goes out of scope
+      auto input_lock = input_sys->lock();
 
-      // Process hotkeys without holding the lock
-      for (uint32_t user_index = 0; user_index < XUserMaxUserCount;
-           ++user_index) {
-        if (controller_states[user_index].first) {
-          if (ProcessControllerHotkey(
-                  controller_states[user_index].second.gamepad.buttons)
-                  .rumble) {
+      for (uint32_t user_index = 0; user_index < MAX_USERS; ++user_index) {
+        X_RESULT result = input_sys->GetState(user_index, &state);
+
+        // Release the lock before processing the hotkey
+        input_lock.mutex()->unlock();
+
+        // Check if the controller is connected
+        if (result == X_ERROR_SUCCESS) {
+          if (ProcessControllerHotkey(state.gamepad.buttons).rumble) {
             // Enable Vibration
             VibrateController(input_sys, user_index, true);
 
@@ -2060,27 +1519,35 @@ void EmulatorWindow::GamepadHotKeys() {
   }
 }
 
-void EmulatorWindow::ToggleGPUSetting(gpu::GPUSetting setting) {
-  switch (setting) {
-    case GPUSetting::ClearMemoryPageState:
-      SaveGPUSetting(GPUSetting::ClearMemoryPageState,
-                     !cvars::clear_memory_page_state);
+void EmulatorWindow::ToggleGPUSetting(gpu_cvar value) {
+  switch (value) {
+    case gpu_cvar::ClearMemoryPageState:
+      CommonSaveGPUSetting(CommonGPUSetting::ClearMemoryPageState,
+                           !cvars::clear_memory_page_state);
       break;
-    case GPUSetting::ReadbackMemexport:
-      SaveGPUSetting(GPUSetting::ReadbackMemexport, !cvars::readback_memexport);
+    case gpu_cvar::ReadbackResolve:
+      D3D12SaveGPUSetting(D3D12GPUSetting::ReadbackResolve,
+                          !cvars::d3d12_readback_resolve);
       break;
   }
 }
 
-void EmulatorWindow::CycleReadbackResolve() {
-  const std::string& current = cvars::readback_resolve;
-  if (current == "fast") {
-    gpu::SetReadbackResolveMode("full");
-  } else if (current == "full") {
-    gpu::SetReadbackResolveMode("none");
-  } else {
-    gpu::SetReadbackResolveMode("fast");
-  }
+// Determine if the Xbox Gamebar is enabled via the Windows registry
+bool EmulatorWindow::IsUseNexusForGameBarEnabled() {
+#ifdef _WIN32
+  const LPWSTR reg_path = L"SOFTWARE\\Microsoft\\GameBar";
+  const LPWSTR key = L"UseNexusForGameBarEnabled";
+
+  DWORD value = 0;
+  DWORD dataSize = sizeof(value);
+
+  RegGetValue(HKEY_CURRENT_USER, reg_path, key, RRF_RT_DWORD, nullptr, &value,
+              &dataSize);
+
+  return (bool)value;
+#else
+  return false;
+#endif
 }
 
 void EmulatorWindow::DisplayHotKeysConfig() {
@@ -2094,7 +1561,8 @@ void EmulatorWindow::DisplayHotKeysConfig() {
 
     if (!guide_enabled) {
       pretty_text = std::regex_replace(
-          pretty_text, std::regex("Guide", std::regex_constants::icase),
+          pretty_text,
+          std::regex("Guide", std::regex_constants::syntax_option_type::icase),
           "Back");
     }
 
@@ -2121,7 +1589,8 @@ void EmulatorWindow::DisplayHotKeysConfig() {
   msg.insert(0, msg_passthru);
   msg += "\n";
 
-  msg += "Readback Resolve: " + cvars::readback_resolve;
+  msg += "Readback Resolve: " +
+         xe::string_util::BoolToString(cvars::d3d12_readback_resolve);
   msg += "\n";
 
   msg += "Clear Memory Page State: " +
@@ -2131,7 +1600,7 @@ void EmulatorWindow::DisplayHotKeysConfig() {
   msg += "Controller Hotkeys: " +
          xe::string_util::BoolToString(cvars::controller_hotkeys);
 
-  ClearDialogs();
+  imgui_drawer_.get()->ClearDialogs();
   xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(), "Controller Hotkeys",
                                       msg);
 }
@@ -2141,28 +1610,17 @@ std::string EmulatorWindow::CanonicalizeFileExtension(
   return xe::utf8::lower_ascii(xe::path_to_utf8(path.extension()));
 }
 
-xe::X_STATUS EmulatorWindow::RunTitle(
-    const std::filesystem::path& path_to_file) {
-  std::error_code ec = {};
-  bool titleExists = std::filesystem::exists(path_to_file, ec);
+xe::X_STATUS EmulatorWindow::RunTitle(std::filesystem::path path_to_file) {
+  bool titleExists = !std::filesystem::exists(path_to_file);
 
-  if (path_to_file.empty() || !titleExists) {
-    std::string log_msg =
-        fmt::format("Failed to launch title path is {}.",
-                    path_to_file.empty() ? "empty" : "invalid");
+  if (path_to_file.empty() || titleExists) {
+    char* log_msg = path_to_file.empty()
+                        ? "Failed to launch title path is empty."
+                        : "Failed to launch title path is invalid.";
 
-    if (!path_to_file.empty() && !titleExists) {
-      log_msg.append(fmt::format("\nProvided Path: {}", path_to_file));
-    }
+    XELOGE(log_msg);
 
-    if (ec) {
-      log_msg.append(fmt::format("\nExtended message info: {} ({:08X})",
-                                 ec.message(), ec.value()));
-    }
-
-    XELOGE("{}", log_msg);
-
-    ClearDialogs();
+    imgui_drawer_.get()->ClearDialogs();
 
     xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(),
                                         "Title Launch Failed!", log_msg);
@@ -2198,18 +1656,7 @@ xe::X_STATUS EmulatorWindow::RunTitle(
 
   auto result = emulator_->LaunchPath(abs_path);
 
-  disable_hotkeys_ = false;
-
-  if (profile_config_dialog_) {
-    profile_config_dialog_.reset();
-    emulator_->kernel_state()->xam_state()->xam_dialogs_shown_--;
-  }
-
-  if (display_config_dialog_) {
-    display_config_dialog_.reset();
-  }
-
-  ClearDialogs();
+  imgui_drawer_.get()->ClearDialogs();
 
   if (result) {
     XELOGE("Failed to launch target: {:08X}", result);
@@ -2217,8 +1664,6 @@ xe::X_STATUS EmulatorWindow::RunTitle(
     xe::ui::ImGuiDialog::ShowMessageBox(
         imgui_drawer_.get(), "Title Launch Failed!",
         "Failed to launch title.\n\nCheck xenia.log for technical details.");
-
-    emulator_->file_system()->Clear();
   } else {
     AddRecentlyLaunchedTitle(path_to_file, emulator_->title_name());
 
@@ -2263,27 +1708,27 @@ void EmulatorWindow::LoadRecentlyLaunchedTitles() {
     return;
   }
 
-  toml::parse_result parsed_file;
+  std::shared_ptr<cpptoml::table> parsed_file;
   try {
-    parsed_file = toml::parse(file);
-  } catch (toml::parse_error& exception) {
+    cpptoml::parser p(file);
+    parsed_file = p.parse();
+  } catch (cpptoml::parse_exception& exception) {
     XELOGE("Cannot parse file: recent.toml. Error: {}", exception.what());
     return;
   }
 
-  if (parsed_file.is_table()) {
-    for (const auto& [index, entry] : *parsed_file.as_table()) {
-      if (!entry.is_table()) {
+  if (parsed_file->is_table()) {
+    for (const auto& [index, entry] : *parsed_file->as_table()) {
+      if (!entry->is_table()) {
         continue;
       }
 
-      const toml::table* entry_table = entry.as_table();
+      const std::shared_ptr<cpptoml::table> entry_table = entry->as_table();
 
-      std::string title_name =
-          entry_table->get_as<std::string>("title_name")->get();
-      std::string path = entry_table->get_as<std::string>("path")->get();
+      std::string title_name = *entry_table->get_as<std::string>("title_name");
+      std::string path = *entry_table->get_as<std::string>("path");
       std::time_t last_run_time =
-          entry_table->get_as<int64_t>("last_run_time")->get();
+          *entry_table->get_as<uint64_t>("last_run_time");
 
       std::error_code ec = {};
       if (path.empty() || !std::filesystem::exists(path, ec)) {
@@ -2314,187 +1759,81 @@ void EmulatorWindow::AddRecentlyLaunchedTitle(
   recently_launched_titles_.insert(recently_launched_titles_.cbegin(),
                                    {title_name, path_to_file, time(nullptr)});
   // Serialize to toml
-  auto toml_table = toml::table();
+  auto toml_table = cpptoml::make_table();
 
   uint8_t index = 0;
   for (const RecentTitleEntry& entry : recently_launched_titles_) {
-    auto entry_table = toml::table();
+    auto entry_table = cpptoml::make_table();
 
     // Fill entry under specific index.
     std::string str_path = xe::path_to_utf8(entry.path_to_file);
-    entry_table.insert("title_name", entry.title_name);
-    entry_table.insert("path", str_path);
-    entry_table.insert("last_run_time", entry.last_run_time);
+    entry_table->insert("title_name", entry.title_name);
+    entry_table->insert("path", str_path);
+    entry_table->insert("last_run_time", entry.last_run_time);
+    entry_table->end();
 
-    toml_table.insert(std::to_string(index++), entry_table);
+    toml_table->insert(std::to_string(index++), entry_table);
 
     if (index >= cvars::recent_titles_entry_amount) {
       break;
     }
   }
+  toml_table->end();
+
   // Open and write serialized data.
   std::ofstream file(emulator()->storage_root() / kRecentlyPlayedTitlesFilename,
                      std::ofstream::trunc);
-  file << toml_table;
+  file << *toml_table;
   file.close();
 }
 
-void EmulatorWindow::ClearDialogs() {
-  if (profile_config_dialog_) {
-    profile_config_dialog_.reset();
+void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
+  if (UWP::HasGamePath()) {
+    UWP::SelectGameFromWinRT(emulator_window_.emulator());
+    Close();
   }
 
-  if (display_config_dialog_) {
-    display_config_dialog_.reset();
+  // Draw Background first
+  ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+  ImGui::SetNextWindowPos(ImVec2(0, 0));
+
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+
+  if (ImGui::Begin("Background", nullptr,
+                   ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoTitleBar |
+                       ImGuiWindowFlags_NoResize |
+                       ImGuiWindowFlags_NoScrollbar |
+                       ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav)) {
+    ImGui::Image(GetOrCreateBackground().get(), ImGui::GetIO().DisplaySize);
+    ImGui::End();
+  }
+  ImGui::PopStyleVar(3);
+  // -- Background
+  float display_scale = ((float) io.DisplaySize.x / 1920.0f);
+  ImGui::SetNextWindowSize(
+      ImVec2(539 * 1.8f * display_scale,
+          424 * 1.8f * display_scale));
+  ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x / 2 - ((540 * 1.8f * display_scale) / 2),
+                                 ImGui::GetIO().DisplaySize.y / 2 - ((425 * 1.8f * display_scale) / 2)));
+
+  auto flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoTitleBar |
+               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize;
+  if (imgui_drawer()->GetIgnoreInput()) {
+    flags = flags | ImGuiWindowFlags_NoInputs;
   }
 
-  imgui_drawer_.get()->ClearDialogs();
-  emulator_->kernel_state()->xam_state()->xam_dialogs_shown_ = 0;
-}
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0.0f));
+  if (ImGui::Begin("Frontend", nullptr, flags)) {
+    if (ImGui::BeginTabBar("tabs")) {
+      if (ImGui::BeginTabItem("Game List", nullptr)) {
+        ImGui::Text("Total Games: %d", UWP::GetGames().size());
+        if (ImGui::BeginListBox("##gamelist", ImVec2(-1, -1))) {
+          for (const auto& set : UWP::GetGames()) {
+            std::string path, filename;
+            std::tie(path, filename) = set;
 
-void EmulatorWindow::RunTitle(std::filesystem::path path) {
-  // ... (rest of the code remains the same)
-        if (ImGui::Selectable("2x", scale_value == 2)) {
-          cscale_x->SetConfigValue(2);
-          cscale_y->SetConfigValue(2);
-          config::SaveConfig();
-        }
-
-        if (ImGui::Selectable("3x", scale_value == 3)) {
-          cscale_x->SetConfigValue(3);
-          cscale_y->SetConfigValue(3);
-          config::SaveConfig();
-        }
-
-        ImGui::EndCombo();
-      }
-
-      if (ImGui::IsItemFocused()) {
-        tooltip = cscale_x->description();
-      }
-
-      auto cl = dynamic_cast<cvar::ConfigVar<std::string>*>(cvar::ConfigVars->find("cl")->second);
-      std::string cl_text = (std::string)cl->GetTypedConfigValue();
-      if (cl_text != cl_buffer) {
-        cl->SetConfigValue(cl_buffer);
-        config::SaveConfig();
-      }
-
-      if (ImGui::Button("Set CL")) {
-        UWP::ShowKeyboard();
-        ImGui::SetKeyboardFocusHere();
-      }
-
-      ImGui::SameLine();
-      ImGui::InputText("##cl-text", cl_buffer, 128);
-
-      if (ImGui::IsItemFocused()) {
-        tooltip = cl->description();
-      }
-
-      auto cvsync = dynamic_cast<cvar::ConfigVar<bool>*>(cvar::ConfigVars->find("vsync")->second);
-      if (ImGui::Checkbox("V-Sync", cvsync->current_value())) {
-        cvsync->SetConfigValue(!cvsync->GetTypedConfigValue());
-        config::SaveConfig();
-      }
-
-      if (ImGui::IsItemFocused()) {
-        tooltip = cvsync->description();
-      }
-        
-      auto c2xmsaa = dynamic_cast<cvar::ConfigVar<bool>*>(cvar::ConfigVars->find("native_2x_msaa")->second);
-      if (ImGui::Checkbox("Native 2X MSAA", c2xmsaa->current_value())) {
-        c2xmsaa->SetConfigValue(!c2xmsaa->GetTypedConfigValue());
-        config::SaveConfig();
-      }
-
-      if (ImGui::IsItemFocused()) {
-        tooltip = c2xmsaa->description();
-      }
-
-      auto cmount_cache = dynamic_cast<cvar::ConfigVar<bool>*>(
-          cvar::ConfigVars->find("mount_cache")->second);
-      if (ImGui::Checkbox("Toggle Mount Cache",
-                          cmount_cache->current_value())) {
-        cmount_cache->SetConfigValue(!cmount_cache->GetTypedConfigValue());
-        config::SaveConfig();
-      }
-
-      if (ImGui::IsItemFocused()) {
-        tooltip = cmount_cache->description();
-      }
-
-      auto cdxbc = dynamic_cast<cvar::ConfigVar<bool>*>(cvar::ConfigVars->find("dxbc_switch")->second);
-      if (ImGui::Checkbox("Toggle DXBC Switch", cdxbc->current_value())) {
-        cdxbc->SetConfigValue(!cdxbc->GetTypedConfigValue());
-        config::SaveConfig();
-      }
-
-      if (ImGui::IsItemFocused()) {
-        tooltip = cdxbc->description();
-      }
-
-      auto cclear_memory_page= dynamic_cast<cvar::ConfigVar<bool>*>(
-          cvar::ConfigVars->find("d3d12_clear_memory_page_state")->second);
-      if (ImGui::Checkbox("Toggle Clear Memory Page State", cclear_memory_page->current_value())) {
-        cclear_memory_page->SetConfigValue(
-            !cclear_memory_page->GetTypedConfigValue());
-        config::SaveConfig();
-      }
-
-      if (ImGui::IsItemFocused()) {
-        tooltip = cclear_memory_page->description();
-      }
-
-      auto callowinvalid = dynamic_cast<cvar::ConfigVar<bool>*>(
-          cvar::ConfigVars->find("gpu_allow_invalid_fetch_constants")->second);
-      if (ImGui::Checkbox("Toggle Allow Invalid Fetch Constants",
-                          callowinvalid->current_value())) {
-        callowinvalid->SetConfigValue(
-            !callowinvalid->GetTypedConfigValue());
-        config::SaveConfig();
-      }
-
-      if (ImGui::IsItemFocused()) {
-        tooltip = callowinvalid->description();
-      }
-
-      auto creadback_resolve = dynamic_cast<cvar::ConfigVar<bool>*>(
-          cvar::ConfigVars->find("d3d12_readback_resolve")->second);
-      if (ImGui::Checkbox("Readback Resolve",
-                          creadback_resolve->current_value())) {
-        creadback_resolve->SetConfigValue(
-            !creadback_resolve->GetTypedConfigValue());
-        config::SaveConfig();
-      }
-
-      if (ImGui::IsItemFocused()) {
-        tooltip = creadback_resolve->description();
-      }
-
-      auto c_host_guest_stacksync = dynamic_cast<cvar::ConfigVar<bool>*>(
-          cvar::ConfigVars->find("enable_host_guest_stack_synchronization")->second);
-      if (ImGui::Checkbox("Toggle Host Guest Stack Sync",
-                          c_host_guest_stacksync->current_value())) {
-        c_host_guest_stacksync->SetConfigValue(
-            !c_host_guest_stacksync->GetTypedConfigValue());
-        config::SaveConfig();
-      }
-
-      if (ImGui::IsItemFocused()) {
-        tooltip = c_host_guest_stacksync->description();
-      }
-
-      auto cpostscaling = dynamic_cast<cvar::ConfigVar<std::string>*>(
-          cvar::ConfigVars->find("postprocess_scaling_and_sharpening")->second);
-      std::string cpostscaling_value = cpostscaling->GetTypedConfigValue();
-      if (ImGui::BeginCombo(
-              "Scaling & Sharpening Effect",
-              (cpostscaling_value == "" ? "None"
-                                        : cpostscaling_value.c_str()))) {
-        if (ImGui::Selectable("None", cpostscaling_value == "")) {
-            cpostscaling->SetConfigValue("");
-=======
             ImGui::PushID(path.c_str());
             if (ImGui::Selectable(filename.c_str())) {
               emulator_window_.emulator_->LaunchPath(path);
@@ -2528,7 +1867,6 @@ void EmulatorWindow::RunTitle(std::filesystem::path path) {
                               c_allow_vrr_tearing->current_value())) {
             c_allow_vrr_tearing->SetConfigValue(
                 !c_allow_vrr_tearing->GetTypedConfigValue());
->>>>>>> 4f6f18a47 (Update to latest revision, new settings menu)
             config::SaveConfig();
           }
 
@@ -3114,7 +2452,7 @@ void EmulatorWindow::RunTitle(std::filesystem::path path) {
 
       if (ImGui::BeginTabItem("About", nullptr)) {
         ImGui::TextWrapped(
-            "Xenia UWP 1.1.3\nA fork of Xenia introducing Xbox support and a big "
+            "Xenia UWP 1.1.5\nA fork of Xenia introducing Xbox support and a big "
             "picture frontend.\n\n"
             "Xenia's Website: https://xenia.jp/\n"
             "Xenia's Patreon: https://www.patreon.com/xenia_project\n\n"
@@ -3130,17 +2468,9 @@ void EmulatorWindow::RunTitle(std::filesystem::path path) {
       ImGui::EndTabBar();
     }
 
-<<<<<<< HEAD
-    ImGui::EndTabBar();
-  }
-
-  imgui_drawer_.get()->ClearDialogs();
-  emulator_->kernel_state()->xam_state()->xam_dialogs_shown_ = 0;
-=======
     ImGui::End();
   }
   ImGui::PopStyleColor();
->>>>>>> 4f6f18a47 (Update to latest revision, new settings menu)
 }
 
 std::shared_ptr<ui::ImmediateTexture>
@@ -3149,8 +2479,24 @@ EmulatorWindow::WinRTFrontendDialog::GetOrCreateBackground() {
     return background_tex_;
   }
 
+  std::string path;
+
+  auto ccontent_root = dynamic_cast<cvar::ConfigVar<std::filesystem::path>*>(
+      cvar::ConfigVars->find("content_root")->second);
+
+  std::string content_path = ccontent_root->GetTypedConfigValue().string();
+  if (!content_path.empty()) {
+    path = content_path + "/background.png";
+  } else {
+    path = UWP::GetLocalState() + "/content/background.png";
+  }
+
+  if (!std::filesystem::exists(path)) {
+    path = "Assets/background.png";
+  }
+
   int width = 0, height = 0, comp = 0;
-  auto data = stbi_load("Assets/background.png", &width, &height, &comp, 4);
+  auto data = stbi_load(path.c_str(), &width, &height, &comp, 4);
 
   auto tex = emulator_window_.immediate_drawer_->CreateTexture(
       static_cast<uint32_t>(width), static_cast<uint32_t>(height),

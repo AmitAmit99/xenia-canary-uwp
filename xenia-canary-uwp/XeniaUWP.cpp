@@ -121,14 +121,14 @@ void RecurseFolderForGames(std::string path) {
             filename = file.path().stem().string();
           }
 
-          s_games.push_back({path, filename});
+          s_games.push_back({file.path().string(), filename});
           break;
         }
         case xe::Emulator::FileSignatureType::CON:
         case xe::Emulator::FileSignatureType::PIRS:
         case xe::Emulator::FileSignatureType::ZAR: {
           std::string filename = file.path().stem().string();
-          s_games.push_back({path, filename});
+          s_games.push_back({file.path().string(), filename});
           break;
         }
         case xe::Emulator::FileSignatureType::LIVE: {
@@ -145,7 +145,7 @@ void RecurseFolderForGames(std::string path) {
             if (c == 0) break;
           }
 
-          s_games.push_back({path, data});
+          s_games.push_back({file.path().string(), data});
 
           in.close();
         }

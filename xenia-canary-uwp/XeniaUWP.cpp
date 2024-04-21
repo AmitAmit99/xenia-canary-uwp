@@ -109,7 +109,8 @@ void RecurseFolderForGames(std::string path) {
       if (!file.is_regular_file()) continue;
       if (file.path().has_extension()) {
         if (_stricmp(file.path().extension().string().c_str(), ".xex") != 0)
-          continue;
+          if (_stricmp(file.path().extension().string().c_str(), ".zar") != 0)
+            continue;
       }
 
       std::string path = file.path().string();

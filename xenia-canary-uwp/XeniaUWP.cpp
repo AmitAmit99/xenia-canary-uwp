@@ -24,6 +24,7 @@
 #include "xenia/apu/xaudio2/xaudio2_audio_system.h"
 #include "xenia/config.h"
 #include "xenia/base/main_win.h"
+#include "xenia/vfs/devices/disc_zarchive_device.h"
 
 using namespace xe;
 using namespace xe::hid;
@@ -107,46 +108,50 @@ void RecurseFolderForGames(std::string path) {
       }
 
       if (!file.is_regular_file()) continue;
-      if (file.path().has_extension()) {
-        if (_stricmp(file.path().extension().string().c_str(), ".xex") != 0)
-          if (_stricmp(file.path().extension().string().c_str(), ".zar") != 0)
-            continue;
-      }
 
-      std::string path = file.path().string();
+      switch (xe::GetFileSignature(file.path())) {
+        case xe::Emulator::FileSignatureType::XEX1:
+        case xe::Emulator::FileSignatureType::XEX2: {
+          std::string filename = "default";
+          if (_stricmp(file.path().filename().string().c_str(),
+                       "default.xex") == 0) {
+            if (file.path().has_parent_path())
+              filename = file.path().parent_path().filename().string();
+          } else {
+            filename = file.path().stem().string();
+          }
 
-      char MAGIC[5];
-      std::ifstream in(path, std::ios::binary);
-      in.read(MAGIC, 4);
-
-      MAGIC[4] = '\0';
-      if (strcmp(MAGIC, "XEX2") == 0) {
-        std::string filename = "default";
-        if (_stricmp(file.path().filename().string().c_str(),
-                          "default.xex") == 0) {
-          if (file.path().has_parent_path())
-            filename = file.path().parent_path().filename().string();
-        } else {
-          filename = file.path().stem().string();
+          s_games.push_back({path, filename});
+          break;
         }
-
-        s_games.push_back({path, filename});
-      } else if (strcmp(MAGIC, "LIVE") == 0) {
-        in.seekg(0x412);
-
-        char data[32];
-        for (int i = 0; i < 32; i++) {
-          char c;
-          in.read(&c, 2);
-          std::wctomb(&data[i], static_cast<wchar_t>(c));
-
-          if (c == 0) break;
+        case xe::Emulator::FileSignatureType::CON:
+        case xe::Emulator::FileSignatureType::PIRS:
+        case xe::Emulator::FileSignatureType::ZAR: {
+          std::string filename = file.path().stem().string();
+          s_games.push_back({path, filename});
+          break;
         }
+        case xe::Emulator::FileSignatureType::LIVE: {
+          std::ifstream in(file.path().string(), std::ios::binary);
 
-        s_games.push_back({path, data});
+          in.seekg(0x412);
+
+          char data[32];
+          for (int i = 0; i < 32; i++) {
+            char c;
+            in.read(&c, 2);
+            std::wctomb(&data[i], static_cast<wchar_t>(c));
+
+            if (c == 0) break;
+          }
+
+          s_games.push_back({path, data});
+
+          in.close();
+        }
+        default:
+          continue;
       }
-
-      in.close();
     }
   } catch (std::exception) {
     // This folder can't be opened.

@@ -484,8 +484,12 @@ VirtualKey GTKWindow::TranslateVirtualKey(guint keyval) {
       return VirtualKey::kSpace;
     case GDK_KEY_Caps_Lock:
       return VirtualKey::kCapital;
+    case GDK_KEY_Escape:
+      return VirtualKey::kEscape;
     case GDK_KEY_F1:
       return VirtualKey::kF1;
+    case GDK_KEY_F2:
+      return VirtualKey::kF2;
     case GDK_KEY_F3:
       return VirtualKey::kF3;
     case GDK_KEY_F4:
@@ -494,6 +498,14 @@ VirtualKey GTKWindow::TranslateVirtualKey(guint keyval) {
       return VirtualKey::kF5;
     case GDK_KEY_F6:
       return VirtualKey::kF6;
+    case GDK_KEY_F7:
+      return VirtualKey::kF7;
+    case GDK_KEY_F8:
+      return VirtualKey::kF8;
+    case GDK_KEY_F9:
+      return VirtualKey::kF9;
+    case GDK_KEY_F10:
+      return VirtualKey::kF10;
     case GDK_KEY_F11:
       return VirtualKey::kF11;
     case GDK_KEY_F12:

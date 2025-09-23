@@ -10,15 +10,22 @@
 #ifndef XENIA_GPU_VULKAN_VULKAN_PIPELINE_STATE_CACHE_H_
 #define XENIA_GPU_VULKAN_VULKAN_PIPELINE_STATE_CACHE_H_
 
+#include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <queue>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "xenia/base/hash.h"
 #include "xenia/base/platform.h"
+#include "xenia/base/threading.h"
 #include "xenia/base/xxhash.h"
 #include "xenia/gpu/primitive_processor.h"
 #include "xenia/gpu/register_file.h"
@@ -39,8 +46,6 @@ class VulkanCommandProcessor;
 // implementations.
 class VulkanPipelineCache {
  public:
-  static constexpr size_t kLayoutUIDEmpty = 0;
-
   class PipelineLayoutProvider {
    public:
     virtual ~PipelineLayoutProvider() {}
@@ -50,6 +55,34 @@ class VulkanPipelineCache {
     PipelineLayoutProvider() = default;
   };
 
+  struct Pipeline {
+    std::atomic<VkPipeline> pipeline{VK_NULL_HANDLE};
+    // The layouts are owned by the VulkanCommandProcessor, and must not be
+    // destroyed by it while the pipeline cache is active.
+    const PipelineLayoutProvider* pipeline_layout;
+
+    Pipeline(const PipelineLayoutProvider* pipeline_layout_provider)
+        : pipeline_layout(pipeline_layout_provider) {}
+
+    // Copy constructor needed for unordered_map
+    Pipeline(const Pipeline& other)
+        : pipeline(other.pipeline.load(std::memory_order_acquire)),
+          pipeline_layout(other.pipeline_layout) {}
+
+    // Move constructor
+    Pipeline(Pipeline&& other) noexcept
+        : pipeline(other.pipeline.load(std::memory_order_acquire)),
+          pipeline_layout(other.pipeline_layout) {}
+
+    // Deleted copy assignment to prevent accidental copying
+    Pipeline& operator=(const Pipeline&) = delete;
+
+    // Deleted move assignment
+    Pipeline& operator=(Pipeline&&) = delete;
+  };
+
+  static constexpr size_t kLayoutUIDEmpty = 0;
+
   VulkanPipelineCache(VulkanCommandProcessor& command_processor,
                       const RegisterFile& register_file,
                       VulkanRenderTargetCache& render_target_cache,
@@ -58,6 +91,9 @@ class VulkanPipelineCache {
 
   bool Initialize();
   void Shutdown();
+
+  void EndSubmission();
+  bool IsCreatingPipelines();
 
   VulkanShader* LoadShader(xenos::ShaderType shader_type,
                            const uint32_t* host_address, uint32_t dword_count);
@@ -78,7 +114,6 @@ class VulkanPipelineCache {
 
   bool EnsureShadersTranslated(VulkanShader::VulkanTranslation* vertex_shader,
                                VulkanShader::VulkanTranslation* pixel_shader);
-  // TODO(Triang3l): Return a deferred creation handle.
   bool ConfigurePipeline(
       VulkanShader::VulkanTranslation* vertex_shader,
       VulkanShader::VulkanTranslation* pixel_shader,
@@ -86,8 +121,7 @@ class VulkanPipelineCache {
       reg::RB_DEPTHCONTROL normalized_depth_control,
       uint32_t normalized_color_mask,
       VulkanRenderTargetCache::RenderPassKey render_pass_key,
-      VkPipeline& pipeline_out,
-      const PipelineLayoutProvider*& pipeline_layout_out);
+      Pipeline** pipeline_out);
 
  private:
   enum class PipelineGeometryShader : uint32_t {
@@ -218,26 +252,27 @@ class VulkanPipelineCache {
     };
   });
 
-  struct Pipeline {
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    // The layouts are owned by the VulkanCommandProcessor, and must not be
-    // destroyed by it while the pipeline cache is active.
-    const PipelineLayoutProvider* pipeline_layout;
-    Pipeline(const PipelineLayoutProvider* pipeline_layout_provider)
-        : pipeline_layout(pipeline_layout_provider) {}
-  };
-
-  // Description that can be passed from the command processor thread to the
   // creation threads, with everything needed from caches pre-looked-up.
   struct PipelineCreationArguments {
     std::pair<const PipelineDescription, Pipeline>* pipeline;
-    const VulkanShader::VulkanTranslation* vertex_shader;
-    const VulkanShader::VulkanTranslation* pixel_shader;
+    VulkanShader::VulkanTranslation* vertex_shader;
+    VulkanShader::VulkanTranslation* pixel_shader;
     VkShaderModule geometry_shader;
     // Tessellation shaders (only used when tessellation is active).
     VkShaderModule tessellation_vertex_shader;   // VS for passing data to TCS.
     VkShaderModule tessellation_control_shader;  // TCS (hull shader).
     VkRenderPass render_pass;
+    // Priority for async compilation (higher = compiled sooner).
+    // Pipelines that write to visible render targets get higher priority.
+    uint8_t priority = 0;
+  };
+
+  // Comparator for priority queue - higher priority first.
+  struct PipelineCreationPriorityCompare {
+    bool operator()(const PipelineCreationArguments& a,
+                    const PipelineCreationArguments& b) const {
+      return a.priority < b.priority;  // max-heap: lower priority at bottom
+    }
   };
 
   union GeometryShaderKey {
@@ -374,8 +409,26 @@ class VulkanPipelineCache {
       pipelines_;
 
   // Previously used pipeline, to avoid lookups if the state wasn't changed.
-  const std::pair<const PipelineDescription, Pipeline>* last_pipeline_ =
-      nullptr;
+  std::pair<const PipelineDescription, Pipeline>* last_pipeline_ = nullptr;
+
+  void CreationThread();
+
+  // For asynchronous creation.
+  std::vector<std::unique_ptr<xe::threading::Thread>> creation_threads_;
+  std::atomic<bool> creation_threads_shutdown_{false};
+  std::atomic<size_t> creation_threads_busy_{0};
+  // Priority queue contains pointers to map entries. Pipelines are never
+  // evicted as games have a finite set that should all remain cached for
+  // performance. Higher priority pipelines (those writing to visible RTs)
+  // are compiled first.
+  std::priority_queue<PipelineCreationArguments,
+                      std::vector<PipelineCreationArguments>,
+                      PipelineCreationPriorityCompare>
+      creation_queue_;
+  std::mutex creation_request_lock_;
+  std::condition_variable creation_request_cond_;
+  std::unique_ptr<xe::threading::Event> creation_completion_event_ = nullptr;
+  std::atomic<bool> creation_completion_set_event_{false};
 };
 
 }  // namespace vulkan

@@ -164,13 +164,20 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
                                                     normalized_framerate_limit))
                     : 1.0;
             uint64_t last_frame_time = Clock::QueryGuestTickCount();
-            // Sleep for 90% of the vblank duration, spin for 10%
+    // Sleep for 90% of the vblank duration on Windows, spin for 10%
+    // Linux uses full sleep duration due to scheduler quantum issues
+#if XE_PLATFORM_WIN32
             constexpr double duration_scalar = 0.90;
+#endif
+#if XE_PLATFORM_LINUX
+            constexpr double duration_scalar = 1.0;
+#endif
 
             while (frame_limiter_worker_running_) {
               register_file()->values[XE_GPU_REG_D1MODE_V_COUNTER] +=
                   GetInternalDisplayResolution().second;
 
+#if XE_PLATFORM_WIN32
               if (cvars::vsync) {
                 const uint64_t current_time = Clock::QueryGuestTickCount();
                 const uint64_t tick_freq = Clock::guest_tick_frequency();
@@ -181,18 +188,12 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
                 if (elapsed_d >= vsync_duration_d) {
                   last_frame_time = current_time;
 
-                  // TODO(disjtqz): should recalculate the remaining time to a
-                  // vblank after MarkVblank, no idea how long the guest code
-                  // normally takes
                   MarkVblank();
-                  if (cvars::vsync) {
-                    const uint64_t estimated_nanoseconds =
-                        static_cast<uint64_t>(
-                            (vsync_duration_d * 1000000.0) *
-                            duration_scalar);  // 1000 microseconds = 1 ms
+                  const uint64_t estimated_nanoseconds = static_cast<uint64_t>(
+                      (vsync_duration_d * 1000000.0) *
+                      duration_scalar);  // 1000 microseconds = 1 ms
 
-                    threading::NanoSleep(estimated_nanoseconds);
-                  }
+                  threading::NanoSleep(estimated_nanoseconds);
                 }
               }
 
@@ -210,6 +211,22 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
                   xe::threading::Sleep(std::chrono::milliseconds(1));
                 }
               }
+#endif
+#if XE_PLATFORM_LINUX
+              // Linux: Use simplified timing logic to avoid oversleeping
+              MarkVblank();
+
+              if (cvars::vsync || normalized_framerate_limit > 0) {
+                uint64_t sleep_duration_ns =
+                    static_cast<uint64_t>(vsync_duration_d * 1000000.0);
+                if (!cvars::vsync && normalized_framerate_limit > 0) {
+                  sleep_duration_ns = 1000000000 / normalized_framerate_limit;
+                }
+                threading::NanoSleep(sleep_duration_ns);
+              } else {
+                xe::threading::Sleep(std::chrono::milliseconds(1));
+              }
+#endif
             }
             return 0;
           },

@@ -11,6 +11,7 @@
 
 #include "xenia/base/byte_stream.h"
 #include "xenia/base/logging.h"
+#include "xenia/base/platform.h"
 #include "xenia/base/profiling.h"
 #include "xenia/base/threading.h"
 #include "xenia/cpu/processor.h"
@@ -717,12 +718,27 @@ X_STATUS XThread::Resume(uint32_t* out_suspend_count) {
   if (out_suspend_count) {
     *out_suspend_count = previous_suspend_count;
   }
+
   uint32_t unused_host_suspend_count = 0;
+#if XE_PLATFORM_WIN32
   if (thread_->Resume(&unused_host_suspend_count)) {
     return X_STATUS_SUCCESS;
   } else {
     return X_STATUS_UNSUCCESSFUL;
   }
+#elif XE_PLATFORM_LINUX
+  // On Linux, only resume if suspend count is 0
+  // Resume might fail if thread was self-suspended - this is expected
+  if (guest_thread->suspend_count == 0) {
+    if (!thread_->Resume(&unused_host_suspend_count)) {
+      XELOGD("Host thread resume skipped for thread {:X} (was self-suspended)",
+             handle());
+    }
+  }
+  return X_STATUS_SUCCESS;
+#else
+#error "Unsupported platform"
+#endif
 }
 
 X_STATUS XThread::Suspend(uint32_t* out_suspend_count) {

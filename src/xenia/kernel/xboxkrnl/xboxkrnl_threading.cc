@@ -10,6 +10,7 @@
 #include "xenia/kernel/xboxkrnl/xboxkrnl_threading.h"
 #include "xenia/base/atomic.h"
 #include "xenia/base/clock.h"
+#include "xenia/base/platform.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
@@ -236,12 +237,39 @@ dword_result_t NtSuspendThread_entry(dword_t handle,
     if (thread->type() == XObject::Type::Thread) {
       auto current_pcr = context->TranslateVirtualGPR<X_KPCR*>(context->r[13]);
 
+#if XE_PLATFORM_WIN32
       if (current_pcr->prcb_data.current_thread == thread->guest_object() ||
           !thread->guest_object<X_KTHREAD>()->terminated) {
         result = thread->Suspend(&suspend_count);
       } else {
         return X_STATUS_THREAD_IS_TERMINATING;
       }
+#elif XE_PLATFORM_LINUX
+      // On Linux, we need to handle self-suspension specially to avoid deadlock
+      if (!thread->guest_object<X_KTHREAD>()->terminated) {
+        bool is_self_suspend =
+            (current_pcr->prcb_data.current_thread == thread->guest_object());
+
+        if (is_self_suspend) {
+          // Self-suspension: just increment the suspend count and return
+          // The thread continues running - this matches Windows/Xbox behavior
+          auto guest_thread = thread->guest_object<X_KTHREAD>();
+          suspend_count = guest_thread->suspend_count;
+          guest_thread->suspend_count++;
+          result = X_STATUS_SUCCESS;
+          XELOGD(
+              "Thread {:X} self-suspending (count: {}) - continuing execution",
+              thread->handle(), guest_thread->suspend_count);
+        } else {
+          // Normal suspension of another thread
+          result = thread->Suspend(&suspend_count);
+        }
+      } else {
+        return X_STATUS_THREAD_IS_TERMINATING;
+      }
+#else
+#error "Unsupported platform"
+#endif
     } else {
       return X_STATUS_OBJECT_TYPE_MISMATCH;
     }

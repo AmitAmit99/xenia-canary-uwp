@@ -76,7 +76,14 @@ dword_result_t NtAllocateVirtualMemory_entry(lpdword_t base_addr_ptr,
   assert_not_null(region_size_ptr);
 
   // Set to TRUE when allocation is from devkit memory area.
-  assert_true(debug_memory == 0);
+  // We don't support separate devkit memory, so just ignore this flag.
+  if (debug_memory) {
+    XELOGW(
+        "Game is attempting to allocate devkit debug memory (base: {:08X}, "
+        "size: {:08X}). Ignoring debug flag and using normal allocation.",
+        base_addr_ptr ? uint32_t(*base_addr_ptr) : 0,
+        region_size_ptr ? uint32_t(*region_size_ptr) : 0);
+  }
 
   // This allocates memory from the kernel heap, which is initialized on startup
   // and shared by both the kernel implementation and user code.

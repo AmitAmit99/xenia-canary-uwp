@@ -184,7 +184,8 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
   while (std::getline(memory_maps, maps_entry_string)) {
     std::stringstream entry_stream(maps_entry_string);
     uintptr_t map_region_begin, map_region_end;
-    char separator, protection[4];
+    char separator;
+    char protection[5];  // 4 chars (e.g., "r-xp") + null terminator
 
     entry_stream >> std::hex >> map_region_begin >> separator >>
         map_region_end >> protection;
@@ -199,7 +200,7 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
       while (std::getline(memory_maps, maps_entry_string)) {
         std::stringstream next_entry_stream(maps_entry_string);
         uintptr_t next_map_region_begin, next_map_region_end;
-        char next_protection[4];
+        char next_protection[5];  // 4 chars (e.g., "r-xp") + null terminator
 
         next_entry_stream >> std::hex >> next_map_region_begin >> separator >>
             next_map_region_end >> next_protection;

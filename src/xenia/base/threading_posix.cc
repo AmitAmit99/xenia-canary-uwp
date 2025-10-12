@@ -703,11 +703,17 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     }
     WaitStarted();
     std::unique_lock lock(state_mutex_);
-    if (state_ != State::kSuspended) return false;
+    // Check if thread has any suspend count (Windows allows resume even if
+    // running)
+    if (suspend_count_ == 0) return false;
     if (out_previous_suspend_count) {
       *out_previous_suspend_count = suspend_count_;
     }
     --suspend_count_;
+    // If suspend count reaches 0, transition to running
+    if (suspend_count_ == 0 && state_ == State::kSuspended) {
+      state_ = State::kRunning;
+    }
     state_signal_.notify_all();
     return true;
   }

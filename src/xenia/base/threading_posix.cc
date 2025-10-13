@@ -193,13 +193,38 @@ bool SetTlsValue(TlsHandle handle, uintptr_t value) {
 
 class PosixConditionBase {
  public:
+  PosixConditionBase() {
+    // Initialize as robust mutex to handle thread termination gracefully
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);
+
+    // Get the native handle and set it as robust
+    auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
+    pthread_mutex_destroy(native_mutex);      // Destroy default mutex
+    pthread_mutex_init(native_mutex, &attr);  // Reinit as robust
+    pthread_mutexattr_destroy(&attr);
+  }
+
   virtual ~PosixConditionBase() = default;
   virtual bool Signal() = 0;
 
   WaitResult Wait(std::chrono::milliseconds timeout) {
     bool executed;
     auto predicate = [this] { return this->signaled(); };
-    auto lock = std::unique_lock(mutex_);
+
+    // Handle robust mutex locking
+    auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
+    int lock_result = pthread_mutex_lock(native_mutex);
+    if (lock_result == EOWNERDEAD) {
+      // Recover from dead owner
+      pthread_mutex_consistent(native_mutex);
+    } else if (lock_result != 0) {
+      return WaitResult::kFailed;
+    }
+
+    std::unique_lock<std::mutex> lock(mutex_, std::adopt_lock);
+
     if (predicate()) {
       executed = true;
     } else {
@@ -248,8 +273,20 @@ class PosixConditionBase {
       bool all_locked = true;
 
       for (size_t i = 0; i < handles.size(); ++i) {
-        locks.emplace_back(handles[i]->mutex_, std::try_to_lock);
-        if (!locks.back().owns_lock()) {
+        // Try to lock, handling robust mutex EOWNERDEAD case
+        auto native_mutex =
+            static_cast<pthread_mutex_t*>(handles[i]->mutex_.native_handle());
+        int result = pthread_mutex_trylock(native_mutex);
+
+        if (result == 0 || result == EOWNERDEAD) {
+          // Successfully acquired lock or recovered from dead owner
+          if (result == EOWNERDEAD) {
+            // Make mutex consistent after previous owner died
+            pthread_mutex_consistent(native_mutex);
+          }
+          locks.emplace_back(handles[i]->mutex_, std::adopt_lock);
+        } else {
+          // Couldn't acquire lock
           all_locked = false;
           break;
         }

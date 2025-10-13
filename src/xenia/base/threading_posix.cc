@@ -111,19 +111,25 @@ SignalType GetSystemSignalType(int num) {
   return static_cast<SignalType>(num - SIGRTMIN);
 }
 
-thread_local std::array<bool, static_cast<size_t>(SignalType::k_Count)>
+std::array<std::atomic<bool>, static_cast<size_t>(SignalType::k_Count)>
     signal_handler_installed = {};
 
 static void signal_handler(int signal, siginfo_t* info, void* context);
 
 void install_signal_handler(SignalType type) {
-  if (signal_handler_installed[static_cast<size_t>(type)]) return;
+  bool expected = false;
+  if (!signal_handler_installed[static_cast<size_t>(type)]
+           .compare_exchange_strong(expected, true)) {
+    return;  // Already installed
+  }
   struct sigaction action{};
-  action.sa_flags = SA_SIGINFO;
+  action.sa_flags = SA_SIGINFO | SA_RESTART;
   action.sa_sigaction = signal_handler;
   sigemptyset(&action.sa_mask);
-  if (sigaction(GetSystemSignal(type), &action, nullptr) == -1)
-    signal_handler_installed[static_cast<size_t>(type)] = true;
+  if (sigaction(GetSystemSignal(type), &action, nullptr) != 0) {
+    // Failed to install, reset the flag
+    signal_handler_installed[static_cast<size_t>(type)] = false;
+  }
 }
 
 // TODO(dougvj)
@@ -705,7 +711,9 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     std::unique_lock lock(state_mutex_);
     // Check if thread has any suspend count (Windows allows resume even if
     // running)
-    if (suspend_count_ == 0) return false;
+    if (suspend_count_ == 0) {
+      return false;
+    }
     if (out_previous_suspend_count) {
       *out_previous_suspend_count = suspend_count_;
     }
@@ -723,6 +731,10 @@ class PosixCondition<Thread> final : public PosixConditionBase {
       *out_previous_suspend_count = 0;
     }
     WaitStarted();
+
+    // Check if we're trying to suspend ourselves
+    bool is_current_thread = pthread_self() == thread_;
+
     {
       if (out_previous_suspend_count) {
         *out_previous_suspend_count = suspend_count_;
@@ -730,6 +742,15 @@ class PosixCondition<Thread> final : public PosixConditionBase {
       state_ = State::kSuspended;
       ++suspend_count_;
     }
+
+    if (is_current_thread) {
+      // Self-suspension: Instead of sending a signal, directly call
+      // WaitSuspended This avoids the signal handler complexity for the
+      // self-suspend case
+      WaitSuspended();
+      return true;
+    }
+
     int result =
         pthread_kill(thread_, GetSystemSignal(SignalType::kThreadSuspend));
     return result == 0;
@@ -1191,10 +1212,14 @@ void set_name(const std::string_view name) {
 #endif
 }
 
-static void signal_handler(int signal, siginfo_t* info, void* /*context*/) {
+static void signal_handler(int signal, siginfo_t* info, void* context) {
   switch (GetSystemSignalType(signal)) {
     case SignalType::kThreadSuspend: {
-      assert_not_null(current_thread_);
+      if (!current_thread_) {
+        // current_thread_ is NULL - this can happen if the signal arrives
+        // before the thread has initialized or after it has exited
+        return;
+      }
       current_thread_->WaitSuspended();
     } break;
     case SignalType::kThreadUserCallback: {

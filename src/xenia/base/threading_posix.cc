@@ -222,63 +222,110 @@ class PosixConditionBase {
       std::chrono::milliseconds timeout) {
     assert_true(!handles.empty());
 
-    // Construct a condition for all or any depending on wait_all
-    std::function<bool()> predicate;
-    {
-      using iter_t = std::vector<PosixConditionBase*>::const_iterator;
-      const auto predicate_inner = [](auto h) { return h->signaled(); };
-      const auto operation =
-          wait_all ? std::all_of<iter_t, decltype(predicate_inner)>
-                   : std::any_of<iter_t, decltype(predicate_inner)>;
-      predicate = [&handles, operation, predicate_inner] {
-        return operation(handles.cbegin(), handles.cend(), predicate_inner);
-      };
+    // For single handle, just use the normal Wait path
+    if (handles.size() == 1) {
+      auto result = handles[0]->Wait(timeout);
+      return std::make_pair(result, 0);
     }
 
-    // TODO(bwrsandman, Triang3l) This is controversial, see issue #1677
-    // This will probably cause a deadlock on the next thread doing any waiting
-    // if the thread is suspended between locking and waiting
-    std::unique_lock lock(mutex_);
+    // For multiple handles, we need to poll since we can't wait on multiple
+    // condition variables simultaneously. This is a limitation of the POSIX
+    // condition variable API.
+    auto start_time = std::chrono::steady_clock::now();
+    auto end_time = (timeout == std::chrono::milliseconds::max())
+                        ? std::chrono::steady_clock::time_point::max()
+                        : start_time + timeout;
 
-    bool wait_success = true;
-    // If the timeout is infinite, wait without timeout.
-    // The predicate will be checked before beginning the wait
-    if (timeout == std::chrono::milliseconds::max()) {
-      cond_.wait(lock, predicate);
-    } else {
-      // Wait with timeout.
-      wait_success = cond_.wait_for(lock, timeout, predicate);
-    }
-    if (wait_success) {
-      auto first_signaled = std::numeric_limits<size_t>::max();
-      for (auto i = 0u; i < handles.size(); ++i) {
-        if (handles[i]->signaled()) {
-          if (first_signaled > i) {
-            first_signaled = i;
-          }
-          handles[i]->post_execution();
-          if (!wait_all) break;
+    while (true) {
+      // Check all handles to see if any/all are signaled
+      // Use try_lock to avoid deadlocks from lock ordering issues
+      size_t first_signaled = std::numeric_limits<size_t>::max();
+      bool condition_met = false;
+
+      // Try to acquire all locks without blocking
+      std::vector<std::unique_lock<std::mutex>> locks;
+      locks.reserve(handles.size());
+      bool all_locked = true;
+
+      for (size_t i = 0; i < handles.size(); ++i) {
+        locks.emplace_back(handles[i]->mutex_, std::try_to_lock);
+        if (!locks.back().owns_lock()) {
+          all_locked = false;
+          break;
         }
       }
-      assert_true(std::numeric_limits<size_t>::max() != first_signaled);
-      return std::make_pair(WaitResult::kSuccess, first_signaled);
+
+      // If we couldn't acquire all locks, release what we have and retry
+      if (!all_locked) {
+        locks.clear();
+        std::this_thread::yield();
+        continue;
+      }
+
+      // Now we have all locks, check the condition
+      if (wait_all) {
+        // For wait_all, check if ALL are signaled
+        bool all_signaled = true;
+        for (size_t i = 0; i < handles.size(); ++i) {
+          if (!handles[i]->signaled()) {
+            all_signaled = false;
+            break;
+          }
+          if (first_signaled == std::numeric_limits<size_t>::max()) {
+            first_signaled = i;
+          }
+        }
+        condition_met = all_signaled;
+      } else {
+        // For wait_any, check if ANY is signaled
+        for (size_t i = 0; i < handles.size(); ++i) {
+          if (handles[i]->signaled()) {
+            first_signaled = i;
+            condition_met = true;
+            break;
+          }
+        }
+      }
+
+      if (condition_met) {
+        // Execute post_execution for the signaled handle(s)
+        if (wait_all) {
+          for (size_t i = 0; i < handles.size(); ++i) {
+            handles[i]->post_execution();
+          }
+        } else {
+          handles[first_signaled]->post_execution();
+        }
+        return std::make_pair(WaitResult::kSuccess, first_signaled);
+      }
+
+      // Release locks before sleeping
+      locks.clear();
+
+      // Check timeout
+      auto now = std::chrono::steady_clock::now();
+      if (now >= end_time) {
+        return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
+      }
+
+      // Sleep for a short time before polling again
+      auto remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);
+      auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));
+      std::this_thread::sleep_for(sleep_time);
     }
-    return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
   }
 
   [[nodiscard]] virtual void* native_handle() const {
-    return cond_.native_handle();
+    return const_cast<std::condition_variable&>(cond_).native_handle();
   }
 
  protected:
   [[nodiscard]] inline virtual bool signaled() const = 0;
   inline virtual void post_execution() = 0;
-  static std::condition_variable cond_;
-  static std::mutex mutex_;
+  std::condition_variable cond_;
+  std::mutex mutex_;
 };
-
-std::condition_variable PosixConditionBase::cond_;
-std::mutex PosixConditionBase::mutex_;
 
 // There really is no native POSIX handle for a single wait/signal construct
 // pthreads is at a lower level with more handles for such a mechanism.
@@ -373,7 +420,7 @@ class PosixCondition<Mutant> final : public PosixConditionBase {
   }
 
   [[nodiscard]] void* native_handle() const override {
-    return mutex_.native_handle();
+    return const_cast<std::mutex&>(mutex_).native_handle();
   }
 
  private:
@@ -1152,10 +1199,12 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
     thread->handle_.state_ = State::kFinished;
   }
 
-  std::unique_lock lock(mutex_);
-  thread->handle_.exit_code_ = 0;
-  thread->handle_.signaled_ = true;
-  cond_.notify_all();
+  {
+    std::unique_lock lock(thread->handle_.mutex_);
+    thread->handle_.exit_code_ = 0;
+    thread->handle_.signaled_ = true;
+    thread->handle_.cond_.notify_all();
+  }
 
   current_thread_ = nullptr;
   return nullptr;

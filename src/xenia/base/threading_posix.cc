@@ -924,9 +924,12 @@ class PosixCondition<Thread> final : public PosixConditionBase {
 
 class PosixWaitHandle {
  public:
-  virtual ~PosixWaitHandle() = default;
+  virtual ~PosixWaitHandle();
   virtual PosixConditionBase& condition() = 0;
 };
+
+// Out-of-line destructor to ensure proper RTTI/vtable emission
+PosixWaitHandle::~PosixWaitHandle() = default;
 
 // This wraps a condition object as our handle because posix has no single
 // native handle for higher level concurrency constructs such as semaphores

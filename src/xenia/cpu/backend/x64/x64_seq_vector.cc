@@ -934,6 +934,7 @@ struct VECTOR_SHL_V128
         e.vpmovzxbd(e.ymm2, i.src2);
         e.vpmovzxbd(e.ymm3, e.xmm3);
 
+        // Mask shift counts to 3 bits (0-7) for byte shifts
         e.vpbroadcastd(e.ymm4, e.GetXmmConstPtr(XMMXOPByteShiftMask));
         e.vpand(e.ymm2, e.ymm2, e.ymm4);
         e.vpand(e.ymm3, e.ymm3, e.ymm4);
@@ -1032,7 +1033,8 @@ struct VECTOR_SHL_V128
 
     e.L(looper);
     e.movzx(e.ecx, e.byte[e.rsp + stack_offset_src2 + e.rdx]);
-    e.and_(e.ecx, 7);
+    e.and_(e.cl, 7);  // Mask shift count to 3 bits (0-7) for byte shifts
+
     e.shl(e.byte[e.rsp + stack_offset_src1 + e.rdx], e.cl);
 
     if (e.IsFeatureEnabled(kX64FlagsIndependentVars)) {

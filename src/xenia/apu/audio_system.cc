@@ -248,6 +248,14 @@ void AudioSystem::SubmitFrame(size_t index, float* samples) {
         "(in_use={}, driver={:p})",
         index, index < kMaximumClientCount ? clients_[index].in_use : false,
         index < kMaximumClientCount ? (void*)clients_[index].driver : nullptr);
+
+    // Submit silence instead of dropping the frame to maintain the callback
+    // chain.  If we don't submit anything, the audio driver's OnBufferEnd
+    // callback will never fire, causing the semaphore to leak.
+    if (index < kMaximumClientCount && clients_[index].driver) {
+      static float silence[apu::AudioDriver::kFrameSamplesMax] = {0};
+      (clients_[index].driver)->SubmitFrame(silence);
+    }
     return;
   }
   (clients_[index].driver)->SubmitFrame(samples);

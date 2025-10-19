@@ -54,18 +54,35 @@ int InstrEmit_faddsx(PPCHIRBuilder& f, const InstrData& i) {
 
 int InstrEmit_fdivx(PPCHIRBuilder& f, const InstrData& i) {
   // frD <- frA / frB
+#if XE_PLATFORM_LINUX
+  // TODO(has207): verify if this is needed on Windows
+  // On Linux, fdiv needs to use A format fields instead of X format
   Value* v = f.Div(f.LoadFPR(i.A.FRA), f.LoadFPR(i.A.FRB));
   f.StoreFPR(i.A.FRT, v);
   f.UpdateFPSCR(v, i.A.Rc);
+#else
+  Value* v = f.Div(f.LoadFPR(i.X.RA), f.LoadFPR(i.X.RB));
+  f.StoreFPR(i.X.RT, v);
+  f.UpdateFPSCR(v, i.X.Rc);
+#endif
   return 0;
 }
 
 int InstrEmit_fdivsx(PPCHIRBuilder& f, const InstrData& i) {
   // frD <- frA / frB
+#if XE_PLATFORM_LINUX
+  // TODO(has207): verify if this is needed on Windows
+  // On Linux, fdivs needs to use A format fields instead of X format
   Value* v = f.Div(f.LoadFPR(i.A.FRA), f.LoadFPR(i.A.FRB));
   v = f.ToSingle(v);
   f.StoreFPR(i.A.FRT, v);
   f.UpdateFPSCR(v, i.A.Rc);
+#else
+  Value* v = f.Div(f.LoadFPR(i.X.RA), f.LoadFPR(i.X.RB));
+  v = f.ToSingle(v);
+  f.StoreFPR(i.X.RT, v);
+  f.UpdateFPSCR(v, i.X.Rc);
+#endif
   return 0;
 }
 

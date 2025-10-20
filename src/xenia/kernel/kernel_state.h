@@ -80,7 +80,7 @@ struct X_KPROCESS {
   uint8_t is_terminating;
   // one of X_PROCTYPE_
   uint8_t process_type;
-  xe::be<uint32_t> bitmap[8];
+  xe::be<uint32_t> tls_slot_bitmap[8];
   xe::be<uint32_t> unk_50;
   X_LIST_ENTRY unk_54;
   xe::be<uint32_t> unk_5C;
@@ -140,6 +140,7 @@ struct KernelGuestGlobals {
   // this lock is only used in some Ob functions. It's odd that it is used at
   // all, as each table already has its own spinlock.
   X_KSPINLOCK ob_lock;
+  X_KSPINLOCK tls_lock;  // protects per-process TLS bitmap allocations
 
   // if LLE emulating Xam, this is needed or you get an immediate freeze
   X_KEVENT UsbdBootEnumerationDoneEvent;
@@ -219,8 +220,8 @@ class KernelState {
     return kernel_guest_globals_ + offsetof(KernelGuestGlobals, idle_process);
   }
 
-  uint32_t AllocateTLS();
-  void FreeTLS(uint32_t slot);
+  uint32_t AllocateTLS(cpu::ppc::PPCContext* context);
+  void FreeTLS(cpu::ppc::PPCContext* context, uint32_t slot);
 
   void RegisterTitleTerminateNotification(uint32_t routine, uint32_t priority);
   void RemoveTitleTerminateNotification(uint32_t routine);
@@ -382,7 +383,6 @@ class KernelState {
   std::condition_variable_any dispatch_cond_;
   std::list<std::function<void()>> dispatch_queue_;
 
-  BitMap tls_bitmap_;
   uint32_t ke_timestamp_bundle_ptr_ = 0;
   std::unique_ptr<xe::threading::HighResolutionTimer> timestamp_timer_;
   uint32_t quantum_timer_counter_ = 0;

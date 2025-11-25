@@ -12,7 +12,9 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -107,6 +109,29 @@ struct MappedFileRange {
 
 std::vector<MappedFileRange> mapped_file_ranges;
 std::mutex g_mapped_file_ranges_mutex;
+
+// Track shm file names for cleanup on exit
+std::vector<std::string> g_shm_file_names;
+std::mutex g_shm_file_names_mutex;
+static bool g_cleanup_handlers_installed = false;
+
+#if !XE_PLATFORM_ANDROID
+static void CleanupAtExit() {
+  for (const auto& name : g_shm_file_names) {
+    shm_unlink(name.c_str());
+  }
+}
+
+static void InstallCleanupHandlers() {
+  if (g_cleanup_handlers_installed) {
+    return;
+  }
+  g_cleanup_handlers_installed = true;
+
+  std::atexit(CleanupAtExit);
+  std::at_quick_exit(CleanupAtExit);
+}
+#endif  // !XE_PLATFORM_ANDROID
 
 void* AllocFixed(void* base_address, size_t length,
                  AllocationType allocation_type, PageAccess access) {
@@ -271,7 +296,17 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path,
   if (ret < 0) {
     return kFileMappingHandleInvalid;
   }
-  ftruncate64(ret, length);
+  if (ftruncate64(ret, length) < 0) {
+    close(ret);
+    shm_unlink(full_path.c_str());
+    return kFileMappingHandleInvalid;
+  }
+  // Track for cleanup on abnormal exit and install cleanup handlers
+  {
+    std::lock_guard guard(g_shm_file_names_mutex);
+    g_shm_file_names.push_back(full_path.string());
+  }
+  InstallCleanupHandlers();
   return ret;
 #endif
 }
@@ -282,6 +317,15 @@ void CloseFileMappingHandle(FileMappingHandle handle,
 #if !XE_PLATFORM_ANDROID
   auto full_path = "/" / path;
   shm_unlink(full_path.c_str());
+  // Remove from tracking
+  {
+    std::lock_guard guard(g_shm_file_names_mutex);
+    auto it = std::find(g_shm_file_names.begin(), g_shm_file_names.end(),
+                        full_path.string());
+    if (it != g_shm_file_names.end()) {
+      g_shm_file_names.erase(it);
+    }
+  }
 #endif
 }
 

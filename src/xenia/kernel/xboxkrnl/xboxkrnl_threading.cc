@@ -245,27 +245,17 @@ dword_result_t NtSuspendThread_entry(dword_t handle,
         return X_STATUS_THREAD_IS_TERMINATING;
       }
 #elif XE_PLATFORM_LINUX
-      // On Linux, we need to handle self-suspension specially to avoid deadlock
+      // Handle self-suspension specially to avoid deadlock.
       if (!thread->guest_object<X_KTHREAD>()->terminated) {
         bool is_self_suspend =
             (current_pcr->prcb_data.current_thread == thread->guest_object());
 
         if (is_self_suspend) {
-          // Self-suspension: increment the suspend count and wait until
-          // another thread resumes us (decrements count to 0)
-          auto guest_thread = thread->guest_object<X_KTHREAD>();
-          suspend_count = guest_thread->suspend_count;
-          guest_thread->suspend_count++;
+          XELOGD("Thread {:X} self-suspending", thread->handle());
+          suspend_count = thread->SelfSuspend();
           result = X_STATUS_SUCCESS;
-          XELOGD("Thread {:X} self-suspending (count: {}) - waiting for resume",
-                 thread->handle(), guest_thread->suspend_count);
-          // Wait until suspend_count reaches 0 (resumed by another thread)
-          while (guest_thread->suspend_count > 0) {
-            xe::threading::Sleep(std::chrono::microseconds(100));
-          }
           XELOGD("Thread {:X} resumed", thread->handle());
         } else {
-          // Normal suspension of another thread
           result = thread->Suspend(&suspend_count);
         }
       } else {

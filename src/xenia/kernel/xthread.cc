@@ -711,7 +711,9 @@ uint32_t XThread::start_address() {
 
 X_STATUS XThread::Resume(uint32_t* out_suspend_count) {
   auto guest_thread = guest_object<X_KTHREAD>();
+  uint32_t unused_host_suspend_count = 0;
 
+#if XE_PLATFORM_WIN32
   uint8_t previous_suspend_count =
       reinterpret_cast<std::atomic_uint8_t*>(&guest_thread->suspend_count)
           ->fetch_sub(1);
@@ -719,21 +721,30 @@ X_STATUS XThread::Resume(uint32_t* out_suspend_count) {
     *out_suspend_count = previous_suspend_count;
   }
 
-  uint32_t unused_host_suspend_count = 0;
-#if XE_PLATFORM_WIN32
   if (thread_->Resume(&unused_host_suspend_count)) {
     return X_STATUS_SUCCESS;
   } else {
     return X_STATUS_UNSUCCESSFUL;
   }
 #elif XE_PLATFORM_LINUX
-  // On Linux, only resume if suspend count is 0
-  // Resume might fail if thread was self-suspended - this is expected
-  if (guest_thread->suspend_count == 0) {
-    if (!thread_->Resume(&unused_host_suspend_count)) {
-      XELOGD("Host thread resume skipped for thread {:X} (was self-suspended)",
-             handle());
+  // Use mutex to protect suspend_count access and coordinate with SelfSuspend.
+  bool should_resume_host = false;
+  {
+    std::lock_guard<std::mutex> lock(suspend_mutex_);
+    uint8_t previous = guest_thread->suspend_count;
+    if (previous > 0) {
+      guest_thread->suspend_count--;
     }
+    if (out_suspend_count) {
+      *out_suspend_count = previous;
+    }
+    should_resume_host = (guest_thread->suspend_count == 0);
+    suspend_cv_.notify_all();
+  }
+
+  // Try to resume host thread if fully resumed (for non-self-suspended case).
+  if (should_resume_host) {
+    thread_->Resume(&unused_host_suspend_count);
   }
   return X_STATUS_SUCCESS;
 #else
@@ -768,6 +779,18 @@ X_STATUS XThread::Suspend(uint32_t* out_suspend_count) {
     return X_STATUS_UNSUCCESSFUL;
   }
 }
+
+#if XE_PLATFORM_LINUX
+uint32_t XThread::SelfSuspend() {
+  auto guest_thread = guest_object<X_KTHREAD>();
+  std::unique_lock<std::mutex> lock(suspend_mutex_);
+  uint32_t previous = guest_thread->suspend_count;
+  guest_thread->suspend_count++;
+  suspend_cv_.wait(
+      lock, [guest_thread]() { return guest_thread->suspend_count == 0; });
+  return previous;
+}
+#endif
 
 X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable,
                         uint64_t interval) {

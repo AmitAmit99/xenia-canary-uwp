@@ -9,6 +9,7 @@
 
 #ifndef XENIA_BASE_MUTEX_H_
 #define XENIA_BASE_MUTEX_H_
+#include <atomic>
 #include <mutex>
 #include <thread>
 #include "platform.h"
@@ -19,6 +20,7 @@
 #endif
 #include "memory.h"
 #define XE_ENABLE_FAST_WIN32_MUTEX 1
+#define XE_ENABLE_FAST_LINUX_MUTEX 1
 namespace xe {
 
 #if XE_PLATFORM_WIN32 == 1 && XE_ENABLE_FAST_WIN32_MUTEX == 1
@@ -80,6 +82,78 @@ class xe_unlikely_mutex {
   void unlock() { mut.exchange(0); }
   bool try_lock() { return _tryget(); }
 };
+using xe_mutex = xe_fast_mutex;
+#elif XE_PLATFORM_LINUX == 1 && XE_ENABLE_FAST_LINUX_MUTEX == 1
+
+#define XE_LINUX_MUTEX_SPINCOUNT 128
+
+// Fast recursive mutex for Linux using futex
+// Mimics Windows CRITICAL_SECTION behavior: spin before blocking
+class alignas(4096) xe_global_mutex {
+  std::atomic<uint32_t> state_{0};  // 0 = unlocked, 1 = locked, 2 = contended
+  std::atomic<pid_t> owner_{0};
+  uint32_t recursion_count_{0};
+
+  void lock_slow();
+
+ public:
+  xe_global_mutex() = default;
+  ~xe_global_mutex() = default;
+
+  void lock();
+  void unlock();
+  bool try_lock();
+};
+using global_mutex_type = xe_global_mutex;
+
+// Fast non-recursive mutex for Linux using futex
+class alignas(64) xe_fast_mutex {
+  std::atomic<uint32_t> state_{0};  // 0 = unlocked, 1 = locked, 2 = contended
+
+  void lock_slow();
+
+ public:
+  xe_fast_mutex() = default;
+  ~xe_fast_mutex() = default;
+
+  void lock();
+  void unlock();
+  bool try_lock();
+};
+
+// xe_unlikely_mutex remains a simple spinlock for Linux too
+class xe_unlikely_mutex {
+  std::atomic<uint32_t> mut{0};
+  bool _tryget() {
+    uint32_t lock_expected = 0;
+    return mut.compare_exchange_strong(
+        lock_expected, 1, std::memory_order_acquire, std::memory_order_relaxed);
+  }
+
+ public:
+  xe_unlikely_mutex() = default;
+  ~xe_unlikely_mutex() = default;
+
+  void lock() {
+    if (XE_LIKELY(_tryget())) {
+      return;
+    }
+    // Spin a bit before yielding
+    for (int i = 0; i < XE_LINUX_MUTEX_SPINCOUNT; ++i) {
+#if XE_ARCH_AMD64 == 1
+      _mm_pause();
+#endif
+      if (_tryget()) return;
+    }
+    // Fall back to yielding
+    while (!_tryget()) {
+      std::this_thread::yield();
+    }
+  }
+  void unlock() { mut.store(0, std::memory_order_release); }
+  bool try_lock() { return _tryget(); }
+};
+
 using xe_mutex = xe_fast_mutex;
 #else
 using global_mutex_type = std::recursive_mutex;
@@ -150,11 +224,7 @@ class global_critical_region {
     return global_unique_lock_type(mutex());
   }
 
-  static inline void PrepareToAcquire() {
-#if XE_PLATFORM_WIN32 == 1
-    swcache::PrefetchW(&mutex());
-#endif
-  }
+  static inline void PrepareToAcquire() { swcache::PrefetchW(&mutex()); }
 
   // Acquires a deferred lock on the global critical section.
   static inline global_unique_lock_type AcquireDeferred() {

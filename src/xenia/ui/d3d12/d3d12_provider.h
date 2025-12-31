@@ -158,6 +158,10 @@ class D3D12Provider : public GraphicsProvider {
     return pfn_dxcompiler_dxc_create_instance_(rclsid, riid, ppv);
   }
 
+  // Logs all pending D3D12 debug messages to xenia's log.
+  // Call this after operations that fail to get detailed error info.
+  void LogD3D12DebugMessages() const;
+
  private:
   D3D12Provider() = default;
 

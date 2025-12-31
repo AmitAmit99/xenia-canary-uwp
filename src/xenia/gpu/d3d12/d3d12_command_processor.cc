@@ -2583,6 +2583,15 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     return false;
   }
 
+  if (cvars::async_shader_compilation) {
+    if (pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) == nullptr) {
+      XELOGI("Skipping draw - pipeline not ready");
+      return true;
+    }
+    // Re-fetch root signature now that pipeline is ready.
+    root_signature = pipeline_cache_->GetRootSignatureByHandle(pipeline_handle);
+  }
+
   // Update the textures - this may bind pipelines.
   uint32_t used_texture_mask =
       vertex_shader->GetUsedTextureMaskAfterTranslation() |

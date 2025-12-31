@@ -94,3 +94,12 @@ DEFINE_bool(gpu_3d_to_2d_texture, true,
             "Handle shaders that sample 3D textures as 2D by creating a 2D "
             "texture from slice 0 of the guest memory.",
             "GPU");
+
+DEFINE_bool(
+    async_shader_compilation, true,
+    "Compile shaders and create pipelines asynchronously in background "
+    "threads. "
+    "Eliminates shader compilation stutter but may cause brief rendering "
+    "artifacts while pipelines are being created. When disabled, pipelines are "
+    "created synchronously which causes stutter but no visual artifacts.",
+    "GPU");

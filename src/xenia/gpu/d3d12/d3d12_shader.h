@@ -31,6 +31,16 @@ class D3D12Shader : public DxbcShader {
                                 IDxbcConverter* dxbc_converter = nullptr,
                                 IDxcUtils* dxc_utils = nullptr,
                                 IDxcCompiler* dxc_compiler = nullptr);
+
+    // For background thread translation: atomically claim the right to
+    // translate. Returns true if caller should translate, false if another
+    // thread claimed it.
+    bool TryClaimTranslation() {
+      return !translation_claimed_.test_and_set(std::memory_order_acq_rel);
+    }
+
+   private:
+    std::atomic_flag translation_claimed_ = ATOMIC_FLAG_INIT;
   };
 
   D3D12Shader(xenos::ShaderType shader_type, uint64_t ucode_data_hash,

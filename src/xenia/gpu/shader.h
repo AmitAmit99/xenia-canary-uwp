@@ -11,6 +11,7 @@
 #define XENIA_GPU_SHADER_H_
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <set>
@@ -1006,9 +1007,20 @@ class Shader {
   // An externally managed identifier of the shader storage the microcode of the
   // shader was last written to, or was loaded from, to only write the shader
   // microcode to the storage once. UINT32_MAX by default.
-  uint32_t ucode_storage_index() const { return ucode_storage_index_; }
+  uint32_t ucode_storage_index() const {
+    return ucode_storage_index_.load(std::memory_order_relaxed);
+  }
   void set_ucode_storage_index(uint32_t storage_index) {
-    ucode_storage_index_ = storage_index;
+    ucode_storage_index_.store(storage_index, std::memory_order_relaxed);
+  }
+  // Atomically set storage index if changed. Returns true if updated.
+  bool try_set_ucode_storage_index(uint32_t new_index) {
+    uint32_t expected = ucode_storage_index_.load(std::memory_order_relaxed);
+    if (expected == new_index) {
+      return false;
+    }
+    return ucode_storage_index_.compare_exchange_strong(
+        expected, new_index, std::memory_order_relaxed);
   }
 
   // Dumps the shader's microcode binary and, if analyzed, disassembly, to files
@@ -1073,7 +1085,7 @@ class Shader {
   // Modification bits -> translation.
   std::unordered_map<uint64_t, Translation*> translations_;
 
-  uint32_t ucode_storage_index_ = UINT32_MAX;
+  std::atomic<uint32_t> ucode_storage_index_{UINT32_MAX};
 
  private:
   void GatherExecInformation(

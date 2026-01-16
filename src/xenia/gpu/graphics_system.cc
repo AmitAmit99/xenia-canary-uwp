@@ -379,27 +379,38 @@ void GraphicsSystem::ClearCaches() {
 }
 
 void GraphicsSystem::InitializeShaderStorage(
-    const std::filesystem::path& cache_root, uint32_t title_id, bool blocking) {
+    const std::filesystem::path& cache_root, uint32_t title_id, bool blocking,
+    std::function<void()> completion_callback) {
   if (!cvars::store_shaders) {
+    if (completion_callback) {
+      completion_callback();
+    }
     return;
   }
   if (blocking) {
     if (command_processor_->is_paused()) {
       // Safe to run on any thread while the command processor is paused, no
       // race condition.
-      command_processor_->InitializeShaderStorage(cache_root, title_id, true);
+      command_processor_->InitializeShaderStorage(
+          cache_root, title_id, true, std::move(completion_callback));
     } else {
       xe::threading::Fence fence;
-      command_processor_->CallInThread([this, cache_root, title_id, &fence]() {
-        command_processor_->InitializeShaderStorage(cache_root, title_id, true);
-        fence.Signal();
-      });
+      command_processor_->CallInThread(
+          [this, cache_root, title_id, &fence,
+           completion_callback = std::move(completion_callback)]() mutable {
+            command_processor_->InitializeShaderStorage(
+                cache_root, title_id, true, std::move(completion_callback));
+            fence.Signal();
+          });
       fence.Wait();
     }
   } else {
-    command_processor_->CallInThread([this, cache_root, title_id]() {
-      command_processor_->InitializeShaderStorage(cache_root, title_id, false);
-    });
+    command_processor_->CallInThread(
+        [this, cache_root, title_id,
+         completion_callback = std::move(completion_callback)]() mutable {
+          command_processor_->InitializeShaderStorage(
+              cache_root, title_id, false, std::move(completion_callback));
+        });
   }
 }
 

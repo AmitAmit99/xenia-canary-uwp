@@ -68,8 +68,9 @@ class D3D12CommandProcessor final : public CommandProcessor {
 
   void ClearCaches() override;
 
-  void InitializeShaderStorage(const std::filesystem::path& cache_root,
-                               uint32_t title_id, bool blocking) override;
+  void InitializeShaderStorage(
+      const std::filesystem::path& cache_root, uint32_t title_id, bool blocking,
+      std::function<void()> completion_callback = nullptr) override;
 
   void RequestFrameTrace(const std::filesystem::path& root_path) override;
 

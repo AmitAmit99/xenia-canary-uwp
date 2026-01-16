@@ -13,12 +13,15 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <set>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -30,6 +33,7 @@
 #include "xenia/gpu/primitive_processor.h"
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/registers.h"
+#include "xenia/gpu/shader_storage.h"
 #include "xenia/gpu/spirv_shader_translator.h"
 #include "xenia/gpu/vulkan/vulkan_render_target_cache.h"
 #include "xenia/gpu/vulkan/vulkan_shader.h"
@@ -100,6 +104,12 @@ class VulkanPipelineCache {
 
   bool Initialize();
   void Shutdown();
+
+  // Shader and pipeline storage.
+  void InitializeShaderStorage(
+      const std::filesystem::path& cache_root, uint32_t title_id, bool blocking,
+      std::function<void()> completion_callback = nullptr);
+  void ShutdownShaderStorage();
 
   void EndSubmission();
   bool IsCreatingPipelines();
@@ -259,6 +269,18 @@ class VulkanPipelineCache {
         return size_t(description.GetHash());
       }
     };
+
+    static constexpr uint32_t kVersion = 0x20250118;
+  });
+
+  // Pipeline storage constants.
+  static constexpr uint32_t kPipelineStorageVersionWithoutAPI = 0x20201219;
+  static constexpr uint32_t kPipelineStorageAPIMagicVulkan = 'VLKN';
+
+  // Pipeline storage description.
+  XEPACKEDSTRUCT(PipelineStoredDescription, {
+    uint64_t description_hash;
+    PipelineDescription description;
   });
 
   // creation threads, with everything needed from caches pre-looked-up.
@@ -313,6 +335,11 @@ class VulkanPipelineCache {
   // Can be called from multiple threads.
   bool TranslateAnalyzedShader(SpirvShaderTranslator& translator,
                                VulkanShader::VulkanTranslation& translation);
+
+  // Translates shaders in parallel for storage loading.
+  void TranslateShadersForStorage(
+      const std::set<std::pair<uint64_t, uint64_t>>& translations_needed,
+      bool edram_fsi_used);
 
   void WritePipelineRenderTargetDescription(
       reg::RB_BLENDCONTROL blend_control, uint32_t write_mask,
@@ -452,6 +479,10 @@ class VulkanPipelineCache {
   std::condition_variable creation_request_cond_;
   std::unique_ptr<xe::threading::Event> creation_completion_event_ = nullptr;
   std::atomic<bool> creation_completion_set_event_{false};
+  std::function<void()> creation_completion_callback_;
+  // During startup loading, don't block on pipeline creation to allow game
+  // boot.
+  bool startup_loading_ = false;
 
   // Deferred destruction of replaced shader modules and pipelines.
   // Pipelines are only destroyed after the GPU submission that might reference
@@ -462,6 +493,18 @@ class VulkanPipelineCache {
   // last potentially used in. Only destroyed when that submission completes.
   std::vector<std::pair<VkPipeline, uint64_t>> deferred_destroy_pipelines_;
   std::mutex deferred_destroy_mutex_;
+
+  // Shader and pipeline storage.
+  uint32_t shader_storage_title_id_ = 0;
+  std::atomic<bool> shader_storage_file_flush_needed_{false};
+  std::atomic<bool> pipeline_storage_file_flush_needed_{false};
+
+  // Storage writer for shaders and pipelines (owns file handles and storage
+  // index).
+  ShaderStorageWriter<PipelineStoredDescription> storage_writer_;
+
+  // VkPipelineCache persistence path.
+  std::filesystem::path vk_pipeline_cache_path_;
 };
 
 }  // namespace vulkan

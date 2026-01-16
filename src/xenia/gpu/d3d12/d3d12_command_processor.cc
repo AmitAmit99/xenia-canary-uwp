@@ -66,9 +66,12 @@ void D3D12CommandProcessor::ClearCaches() {
 }
 
 void D3D12CommandProcessor::InitializeShaderStorage(
-    const std::filesystem::path& cache_root, uint32_t title_id, bool blocking) {
-  CommandProcessor::InitializeShaderStorage(cache_root, title_id, blocking);
-  pipeline_cache_->InitializeShaderStorage(cache_root, title_id, blocking);
+    const std::filesystem::path& cache_root, uint32_t title_id, bool blocking,
+    std::function<void()> completion_callback) {
+  CommandProcessor::InitializeShaderStorage(cache_root, title_id, blocking,
+                                            nullptr);
+  pipeline_cache_->InitializeShaderStorage(cache_root, title_id, blocking,
+                                           std::move(completion_callback));
 }
 
 void D3D12CommandProcessor::RequestFrameTrace(
@@ -2585,7 +2588,12 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
 
   if (cvars::async_shader_compilation) {
     if (pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) == nullptr) {
-      XELOGI("Skipping draw - pipeline not ready");
+      XELOGI(
+          "Skipping draw - pipeline not ready: VS {:016X} mod {:016X}, PS "
+          "{:016X} mod {:016X}",
+          vertex_shader->ucode_data_hash(), vertex_shader_modification.value,
+          pixel_shader ? pixel_shader->ucode_data_hash() : 0,
+          pixel_shader_modification.value);
       return true;
     }
     // Re-fetch root signature now that pipeline is ready.

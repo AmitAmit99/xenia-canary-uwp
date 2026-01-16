@@ -1648,14 +1648,17 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
     }
   }
 
-  // Initializing the shader storage in a blocking way so the user doesn't
-  // miss the initial seconds - for instance, sound from an intro video may
-  // start playing before the video can be seen if doing this in parallel with
-  // the main thread.
-  on_shader_storage_initialization(true);
-  graphics_system_->InitializeShaderStorage(cache_root_, title_id_.value(),
-                                            true);
-  on_shader_storage_initialization(false);
+  // Initialize shader storage asynchronously - pipeline compilation happens in
+  // background while the game goes through its normal startup (loading screens,
+  // intro videos, etc.). With async_shader_compilation enabled, draws are
+  // skipped until pipelines are ready, so this is safe. By the time actual
+  // gameplay starts, most cached pipelines should be compiled.
+  if (graphics_system_) {
+    on_shader_storage_initialization(true);
+    graphics_system_->InitializeShaderStorage(
+        cache_root_, title_id_.value(), false,
+        [this]() { on_shader_storage_initialization(false); });
+  }
 
   auto main_thread = kernel_state_->LaunchModule(module);
   if (!main_thread) {

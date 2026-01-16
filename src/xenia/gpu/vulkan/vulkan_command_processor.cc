@@ -108,6 +108,15 @@ void VulkanCommandProcessor::TracePlaybackWroteMemory(uint32_t base_ptr,
   primitive_processor_->MemoryInvalidationCallback(base_ptr, length, true);
 }
 
+void VulkanCommandProcessor::InitializeShaderStorage(
+    const std::filesystem::path& cache_root, uint32_t title_id, bool blocking,
+    std::function<void()> completion_callback) {
+  CommandProcessor::InitializeShaderStorage(cache_root, title_id, blocking,
+                                            nullptr);
+  pipeline_cache_->InitializeShaderStorage(cache_root, title_id, blocking,
+                                           std::move(completion_callback));
+}
+
 void VulkanCommandProcessor::RestoreEdramSnapshot(const void* snapshot) {}
 
 std::string VulkanCommandProcessor::GetWindowTitleText() const {

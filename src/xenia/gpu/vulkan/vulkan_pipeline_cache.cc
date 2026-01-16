@@ -11,9 +11,12 @@
 
 #include <cstdint>
 #include <cstring>
+#include <set>
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/assert.h"
+#include "xenia/base/byte_order.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/profiling.h"
@@ -218,6 +221,9 @@ bool VulkanPipelineCache::Initialize() {
 }
 
 void VulkanPipelineCache::Shutdown() {
+  // Shut down shader storage first.
+  ShutdownShaderStorage();
+
   // Shut down all threads, before destroying the pipelines since they may be
   // creating them.
   if (!creation_threads_.empty()) {
@@ -231,6 +237,13 @@ void VulkanPipelineCache::Shutdown() {
     }
     creation_threads_.clear();
   }
+  // Clear any pending completion callback (may capture 'this') and reset
+  // startup state.
+  {
+    std::lock_guard<std::mutex> lock(creation_request_lock_);
+    creation_completion_callback_ = nullptr;
+  }
+  startup_loading_ = false;
   creation_completion_event_.reset();
 
   const ui::vulkan::VulkanDevice* const vulkan_device =
@@ -579,6 +592,28 @@ bool VulkanPipelineCache::ConfigurePipeline(
   auto& pipeline_pair =
       *pipelines_.emplace(description, Pipeline(pipeline_layout)).first;
 
+  if (storage_writer_.is_active()) {
+    VulkanShader& vs = static_cast<VulkanShader&>(vertex_shader->shader());
+    if (vs.try_set_ucode_storage_index(storage_writer_.storage_index())) {
+      shader_storage_file_flush_needed_ = true;
+      storage_writer_.QueueShaderWrite(&vs);
+    }
+    if (pixel_shader) {
+      VulkanShader& ps = static_cast<VulkanShader&>(pixel_shader->shader());
+      if (ps.try_set_ucode_storage_index(storage_writer_.storage_index())) {
+        shader_storage_file_flush_needed_ = true;
+        storage_writer_.QueueShaderWrite(&ps);
+      }
+    }
+
+    pipeline_storage_file_flush_needed_ = true;
+    PipelineStoredDescription stored_description;
+    stored_description.description_hash = description.GetHash();
+    std::memcpy(&stored_description.description, &description,
+                sizeof(description));
+    storage_writer_.QueuePipelineWrite(stored_description);
+  }
+
   // Get tessellation shaders if needed.
   VkShaderModule tessellation_vertex_shader = VK_NULL_HANDLE;
   VkShaderModule tessellation_control_shader = VK_NULL_HANDLE;
@@ -670,7 +705,8 @@ bool VulkanPipelineCache::ConfigurePipeline(
     creation_arguments.pixel_shader = pixel_shader;
     creation_arguments.geometry_shader = geometry_shader;
     creation_arguments.tessellation_vertex_shader = tessellation_vertex_shader;
-    creation_arguments.tessellation_control_shader = tessellation_control_shader;
+    creation_arguments.tessellation_control_shader =
+        tessellation_control_shader;
     creation_arguments.render_pass = render_pass;
     if (!EnsurePipelineCreated(creation_arguments)) {
       return false;
@@ -683,31 +719,42 @@ bool VulkanPipelineCache::ConfigurePipeline(
 }
 
 void VulkanPipelineCache::EndSubmission() {
+  if (shader_storage_file_flush_needed_ ||
+      pipeline_storage_file_flush_needed_) {
+    storage_writer_.RequestFlush(shader_storage_file_flush_needed_,
+                                 pipeline_storage_file_flush_needed_);
+    shader_storage_file_flush_needed_ = false;
+    pipeline_storage_file_flush_needed_ = false;
+  }
+
   if (creation_threads_.empty()) {
     // Process deferred destructions when GPU is idle
     ProcessDeferredDestructions();
     return;
   }
-  // Await creation of all queued pipelines.
-  bool await_creation_completion_event;
-  {
-    std::lock_guard<std::mutex> lock(creation_request_lock_);
-    // Assuming the creation queue is already empty (because the processor
-    // thread also worked on creating the leftover pipelines), so only check
-    // if there are threads with pipelines currently being created.
-    await_creation_completion_event =
-        !creation_queue_.empty() || creation_threads_busy_ != 0;
+
+  if (startup_loading_) {
+    // Non-blocking: let background threads work asynchronously.
+    creation_request_cond_.notify_one();
+  } else {
+    // Blocking: wait for all queued pipelines.
+    bool await_creation_completion_event;
+    {
+      std::lock_guard<std::mutex> lock(creation_request_lock_);
+      await_creation_completion_event =
+          !creation_queue_.empty() || creation_threads_busy_ != 0;
+      if (await_creation_completion_event) {
+        creation_completion_event_->Reset();
+        creation_completion_set_event_.store(true, std::memory_order_release);
+      }
+    }
     if (await_creation_completion_event) {
-      creation_completion_event_->Reset();
-      creation_completion_set_event_.store(true, std::memory_order_release);
+      creation_request_cond_.notify_one();
+      xe::threading::Wait(creation_completion_event_.get(), false);
     }
   }
-  if (await_creation_completion_event) {
-    creation_request_cond_.notify_one();
-    xe::threading::Wait(creation_completion_event_.get(), false);
-  }
 
-  // Process deferred destructions after waiting for pipelines
+  // Process deferred destructions
   ProcessDeferredDestructions();
 }
 
@@ -753,12 +800,24 @@ void VulkanPipelineCache::CreationThread() {
     }
 
     {
-      std::lock_guard<std::mutex> lock(creation_request_lock_);
+      std::unique_lock<std::mutex> lock(creation_request_lock_);
       --creation_threads_busy_;
-      if (creation_completion_set_event_.load(std::memory_order_acquire) &&
-          creation_threads_busy_ == 0 && creation_queue_.empty()) {
-        creation_completion_set_event_.store(false, std::memory_order_release);
-        creation_completion_event_->Set();
+      if (creation_threads_busy_ == 0 && creation_queue_.empty()) {
+        // All pipelines created.
+        if (creation_completion_set_event_.load(std::memory_order_acquire)) {
+          // Signal the event (blocking mode).
+          creation_completion_set_event_.store(false,
+                                               std::memory_order_release);
+          creation_completion_event_->Set();
+        }
+        if (creation_completion_callback_) {
+          // Invoke completion callback (non-blocking mode).
+          auto callback = std::move(creation_completion_callback_);
+          creation_completion_callback_ = nullptr;
+          lock.unlock();
+          callback();
+          lock.lock();
+        }
       }
     }
   }
@@ -841,6 +900,104 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(
   }
 
   return true;
+}
+
+void VulkanPipelineCache::TranslateShadersForStorage(
+    const std::set<std::pair<uint64_t, uint64_t>>& translations_needed,
+    bool edram_fsi_used) {
+  uint64_t translation_start = xe::Clock::QueryHostTickCount();
+
+  std::vector<std::pair<VulkanShader*, uint64_t>> translations_to_do;
+  translations_to_do.reserve(translations_needed.size());
+  for (const auto& needed : translations_needed) {
+    auto shader_it = shaders_.find(needed.first);
+    if (shader_it == shaders_.end()) {
+      continue;
+    }
+    VulkanShader* shader = shader_it->second;
+    VulkanShader::VulkanTranslation* translation =
+        static_cast<VulkanShader::VulkanTranslation*>(
+            shader->GetOrCreateTranslation(needed.second));
+    if (translation && !translation->is_translated()) {
+      translations_to_do.emplace_back(shader, needed.second);
+    }
+  }
+
+  if (translations_to_do.empty()) {
+    return;
+  }
+
+  std::atomic<size_t> translation_index{0};
+  std::atomic<size_t> translations_completed{0};
+
+  const ui::vulkan::VulkanDevice* vulkan_device =
+      command_processor_.GetVulkanDevice();
+  bool msaa_2x_attachments =
+      render_target_cache_.msaa_2x_attachments_supported();
+  bool msaa_2x_no_attachments =
+      render_target_cache_.msaa_2x_no_attachments_supported();
+  uint32_t draw_res_x = render_target_cache_.draw_resolution_scale_x();
+  uint32_t draw_res_y = render_target_cache_.draw_resolution_scale_y();
+
+  auto translate_function = [this, &translations_to_do, &translation_index,
+                             &translations_completed, vulkan_device,
+                             msaa_2x_attachments, msaa_2x_no_attachments,
+                             edram_fsi_used, draw_res_x, draw_res_y]() {
+    // Each thread needs its own translator.
+    SpirvShaderTranslator translator(
+        SpirvShaderTranslator::Features(vulkan_device), msaa_2x_attachments,
+        msaa_2x_no_attachments, edram_fsi_used, draw_res_x, draw_res_y);
+
+    while (true) {
+      size_t index = translation_index.fetch_add(1);
+      if (index >= translations_to_do.size()) {
+        break;
+      }
+      VulkanShader* shader = translations_to_do[index].first;
+      uint64_t modification = translations_to_do[index].second;
+      VulkanShader::VulkanTranslation* translation =
+          static_cast<VulkanShader::VulkanTranslation*>(
+              shader->GetTranslation(modification));
+      if (translation && !translation->is_translated()) {
+        if (TranslateAnalyzedShader(translator, *translation)) {
+          translations_completed.fetch_add(1);
+        }
+      }
+    }
+  };
+
+  size_t thread_count = 0;
+  if (cvars::vulkan_pipeline_creation_threads != 0) {
+    uint32_t logical_processor_count =
+        std::max(uint32_t(1), xe::threading::logical_processor_count());
+    if (cvars::vulkan_pipeline_creation_threads < 0) {
+      thread_count = std::max(logical_processor_count * 3 / 4, uint32_t(1));
+    } else {
+      thread_count = std::min(uint32_t(cvars::vulkan_pipeline_creation_threads),
+                              logical_processor_count);
+    }
+    thread_count = std::min(thread_count, translations_to_do.size());
+  }
+
+  std::vector<std::unique_ptr<xe::threading::Thread>> translation_threads;
+  for (size_t i = 0; i < thread_count; ++i) {
+    auto thread = xe::threading::Thread::Create({}, translate_function);
+    if (thread) {
+      thread->set_name("Shader Translation");
+      translation_threads.push_back(std::move(thread));
+    }
+  }
+
+  // Main thread also participates.
+  translate_function();
+
+  for (auto& thread : translation_threads) {
+    xe::threading::Wait(thread.get(), false);
+  }
+
+  XELOGI("Translated {} shaders in {} ms", translations_completed.load(),
+         (xe::Clock::QueryHostTickCount() - translation_start) * 1000 /
+             xe::Clock::QueryHostTickFrequency());
 }
 
 void VulkanPipelineCache::WritePipelineRenderTargetDescription(
@@ -2881,6 +3038,407 @@ void VulkanPipelineCache::ProcessDeferredDestructions() {
       dfn.vkDestroyPipeline(device, pipeline, nullptr);
     }
   }
+}
+
+void VulkanPipelineCache::InitializeShaderStorage(
+    const std::filesystem::path& cache_root, uint32_t title_id, bool blocking,
+    std::function<void()> completion_callback) {
+  ShutdownShaderStorage();
+
+  shader_storage_title_id_ = title_id;
+
+  if (!blocking) {
+    startup_loading_ = true;
+    if (completion_callback) {
+      completion_callback = [this, orig = std::move(completion_callback)]() {
+        startup_loading_ = false;
+        orig();
+      };
+    } else {
+      completion_callback = [this]() { startup_loading_ = false; };
+    }
+  }
+
+  bool edram_fsi_used = render_target_cache_.GetPath() ==
+                        RenderTargetCache::Path::kPixelShaderInterlock;
+
+  ShaderStorageWriter<PipelineStoredDescription>::PipelineStorageConfig
+      pipeline_config;
+  pipeline_config.file_suffix =
+      fmt::format(".{}.vk.xpso", edram_fsi_used ? "fsi" : "fbo");
+  pipeline_config.api_magic = kPipelineStorageAPIMagicVulkan;
+  pipeline_config.version =
+      std::max(PipelineDescription::kVersion,
+               SpirvShaderTranslator::Modification::kVersion);
+
+  uint32_t storage_index = storage_writer_.storage_index() + 1;
+
+  std::vector<PipelineStoredDescription> pipeline_stored_descriptions;
+  if (!storage_writer_.InitializeShaderStorage(
+          cache_root, title_id, pipeline_config,
+          // Shader load callback.
+          [&](xenos::ShaderType type, const uint32_t* ucode_dwords,
+              uint32_t ucode_dword_count, uint64_t ucode_data_hash) {
+            VulkanShader* shader =
+                LoadShader(type, ucode_dwords, ucode_dword_count);
+            if (!shader || shader->ucode_storage_index() == storage_index) {
+              return true;  // Continue reading.
+            }
+            shader->set_ucode_storage_index(storage_index);
+            if (!shader->is_ucode_analyzed()) {
+              shader->AnalyzeUcode(ucode_disasm_buffer_);
+            }
+            return true;
+          },
+          // Shader translate callback - handles parallel translation.
+          [this, edram_fsi_used](const std::set<std::pair<uint64_t, uint64_t>>
+                                     & translations_needed) {
+            TranslateShadersForStorage(translations_needed, edram_fsi_used);
+          },
+          pipeline_stored_descriptions)) {
+    if (completion_callback) {
+      completion_callback();
+    }
+    return;
+  }
+  shader_storage_file_flush_needed_ = false;
+  pipeline_storage_file_flush_needed_ = false;
+
+  // Load VkPipelineCache from disk if available.
+  auto shader_storage_local_root = GetShaderStorageLocalRoot(cache_root);
+  if (!std::filesystem::exists(shader_storage_local_root)) {
+    std::error_code ec;
+    std::filesystem::create_directories(shader_storage_local_root, ec);
+  }
+  vk_pipeline_cache_path_ =
+      shader_storage_local_root /
+      fmt::format("{:08X}.vk.bin", shader_storage_title_id_);
+
+  const ui::vulkan::VulkanDevice* const vulkan_device =
+      command_processor_.GetVulkanDevice();
+  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+  const VkDevice device = vulkan_device->device();
+
+  // Try to load existing VkPipelineCache data.
+  std::vector<uint8_t> pipeline_cache_data;
+  if (FILE* cache_file =
+          xe::filesystem::OpenFile(vk_pipeline_cache_path_, "rb")) {
+    xe::filesystem::Seek(cache_file, 0, SEEK_END);
+    int64_t cache_size = xe::filesystem::Tell(cache_file);
+    if (cache_size > 0) {
+      pipeline_cache_data.resize(size_t(cache_size));
+      xe::filesystem::Seek(cache_file, 0, SEEK_SET);
+      pipeline_cache_data.resize(fread(pipeline_cache_data.data(), 1,
+                                       pipeline_cache_data.size(), cache_file));
+    }
+    fclose(cache_file);
+    XELOGI("Loaded {} bytes of VkPipelineCache data",
+           pipeline_cache_data.size());
+  }
+
+  // Recreate the VkPipelineCache with the loaded data.
+  if (vk_pipeline_cache_ != VK_NULL_HANDLE) {
+    dfn.vkDestroyPipelineCache(device, vk_pipeline_cache_, nullptr);
+    vk_pipeline_cache_ = VK_NULL_HANDLE;
+  }
+  VkPipelineCacheCreateInfo pipeline_cache_create_info = {};
+  pipeline_cache_create_info.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+  pipeline_cache_create_info.initialDataSize = pipeline_cache_data.size();
+  pipeline_cache_create_info.pInitialData =
+      pipeline_cache_data.empty() ? nullptr : pipeline_cache_data.data();
+  if (dfn.vkCreatePipelineCache(device, &pipeline_cache_create_info, nullptr,
+                                &vk_pipeline_cache_) != VK_SUCCESS) {
+    XELOGW(
+        "VulkanPipelineCache: Failed to create pipeline cache with "
+        "initial data, creating empty cache");
+    vk_pipeline_cache_ = VK_NULL_HANDLE;
+    pipeline_cache_create_info.initialDataSize = 0;
+    pipeline_cache_create_info.pInitialData = nullptr;
+    dfn.vkCreatePipelineCache(device, &pipeline_cache_create_info, nullptr,
+                              &vk_pipeline_cache_);
+  }
+
+  // Create pipelines from stored descriptions.
+  if (!pipeline_stored_descriptions.empty()) {
+    uint64_t pipeline_creation_start = xe::Clock::QueryHostTickCount();
+
+    size_t pipelines_created = 0;
+    size_t pipelines_already_exist = 0;
+    size_t pipelines_vs_not_found = 0;
+    size_t pipelines_vs_translation_missing = 0;
+    size_t pipelines_ps_not_found = 0;
+    size_t pipelines_ps_translation_missing = 0;
+    size_t pipelines_render_pass_failed = 0;
+    size_t pipelines_layout_failed = 0;
+    size_t pipelines_requirements_not_met = 0;
+
+    for (const PipelineStoredDescription& pipeline_stored_description :
+         pipeline_stored_descriptions) {
+      const PipelineDescription& pipeline_description =
+          pipeline_stored_description.description;
+
+      // Skip pipelines not supported by this device.
+      if (!ArePipelineRequirementsMet(pipeline_description)) {
+        ++pipelines_requirements_not_met;
+        continue;
+      }
+
+      // Skip already known pipelines.
+      auto it = pipelines_.find(pipeline_description);
+      if (it != pipelines_.end()) {
+        ++pipelines_already_exist;
+        continue;
+      }
+
+      // Look up vertex shader.
+      auto vertex_shader_it =
+          shaders_.find(pipeline_description.vertex_shader_hash);
+      if (vertex_shader_it == shaders_.end()) {
+        ++pipelines_vs_not_found;
+        continue;
+      }
+      VulkanShader* vertex_shader = vertex_shader_it->second;
+      VulkanShader::VulkanTranslation* vertex_translation =
+          static_cast<VulkanShader::VulkanTranslation*>(
+              vertex_shader->GetTranslation(
+                  pipeline_description.vertex_shader_modification));
+      if (!vertex_translation || !vertex_translation->is_translated() ||
+          !vertex_translation->is_valid()) {
+        ++pipelines_vs_translation_missing;
+        continue;
+      }
+
+      // Look up pixel shader if present.
+      VulkanShader* pixel_shader = nullptr;
+      VulkanShader::VulkanTranslation* pixel_translation = nullptr;
+      if (pipeline_description.pixel_shader_hash) {
+        auto pixel_shader_it =
+            shaders_.find(pipeline_description.pixel_shader_hash);
+        if (pixel_shader_it == shaders_.end()) {
+          ++pipelines_ps_not_found;
+          continue;
+        }
+        pixel_shader = pixel_shader_it->second;
+        pixel_translation = static_cast<VulkanShader::VulkanTranslation*>(
+            pixel_shader->GetTranslation(
+                pipeline_description.pixel_shader_modification));
+        if (!pixel_translation || !pixel_translation->is_translated() ||
+            !pixel_translation->is_valid()) {
+          ++pipelines_ps_translation_missing;
+          continue;
+        }
+      }
+
+      // Get render pass.
+      VkRenderPass render_pass =
+          render_target_cache_.GetPath() ==
+                  RenderTargetCache::Path::kPixelShaderInterlock
+              ? render_target_cache_.GetFragmentShaderInterlockRenderPass()
+              : render_target_cache_.GetHostRenderTargetsRenderPass(
+                    pipeline_description.render_pass_key);
+      if (render_pass == VK_NULL_HANDLE) {
+        ++pipelines_render_pass_failed;
+        continue;
+      }
+
+      // Get pipeline layout.
+      const PipelineLayoutProvider* pipeline_layout =
+          command_processor_.GetPipelineLayout(
+              pixel_shader
+                  ? pixel_shader->GetTextureBindingsAfterTranslation().size()
+                  : 0,
+              pixel_shader
+                  ? pixel_shader->GetSamplerBindingsAfterTranslation().size()
+                  : 0,
+              vertex_shader->GetTextureBindingsAfterTranslation().size(),
+              vertex_shader->GetSamplerBindingsAfterTranslation().size());
+      if (!pipeline_layout) {
+        ++pipelines_layout_failed;
+        continue;
+      }
+
+      // Get geometry shader if needed.
+      VkShaderModule geometry_shader = VK_NULL_HANDLE;
+      if (pipeline_description.geometry_shader !=
+          PipelineGeometryShader::kNone) {
+        GeometryShaderKey geometry_shader_key;
+        GetGeometryShaderKey(
+            pipeline_description.geometry_shader,
+            SpirvShaderTranslator::Modification(
+                vertex_translation->modification()),
+            SpirvShaderTranslator::Modification(
+                pixel_translation ? pixel_translation->modification() : 0),
+            geometry_shader_key);
+        geometry_shader = GetGeometryShader(geometry_shader_key);
+        if (geometry_shader == VK_NULL_HANDLE) {
+          continue;
+        }
+      }
+
+      // Get tessellation shaders if needed.
+      VkShaderModule tessellation_vertex_shader = VK_NULL_HANDLE;
+      VkShaderModule tessellation_control_shader = VK_NULL_HANDLE;
+      if (pipeline_description.tessellation_mode !=
+          PipelineTessellationMode::kNone) {
+        tessellation_vertex_shader =
+            GetTessellationVertexShader(pipeline_description.tessellation_mode);
+        bool use_control_point_count =
+            (pipeline_description.tessellation_mode ==
+             PipelineTessellationMode::kAdaptive);
+        tessellation_control_shader = GetTessellationControlShader(
+            pipeline_description.tessellation_mode,
+            pipeline_description.tessellation_patch, use_control_point_count);
+        if (tessellation_vertex_shader == VK_NULL_HANDLE ||
+            tessellation_control_shader == VK_NULL_HANDLE) {
+          continue;
+        }
+      }
+
+      // Create the pipeline entry.
+      auto& pipeline_pair =
+          *pipelines_.emplace(pipeline_description, Pipeline(pipeline_layout))
+               .first;
+
+      // Queue for creation.
+      if (!creation_threads_.empty()) {
+        // Calculate priority based on whether shader writes to visible RTs.
+        uint8_t priority = 0;
+        if (pixel_shader) {
+          uint32_t bound_rts =
+              (pipeline_description.render_targets[0].color_write_mask ? 1
+                                                                       : 0) |
+              (pipeline_description.render_targets[1].color_write_mask ? 2
+                                                                       : 0) |
+              (pipeline_description.render_targets[2].color_write_mask ? 4
+                                                                       : 0) |
+              (pipeline_description.render_targets[3].color_write_mask ? 8 : 0);
+          priority = pipeline_util::CalculatePipelinePriority(
+              bound_rts, pixel_shader->writes_color_targets(),
+              pixel_shader->writes_depth());
+        }
+
+        std::lock_guard<std::mutex> lock(creation_request_lock_);
+        PipelineCreationArguments creation_arguments;
+        creation_arguments.pipeline = &pipeline_pair;
+        creation_arguments.vertex_shader = vertex_translation;
+        creation_arguments.pixel_shader = pixel_translation;
+        creation_arguments.geometry_shader = geometry_shader;
+        creation_arguments.tessellation_vertex_shader =
+            tessellation_vertex_shader;
+        creation_arguments.tessellation_control_shader =
+            tessellation_control_shader;
+        creation_arguments.render_pass = render_pass;
+        creation_arguments.priority = priority;
+        creation_queue_.push(creation_arguments);
+        creation_request_cond_.notify_one();
+      } else {
+        // No creation threads - create synchronously.
+        PipelineCreationArguments creation_arguments;
+        creation_arguments.pipeline = &pipeline_pair;
+        creation_arguments.vertex_shader = vertex_translation;
+        creation_arguments.pixel_shader = pixel_translation;
+        creation_arguments.geometry_shader = geometry_shader;
+        creation_arguments.tessellation_vertex_shader =
+            tessellation_vertex_shader;
+        creation_arguments.tessellation_control_shader =
+            tessellation_control_shader;
+        creation_arguments.render_pass = render_pass;
+        EnsurePipelineCreated(creation_arguments);
+      }
+
+      ++pipelines_created;
+    }
+
+    if (!creation_threads_.empty()) {
+      if (blocking) {
+        // Blocking mode: wait for all pipelines to be created.
+        bool await_creation_completion_event;
+        {
+          std::lock_guard<std::mutex> lock(creation_request_lock_);
+          await_creation_completion_event =
+              !creation_queue_.empty() || creation_threads_busy_ != 0;
+          if (await_creation_completion_event) {
+            creation_completion_event_->Reset();
+            creation_completion_set_event_.store(true,
+                                                 std::memory_order_release);
+          }
+        }
+        if (await_creation_completion_event) {
+          creation_request_cond_.notify_one();
+          xe::threading::Wait(creation_completion_event_.get(), false);
+        }
+      } else {
+        // Non-blocking mode: store callback for later invocation.
+        std::lock_guard<std::mutex> lock(creation_request_lock_);
+        if (creation_queue_.empty() && creation_threads_busy_ == 0) {
+          // No work pending - callback will be invoked at end of function.
+        } else {
+          creation_completion_callback_ = std::move(completion_callback);
+          completion_callback = nullptr;  // Prevent invocation at end
+        }
+      }
+    }
+
+    XELOGI("Pipeline cache: {} created, {} already exist, {} total in {} ms",
+           pipelines_created, pipelines_already_exist,
+           pipeline_stored_descriptions.size(),
+           (xe::Clock::QueryHostTickCount() - pipeline_creation_start) * 1000 /
+               xe::Clock::QueryHostTickFrequency());
+
+    if (pipelines_vs_not_found || pipelines_vs_translation_missing ||
+        pipelines_ps_not_found || pipelines_ps_translation_missing ||
+        pipelines_render_pass_failed || pipelines_layout_failed ||
+        pipelines_requirements_not_met) {
+      XELOGI(
+          "Pipeline cache skipped: {} VS not found, {} VS translation missing, "
+          "{} PS not found, {} PS translation missing, {} render pass failed, "
+          "{} layout failed, {} requirements not met",
+          pipelines_vs_not_found, pipelines_vs_translation_missing,
+          pipelines_ps_not_found, pipelines_ps_translation_missing,
+          pipelines_render_pass_failed, pipelines_layout_failed,
+          pipelines_requirements_not_met);
+    }
+  }
+
+  // Invoke completion callback if no async work was queued.
+  if (completion_callback) {
+    completion_callback();
+  }
+}
+
+void VulkanPipelineCache::ShutdownShaderStorage() {
+  // Save VkPipelineCache to disk before shutting down storage.
+  if (vk_pipeline_cache_ != VK_NULL_HANDLE &&
+      !vk_pipeline_cache_path_.empty()) {
+    const ui::vulkan::VulkanDevice* const vulkan_device =
+        command_processor_.GetVulkanDevice();
+    const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+    const VkDevice device = vulkan_device->device();
+
+    size_t cache_size = 0;
+    if (dfn.vkGetPipelineCacheData(device, vk_pipeline_cache_, &cache_size,
+                                   nullptr) == VK_SUCCESS &&
+        cache_size > 0) {
+      std::vector<uint8_t> cache_data(cache_size);
+      if (dfn.vkGetPipelineCacheData(device, vk_pipeline_cache_, &cache_size,
+                                     cache_data.data()) == VK_SUCCESS) {
+        if (FILE* cache_file =
+                xe::filesystem::OpenFile(vk_pipeline_cache_path_, "wb")) {
+          fwrite(cache_data.data(), 1, cache_size, cache_file);
+          fclose(cache_file);
+          XELOGI("Saved {} bytes of VkPipelineCache data", cache_size);
+        }
+      }
+    }
+  }
+  vk_pipeline_cache_path_.clear();
+
+  // Shut down the storage writer (closes files, stops write thread).
+  storage_writer_.ShutdownShaderStorage();
+  shader_storage_file_flush_needed_ = false;
+  pipeline_storage_file_flush_needed_ = false;
+  shader_storage_title_id_ = 0;
 }
 
 }  // namespace vulkan

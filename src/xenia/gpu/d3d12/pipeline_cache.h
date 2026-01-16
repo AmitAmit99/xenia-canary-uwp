@@ -18,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -36,6 +37,7 @@
 #include "xenia/gpu/primitive_processor.h"
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/registers.h"
+#include "xenia/gpu/shader_storage.h"
 #include "xenia/gpu/xenos.h"
 #include "xenia/ui/d3d12/d3d12_api.h"
 
@@ -62,8 +64,9 @@ class PipelineCache {
   // takes a long time, and if it's not, there will be heavy stuttering for the
   // rest of the execution of the guest).
 
-  void InitializeShaderStorage(const std::filesystem::path& cache_root,
-                               uint32_t title_id, bool blocking);
+  void InitializeShaderStorage(
+      const std::filesystem::path& cache_root, uint32_t title_id, bool blocking,
+      std::function<void()> completion_callback = nullptr);
   void ShutdownShaderStorage();
 
   void EndSubmission();
@@ -113,15 +116,6 @@ class PipelineCache {
   }
 
  private:
-  XEPACKEDSTRUCT(ShaderStoredHeader, {
-    uint64_t ucode_data_hash;
-
-    uint32_t ucode_dword_count : 31;
-    xenos::ShaderType type : 1;
-
-    static constexpr uint32_t kVersion = 0x20201219;
-  });
-
   // Update PipelineDescription::kVersion if any of the Pipeline* enums are
   // changed!
 
@@ -289,6 +283,11 @@ class PipelineCache {
                                IDxcUtils* dxc_utils = nullptr,
                                IDxcCompiler* dxc_compiler = nullptr);
 
+  // Translates shaders in parallel for storage loading.
+  void TranslateShadersForStorage(
+      const std::set<std::pair<uint64_t, uint64_t>>& translations_needed,
+      bool edram_rov_used);
+
   // If draw_util::IsRasterizationPotentiallyDone is false, the pixel shader
   // MUST be made nullptr BEFORE calling this! The shaders must be translated
   // and valid, unless for_placeholder is true.
@@ -415,33 +414,14 @@ class PipelineCache {
   // changed.
   Pipeline* current_pipeline_ = nullptr;
 
-  // Currently open shader storage path.
-  std::filesystem::path shader_storage_cache_root_;
+  // Currently open shader storage state.
   uint32_t shader_storage_title_id_ = 0;
+  std::atomic<bool> shader_storage_file_flush_needed_{false};
+  std::atomic<bool> pipeline_storage_file_flush_needed_{false};
 
-  // Shader storage output stream, for preload in the next emulator runs.
-  FILE* shader_storage_file_ = nullptr;
-  // For only writing shaders to the currently open storage once, incremented
-  // when switching the storage.
-  uint32_t shader_storage_index_ = 0;
-  bool shader_storage_file_flush_needed_ = false;
-
-  // Pipeline storage output stream, for preload in the next emulator runs.
-  FILE* pipeline_storage_file_ = nullptr;
-  bool pipeline_storage_file_flush_needed_ = false;
-
-  // Thread for asynchronous writing to the storage streams.
-  void StorageWriteThread();
-  std::mutex storage_write_request_lock_;
-  std::condition_variable storage_write_request_cond_;
-  // Storage thread input is protected with storage_write_request_lock_, and the
-  // thread is notified about its change via storage_write_request_cond_.
-  std::deque<const Shader*> storage_write_shader_queue_;
-  std::deque<PipelineStoredDescription> storage_write_pipeline_queue_;
-  bool storage_write_flush_shaders_ = false;
-  bool storage_write_flush_pipelines_ = false;
-  bool storage_write_thread_shutdown_ = false;
-  std::unique_ptr<xe::threading::Thread> storage_write_thread_;
+  // Storage writer for shaders and pipelines (owns file handles and storage
+  // index).
+  ShaderStorageWriter<PipelineStoredDescription> storage_writer_;
 
   // Pipeline creation threads.
   void CreationThread(size_t thread_index);
@@ -466,6 +446,9 @@ class PipelineCache {
   // Whether setting the event on completion is queued. Protected with
   // creation_request_lock_, notify_one creation_request_cond_ when set.
   bool creation_completion_set_event_ = false;
+  // Callback to invoke when all queued pipelines are created (for non-blocking
+  // initialization). Protected with creation_request_lock_.
+  std::function<void()> creation_completion_callback_;
   // Creation threads with this index or above need to be shut down as soon as
   // possible. Protected with creation_request_lock_, notify_all
   // creation_request_cond_ when set.

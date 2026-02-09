@@ -203,7 +203,16 @@ class XmaContext {
   virtual bool Work() { return false; };
 
   virtual void Enable() {};
-  virtual bool Block(bool poll) { return 0; };
+  virtual bool Block(bool poll) {
+    std::unique_lock<xe_mutex> lock(lock_, std::try_to_lock);
+    if (!lock.owns_lock()) {
+      if (poll) {
+        return false;
+      }
+      lock.lock();
+    }
+    return true;
+  }
   virtual void Clear() {};
   virtual void Disable() {};
   virtual void Release() {};

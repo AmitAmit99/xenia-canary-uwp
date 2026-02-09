@@ -123,17 +123,6 @@ void XmaContextOld::Enable() {
   set_is_enabled(true);
 }
 
-bool XmaContextOld::Block(bool poll) {
-  if (!lock_.try_lock()) {
-    if (poll) {
-      return false;
-    }
-    lock_.lock();
-  }
-  lock_.unlock();
-  return true;
-}
-
 void XmaContextOld::Clear() {
   std::lock_guard<xe_mutex> lock(lock_);
   XELOGAPU("XmaContext: reset context {}", id());

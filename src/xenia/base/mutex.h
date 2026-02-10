@@ -10,27 +10,27 @@
 #ifndef XENIA_BASE_MUTEX_H_
 #define XENIA_BASE_MUTEX_H_
 #include <mutex>
-#include "memory.h"
+#include <thread>
 #include "platform.h"
+#if XE_PLATFORM_WIN32
+#include "platform_win.h"
+#elif XE_PLATFORM_LINUX
+#include <sys/types.h>
+#endif
+#include "memory.h"
 #define XE_ENABLE_FAST_WIN32_MUTEX 1
 namespace xe {
 
 #if XE_PLATFORM_WIN32 == 1 && XE_ENABLE_FAST_WIN32_MUTEX == 1
-/*
-   must conform to
-   BasicLockable:https://en.cppreference.com/w/cpp/named_req/BasicLockable as
-   well as Lockable: https://en.cppreference.com/w/cpp/named_req/Lockable
-
-   this emulates a recursive mutex, except with far less overhead
-*/
-
+// Recursive mutex using SRWLOCK.
 class alignas(4096) xe_global_mutex {
-  XE_MAYBE_UNUSED
-  char detail[64];
+  SRWLOCK srwlock_ = SRWLOCK_INIT;
+  DWORD owner_thread_ = 0;
+  uint32_t recursion_count_ = 0;
 
  public:
-  xe_global_mutex();
-  ~xe_global_mutex();
+  xe_global_mutex() = default;
+  ~xe_global_mutex() = default;
 
   void lock();
   void unlock();
@@ -38,13 +38,14 @@ class alignas(4096) xe_global_mutex {
 };
 using global_mutex_type = xe_global_mutex;
 
+// Non-recursive mutex using SRWLOCK.
 class alignas(64) xe_fast_mutex {
-  XE_MAYBE_UNUSED
-  char detail[64];
+  SRWLOCK srwlock_ = SRWLOCK_INIT;
+  DWORD owner_thread_ = 0;
 
  public:
-  xe_fast_mutex();
-  ~xe_fast_mutex();
+  xe_fast_mutex() = default;
+  ~xe_fast_mutex() = default;
 
   void lock();
   void unlock();

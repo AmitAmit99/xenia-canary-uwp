@@ -14,55 +14,61 @@
 
 namespace xe {
 #if XE_PLATFORM_WIN32 == 1 && XE_ENABLE_FAST_WIN32_MUTEX == 1
-// default spincount for entercriticalsection is insane on windows, 0x20007D0i64
-// (33556432 times!!) when a lock is highly contended performance degrades
-// sharply on some processors todo: perhaps we should have a set of optional
-// jobs that processors can do instead of spinning, for instance, sorting a list
-// so we have better locality later or something
-#define XE_CRIT_SPINCOUNT 128
-/*
-chrispy: todo, if a thread exits before releasing the global mutex we need to
-check this and release the mutex one way to do this is by using FlsAlloc and
-PFLS_CALLBACK_FUNCTION, which gets called with the fiber local data when a
-thread exits
-*/
 
-static CRITICAL_SECTION* global_critical_section(xe_global_mutex* mutex) {
-  return reinterpret_cast<CRITICAL_SECTION*>(mutex);
-}
-
-xe_global_mutex::xe_global_mutex() {
-  InitializeCriticalSectionEx(global_critical_section(this), XE_CRIT_SPINCOUNT,
-                              CRITICAL_SECTION_NO_DEBUG_INFO);
-}
-xe_global_mutex ::~xe_global_mutex() {
-  DeleteCriticalSection(global_critical_section(this));
-}
-
+// xe_global_mutex: recursive mutex via SRWLOCK
 void xe_global_mutex::lock() {
-  EnterCriticalSection(global_critical_section(this));
+  DWORD self = GetCurrentThreadId();
+  if (owner_thread_ == self) {
+    ++recursion_count_;
+    return;
+  }
+  AcquireSRWLockExclusive(&srwlock_);
+  owner_thread_ = self;
+  recursion_count_ = 1;
 }
+
 void xe_global_mutex::unlock() {
-  LeaveCriticalSection(global_critical_section(this));
+  if (--recursion_count_ == 0) {
+    owner_thread_ = 0;
+    ReleaseSRWLockExclusive(&srwlock_);
+  }
 }
+
 bool xe_global_mutex::try_lock() {
-  BOOL success = TryEnterCriticalSection(global_critical_section(this));
-  return success;
+  DWORD self = GetCurrentThreadId();
+  if (owner_thread_ == self) {
+    ++recursion_count_;
+    return true;
+  }
+  if (TryAcquireSRWLockExclusive(&srwlock_)) {
+    owner_thread_ = self;
+    recursion_count_ = 1;
+    return true;
+  }
+  return false;
 }
 
-CRITICAL_SECTION* fast_crit(xe_fast_mutex* mutex) {
-  return reinterpret_cast<CRITICAL_SECTION*>(mutex);
+// xe_fast_mutex: non-recursive mutex via SRWLOCK
+void xe_fast_mutex::lock() {
+  DWORD self = GetCurrentThreadId();
+  if (owner_thread_ == self) {
+    assert_always("xe_fast_mutex: recursive lock detected");
+  }
+  AcquireSRWLockExclusive(&srwlock_);
+  owner_thread_ = self;
 }
-xe_fast_mutex::xe_fast_mutex() {
-  InitializeCriticalSectionEx(fast_crit(this), XE_CRIT_SPINCOUNT,
-                              CRITICAL_SECTION_NO_DEBUG_INFO);
-}
-xe_fast_mutex::~xe_fast_mutex() { DeleteCriticalSection(fast_crit(this)); }
 
-void xe_fast_mutex::lock() { EnterCriticalSection(fast_crit(this)); }
-void xe_fast_mutex::unlock() { LeaveCriticalSection(fast_crit(this)); }
+void xe_fast_mutex::unlock() {
+  owner_thread_ = 0;
+  ReleaseSRWLockExclusive(&srwlock_);
+}
+
 bool xe_fast_mutex::try_lock() {
-  return TryEnterCriticalSection(fast_crit(this));
+  if (TryAcquireSRWLockExclusive(&srwlock_)) {
+    owner_thread_ = GetCurrentThreadId();
+    return true;
+  }
+  return false;
 }
 #endif
 global_mutex_type& global_critical_region::mutex() {

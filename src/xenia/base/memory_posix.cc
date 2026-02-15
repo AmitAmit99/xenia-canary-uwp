@@ -171,7 +171,7 @@ bool DeallocFixed(void* base_address, size_t length,
         case DeallocationType::kDecommit:
           return Protect(base_address, length, PageAccess::kNoAccess);
         case DeallocationType::kRelease:
-          assert_always("Error: Tried to release mapped memory!");
+          return false;
         default:
           assert_unhandled_case(deallocation_type);
       }

@@ -56,9 +56,10 @@ static void* AllocateContext() {
 }
 
 static void FreeContext(void* ctx) {
-  char* true_start_of_ctx = &reinterpret_cast<char*>(
-      ctx)[-static_cast<ptrdiff_t>(xe::memory::allocation_granularity())];
-  memory::DeallocFixed(true_start_of_ctx, 0,
+  size_t granularity = xe::memory::allocation_granularity();
+  char* true_start_of_ctx =
+      &reinterpret_cast<char*>(ctx)[-static_cast<ptrdiff_t>(granularity)];
+  memory::DeallocFixed(true_start_of_ctx, granularity + sizeof(ppc::PPCContext),
                        memory::DeallocationType::kRelease);
 }
 

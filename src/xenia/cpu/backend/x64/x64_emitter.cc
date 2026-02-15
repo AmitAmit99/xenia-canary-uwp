@@ -1291,7 +1291,8 @@ uintptr_t X64Emitter::PlaceConstData() {
 }
 
 void X64Emitter::FreeConstData(uintptr_t data) {
-  memory::DeallocFixed(reinterpret_cast<void*>(data), 0,
+  memory::DeallocFixed(reinterpret_cast<void*>(data),
+                       xe::round_up(kConstDataSize, memory::page_size()),
                        memory::DeallocationType::kRelease);
 }
 

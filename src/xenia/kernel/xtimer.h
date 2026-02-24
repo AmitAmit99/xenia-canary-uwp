@@ -10,6 +10,8 @@
 #ifndef XENIA_KERNEL_XTIMER_H_
 #define XENIA_KERNEL_XTIMER_H_
 
+#include <mutex>
+
 #include "xenia/base/threading.h"
 #include "xenia/kernel/xobject.h"
 #include "xenia/xbox.h"
@@ -37,6 +39,7 @@ class XTimer : public XObject {
 
  private:
   std::unique_ptr<xe::threading::Timer> timer_;
+  std::mutex timer_lock_;
 
   XThread* callback_thread_ = nullptr;
   uint32_t callback_routine_ = 0;

@@ -10,6 +10,7 @@
 #ifndef XENIA_KERNEL_XFILE_H_
 #define XENIA_KERNEL_XFILE_H_
 
+#include <mutex>
 #include <string>
 
 #include "xenia/kernel/xiocompletion.h"
@@ -185,9 +186,14 @@ class XFile : public XObject {
  private:
   XFile();
 
+  X_STATUS ReadInternal(uint32_t buffer_guest_address, uint32_t buffer_length,
+                        uint64_t byte_offset, uint32_t* out_bytes_read,
+                        uint32_t apc_context, bool notify_completion);
+
   vfs::File* file_ = nullptr;
   std::unique_ptr<threading::Event> async_event_ = nullptr;
 
+  std::mutex file_lock_;
   std::mutex completion_port_lock_;
   std::vector<std::pair<uint32_t, object_ref<XIOCompletion>>> completion_ports_;
 

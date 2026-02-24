@@ -10,6 +10,8 @@
 #ifndef XENIA_KERNEL_XMUTANT_H_
 #define XENIA_KERNEL_XMUTANT_H_
 
+#include <atomic>
+
 #include "xenia/base/threading.h"
 #include "xenia/kernel/xobject.h"
 #include "xenia/xbox.h"
@@ -42,7 +44,7 @@ class XMutant : public XObject {
   XMutant();
 
   std::unique_ptr<xe::threading::Mutant> mutant_;
-  XThread* owning_thread_ = nullptr;
+  std::atomic<XThread*> owning_thread_{nullptr};
 };
 
 }  // namespace kernel

@@ -38,6 +38,7 @@ XFile::~XFile() {
 X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info,
                                size_t length, const std::string_view file_name,
                                bool restart) {
+  std::lock_guard<std::mutex> lock(file_lock_);
   assert_not_null(out_info);
 
   vfs::Entry* entry = nullptr;
@@ -91,6 +92,15 @@ X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info,
 X_STATUS XFile::Read(uint32_t buffer_guest_address, uint32_t buffer_length,
                      uint64_t byte_offset, uint32_t* out_bytes_read,
                      uint32_t apc_context, bool notify_completion) {
+  std::lock_guard<std::mutex> lock(file_lock_);
+  return ReadInternal(buffer_guest_address, buffer_length, byte_offset,
+                      out_bytes_read, apc_context, notify_completion);
+}
+
+X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address,
+                             uint32_t buffer_length, uint64_t byte_offset,
+                             uint32_t* out_bytes_read, uint32_t apc_context,
+                             bool notify_completion) {
   if (byte_offset == uint64_t(-1)) {
     // Read from current position.
     byte_offset = position_;
@@ -184,6 +194,7 @@ X_STATUS XFile::Read(uint32_t buffer_guest_address, uint32_t buffer_length,
 X_STATUS XFile::ReadScatter(uint32_t segments_guest_address, uint32_t length,
                             uint64_t byte_offset, uint32_t* out_bytes_read,
                             uint32_t apc_context) {
+  std::lock_guard<std::mutex> lock(file_lock_);
   X_STATUS result = X_STATUS_SUCCESS;
 
   // segments points to an array of buffer pointers of type
@@ -206,12 +217,13 @@ X_STATUS XFile::ReadScatter(uint32_t segments_guest_address, uint32_t length,
     }
 
     uint32_t bytes_read = 0;
-    result = Read(read_buffer, read_length,
-                  byte_offset ? ((byte_offset != -1 && byte_offset != -2)
-                                     ? byte_offset + read_total
-                                     : byte_offset)
-                              : -1,
-                  &bytes_read, apc_context, false);
+    result =
+        ReadInternal(read_buffer, read_length,
+                     byte_offset ? ((byte_offset != -1 && byte_offset != -2)
+                                        ? byte_offset + read_total
+                                        : byte_offset)
+                                 : -1,
+                     &bytes_read, apc_context, false);
 
     if (result != X_STATUS_SUCCESS) {
       break;
@@ -240,6 +252,7 @@ X_STATUS XFile::ReadScatter(uint32_t segments_guest_address, uint32_t length,
 X_STATUS XFile::Write(uint32_t buffer_guest_address, uint32_t buffer_length,
                       uint64_t byte_offset, uint32_t* out_bytes_written,
                       uint32_t apc_context) {
+  std::lock_guard<std::mutex> lock(file_lock_);
   if (byte_offset == uint64_t(-1)) {
     // Write from current position.
     byte_offset = position_;
@@ -269,7 +282,10 @@ X_STATUS XFile::Write(uint32_t buffer_guest_address, uint32_t buffer_length,
   return result;
 }
 
-X_STATUS XFile::SetLength(size_t length) { return file_->SetLength(length); }
+X_STATUS XFile::SetLength(size_t length) {
+  std::lock_guard<std::mutex> lock(file_lock_);
+  return file_->SetLength(length);
+}
 X_STATUS XFile::Rename(const std::filesystem::path file_path) {
   entry()->Rename(file_path);
   return X_STATUS_SUCCESS;

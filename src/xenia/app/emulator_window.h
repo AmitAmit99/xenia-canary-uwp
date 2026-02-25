@@ -229,6 +229,7 @@ class EmulatorWindow {
     float volume_ = 0.0f;
   };
 
+
   explicit EmulatorWindow(Emulator* emulator,
                           ui::WindowedAppContext& app_context, uint32_t width,
                           uint32_t height);
@@ -311,6 +312,7 @@ class EmulatorWindow {
   bool initializing_shader_storage_ = false;
 
   std::unique_ptr<DisplayConfigDialog> display_config_dialog_;
+  std::unique_ptr<EmulatorWindow::WinRTFrontendDialog> gamelist_;
 
   // Storing pointers and toggling dialog state is useful for broadcasting
   // messages back to guest.

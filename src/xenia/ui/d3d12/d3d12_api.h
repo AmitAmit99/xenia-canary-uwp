@@ -11,7 +11,8 @@
 #define XENIA_UI_D3D12_D3D12_API_H_
 
 // Must be included before D3D and DXGI for things like NOMINMAX.
-#include "xenia/base/platform_win.h"
+//#include "xenia/base/platform_win.h"
+#define NOMINMAX
 
 // Include the up to date versions of the headers of DXGI and Direct3D 12 rather
 // than the ones from the Windows SDK before other headers that may also

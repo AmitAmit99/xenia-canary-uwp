@@ -66,13 +66,13 @@ bool D3D12SharedMemory::Initialize() {
         "emulation - video memory usage may increase significantly "
         "because a full {} MB buffer will be created",
         kBufferSize >> 20);
-    if (provider.GetGraphicsAnalysis()) {
-      // As of October 8th, 2018, PIX doesn't support tiled buffers.
-      // FIXME(Triang3l): Re-enable tiled resources with PIX once fixed.
-      XELOGGPU(
-          "This is caused by PIX being attached, which doesn't support tiled "
-          "resources yet.");
-    }
+    //if (provider.GetGraphicsAnalysis()) {
+    //  // As of October 8th, 2018, PIX doesn't support tiled buffers.
+    //  // FIXME(Triang3l): Re-enable tiled resources with PIX once fixed.
+    //  XELOGGPU(
+    //      "This is caused by PIX being attached, which doesn't support tiled "
+    //      "resources yet.");
+    //}
     if (FAILED(device->CreateCommittedResource(
             &ui::d3d12::util::kHeapPropertiesDefault,
             provider.GetHeapFlagCreateNotZeroed(), &buffer_desc, buffer_state_,
@@ -82,7 +82,7 @@ bool D3D12SharedMemory::Initialize() {
       Shutdown();
       return false;
     }
-  }
+  //}
   buffer_gpu_address_ = buffer_->GetGPUVirtualAddress();
   buffer_uav_writes_commit_needed_ = false;
 

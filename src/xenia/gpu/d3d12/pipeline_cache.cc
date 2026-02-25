@@ -98,7 +98,7 @@ PipelineCache::PipelineCache(D3D12CommandProcessor& command_processor,
       render_target_cache_.msaa_2x_supported(),
       render_target_cache_.draw_resolution_scale_x(),
       render_target_cache_.draw_resolution_scale_y(),
-      provider.GetGraphicsAnalysis() != nullptr);
+      false);
 
   if (edram_rov_used) {
     depth_only_pixel_shader_ =
@@ -391,7 +391,7 @@ void PipelineCache::InitializeShaderStorage(
           render_target_cache_.msaa_2x_supported(),
           render_target_cache_.draw_resolution_scale_x(),
           render_target_cache_.draw_resolution_scale_y(),
-          provider.GetGraphicsAnalysis() != nullptr);
+          false);
       // If needed and possible, create objects needed for DXIL conversion and
       // disassembly on this thread.
       IDxbcConverter* dxbc_converter = nullptr;

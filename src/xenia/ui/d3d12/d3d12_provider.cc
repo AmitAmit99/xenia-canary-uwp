@@ -79,9 +79,9 @@ std::unique_ptr<D3D12Provider> D3D12Provider::Create() {
 }
 
 D3D12Provider::~D3D12Provider() {
-  if (graphics_analysis_ != nullptr) {
-    graphics_analysis_->Release();
-  }
+  //if (graphics_analysis_ != nullptr) {
+  //  graphics_analysis_->Release();
+  //}
   if (direct_queue_ != nullptr) {
     direct_queue_->Release();
   }

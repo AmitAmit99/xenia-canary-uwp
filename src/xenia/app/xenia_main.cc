@@ -14,7 +14,6 @@
 #include <string>
 #include <thread>
 
-#include "xenia/app/discord/discord_presence.h"
 #include "xenia/app/emulator_window.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/cvar.h"
@@ -34,6 +33,10 @@
 #include "xenia/ui/windowed_app_context.h"
 #include "xenia/vfs/devices/host_path_device.h"
 
+#if !XE_PLATFORM_WINRT
+#include "xenia/app/discord/discord_presence.h"
+#endif
+
 // Available audio systems:
 #include "xenia/apu/nop/nop_audio_system.h"
 #if XE_PLATFORM_LINUX
@@ -47,19 +50,23 @@
 #endif  // XE_PLATFORM_WIN32
 
 // Available graphics systems:
+#if !XE_PLATFORM_WINRT
 #include "xenia/gpu/null/null_graphics_system.h"
 #include "xenia/gpu/vulkan/vulkan_graphics_system.h"
+#endif
 #if XE_PLATFORM_WIN32
 #include "xenia/gpu/d3d12/d3d12_graphics_system.h"
 #endif  // XE_PLATFORM_WIN32
 
 // Available input drivers:
 #include "xenia/hid/nop/nop_hid.h"
-#if !XE_PLATFORM_ANDROID
+#if !XE_PLATFORM_ANDROID & !XE_PLATFORM_WINRT
 #include "xenia/hid/sdl/sdl_hid.h"
 #endif  // !XE_PLATFORM_ANDROID
 #if XE_PLATFORM_WIN32
+#if !XE_PLATFORM_WINRT
 #include "xenia/hid/winkey/winkey_hid.h"
+#endif
 #include "xenia/hid/xinput/xinput_hid.h"
 #endif  // XE_PLATFORM_WIN32
 
@@ -111,7 +118,8 @@ DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount",
 
 DECLARE_bool(force_mount_devkit);
 
-DEFINE_transient_path(target, "",
+DEFINE_transient_path(target, 
+                      "",
                       "Specifies the target .xex or .iso to execute.",
                       "General");
 #ifndef XE_PLATFORM_WIN32
@@ -126,7 +134,9 @@ DEFINE_transient_bool(portable, true,
 
 DECLARE_bool(debug);
 
+#if !XE_PLATFORM_WINRT
 DEFINE_bool(discord, true, "Enable Discord rich presence", "General");
+#endif
 
 DECLARE_bool(widescreen);
 
@@ -401,6 +411,7 @@ std::unique_ptr<gpu::GraphicsSystem> EmulatorApp::CreateGraphicsSystem() {
 #if XE_PLATFORM_WIN32
   factory.Add<gpu::d3d12::D3D12GraphicsSystem>("d3d12");
 #endif  // XE_PLATFORM_WIN32
+#if !XE_PLATFORM_WINRT
   factory.Add<gpu::vulkan::VulkanGraphicsSystem>("vulkan");
   std::unique_ptr<gpu::GraphicsSystem> gpu_implementation =
       factory.Create(gpu_implementation_name);
@@ -442,10 +453,10 @@ std::vector<std::unique_ptr<hid::InputDriver>> EmulatorApp::CreateInputDrivers(
 #if XE_PLATFORM_WIN32
     factory.Add("xinput", xe::hid::xinput::Create);
 #endif  // XE_PLATFORM_WIN32
-#if !XE_PLATFORM_ANDROID
+#if !XE_PLATFORM_ANDROID && !XE_PLATFORM_WINRT
     factory.Add("sdl", xe::hid::sdl::Create);
 #endif  // !XE_PLATFORM_ANDROID
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 && !XE_PLATFORM_WINRT
     // WinKey input driver should always be the last input driver added!
     factory.Add("winkey", xe::hid::winkey::Create);
 #endif  // XE_PLATFORM_WIN32
@@ -522,10 +533,12 @@ bool EmulatorApp::OnInitialize() {
   cache_root = std::filesystem::absolute(cache_root);
   XELOGI("Host cache root: {}", cache_root);
 
+  #if !XE_PLATFORM_WINRT
   if (cvars::discord) {
     discord::DiscordPresence::Initialize();
     discord::DiscordPresence::NotPlaying();
   }
+  #endif
 
   // Create the emulator but don't initialize so we can setup the window.
   emulator_ =
@@ -554,9 +567,11 @@ bool EmulatorApp::OnInitialize() {
 void EmulatorApp::OnDestroy() {
   ShutdownEmulatorThreadFromUIThread();
 
+  #if !XE_PLATFORM_WINRT
   if (cvars::discord) {
     discord::DiscordPresence::Shutdown();
   }
+  #endif
 
   Profiler::Dump();
   // The profiler needs to shut down before the graphics context.
@@ -699,10 +714,12 @@ void EmulatorApp::EmulatorThread() {
   }
 
   emulator_->on_launch.AddListener([&](auto title_id, const auto& game_title) {
+#if !XE_PLATFORM_WINRT
     if (cvars::discord) {
       discord::DiscordPresence::PlayingTitle(
           game_title.empty() ? "Unknown Title" : std::string(game_title));
     }
+#endif
     app_context().CallInUIThread([this]() { emulator_window_->UpdateTitle(); });
     emulator_thread_event_->Set();
   });
@@ -719,9 +736,11 @@ void EmulatorApp::EmulatorThread() {
   });
 
   emulator_->on_terminate.AddListener([]() {
+#if !XE_PLATFORM_WINRT
     if (cvars::discord) {
       discord::DiscordPresence::NotPlaying();
     }
+#endif
   });
 
   // Enable emulator input now that the emulator is properly loaded.

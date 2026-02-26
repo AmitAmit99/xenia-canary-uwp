@@ -522,12 +522,8 @@ Emulator::FileSignatureType GetFileSignature(
     return Emulator::FileSignatureType::XISO;
   }
 
-<<<<<<< HEAD
   XELOGE("{}: {} ({:08X})", __func__, path.extension(), magic_value);
   return FileSignatureType::Unknown;
-=======
-  return Emulator::FileSignatureType::Unknown;
->>>>>>> 5fed52e5d (Better game scanner)
 }
 
 X_STATUS Emulator::LaunchPath(const std::filesystem::path& path) {

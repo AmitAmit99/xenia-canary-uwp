@@ -624,8 +624,9 @@ def run_premake(target_os, action, cc=None):
     if not cc:
         cc = get_cc(cc=cc)
 
-    if cc:
-        args.insert(4, f"--cc={cc}")
+    # Temporarily disable --cc flag as premake-core doesn't support 'msc'
+    # if cc:
+    #     args.insert(4, f"--cc={cc}")
 
     ret = subprocess.call(args)
 

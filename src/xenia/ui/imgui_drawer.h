@@ -173,6 +173,7 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   double frame_time_tick_frequency_;
   uint64_t last_frame_time_ticks_;
 
+  bool ignore_input_ = false;
   bool are_notifications_enabled_ = true;
 };
 

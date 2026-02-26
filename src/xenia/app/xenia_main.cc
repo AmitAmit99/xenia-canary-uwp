@@ -219,10 +219,12 @@ class EmulatorApp final : public xe::ui::WindowedApp {
             continue;
           }
 
-          // Skip xinput for "any" and use SDL
+          // Skip xinput for "any" and use SDL (except on WinRT where SDL is unavailable)
+#if !XE_PLATFORM_WINRT
           if (creator.name.compare("xinput") == 0) {
             continue;
           }
+#endif  // !XE_PLATFORM_WINRT
 
           auto instance = creator.instantiate(std::forward<Args>(args)...);
           if (instance) {
@@ -324,9 +326,9 @@ std::unique_ptr<apu::AudioSystem> EmulatorApp::CreateAudioSystem(
 #if XE_PLATFORM_LINUX
   factory.Add<apu::alsa::ALSAAudioSystem>("alsa");
 #endif  // XE_PLATFORM_LINUX
-#if !XE_PLATFORM_ANDROID
+#if !XE_PLATFORM_ANDROID && !XE_PLATFORM_WINRT
   factory.Add<apu::sdl::SDLAudioSystem>("sdl");
-#endif  // !XE_PLATFORM_ANDROID
+#endif  // !XE_PLATFORM_ANDROID && !XE_PLATFORM_WINRT
   factory.Add<apu::nop::NopAudioSystem>("nop");
   return factory.Create(cvars::apu, processor);
 }
@@ -404,15 +406,16 @@ std::unique_ptr<gpu::GraphicsSystem> EmulatorApp::CreateGraphicsSystem() {
   // placed in `xe::gpu` and shared between the backends rather than duplicated
   // between them.
   const std::string gpu_implementation_name = cvars::gpu;
-  if (gpu_implementation_name == "null") {
-    return std::make_unique<gpu::null::NullGraphicsSystem>();
-  }
   Factory<gpu::GraphicsSystem> factory;
 #if XE_PLATFORM_WIN32
   factory.Add<gpu::d3d12::D3D12GraphicsSystem>("d3d12");
 #endif  // XE_PLATFORM_WIN32
 #if !XE_PLATFORM_WINRT
+  if (gpu_implementation_name == "null") {
+    return std::make_unique<gpu::null::NullGraphicsSystem>();
+  }
   factory.Add<gpu::vulkan::VulkanGraphicsSystem>("vulkan");
+#endif  // !XE_PLATFORM_WINRT
   std::unique_ptr<gpu::GraphicsSystem> gpu_implementation =
       factory.Create(gpu_implementation_name);
   if (!gpu_implementation) {
@@ -429,12 +432,14 @@ std::unique_ptr<gpu::GraphicsSystem> EmulatorApp::CreateGraphicsSystem() {
         "compatible with Direct3D 12 feature level 11_0.\n"
         "\n"
 #endif  // XE_PLATFORM_WIN32
+#if !XE_PLATFORM_WINRT
         "For Vulkan, the Vulkan runtime must be installed, and the GPU must "
         "support at least Vulkan 1.0. The Vulkan runtime can be downloaded at "
         "https://vulkan.lunarg.com/sdk/home.\n"
         "\n"
         "Also, ensure that you have the latest driver installed for your GPU.\n"
         "\n"
+#endif  // !XE_PLATFORM_WINRT
 #endif  // XE_PLATFORM_ANDROID
         "See https://xenia.jp/faq/ for more information and the system "
         "requirements.");
@@ -450,9 +455,9 @@ std::vector<std::unique_ptr<hid::InputDriver>> EmulatorApp::CreateInputDrivers(
         xe::hid::nop::Create(window, EmulatorWindow::kZOrderHidInput));
   } else {
     Factory<hid::InputDriver, ui::Window*, size_t> factory;
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 || XE_PLATFORM_WINRT
     factory.Add("xinput", xe::hid::xinput::Create);
-#endif  // XE_PLATFORM_WIN32
+#endif  // XE_PLATFORM_WIN32 || XE_PLATFORM_WINRT
 #if !XE_PLATFORM_ANDROID && !XE_PLATFORM_WINRT
     factory.Add("sdl", xe::hid::sdl::Create);
 #endif  // !XE_PLATFORM_ANDROID

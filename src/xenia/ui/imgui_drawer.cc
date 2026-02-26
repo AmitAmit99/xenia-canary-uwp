@@ -684,9 +684,9 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   }
 }
 
-void ImGuiDrawer::SetIgnoreInput(bool ignore) { ignore_input = ignore; }
+void ImGuiDrawer::SetIgnoreInput(bool ignore) { ignore_input_ = ignore; }
 bool ImGuiDrawer::GetIgnoreInput() {
-    return ignore_input;
+  return ignore_input_;
 }
 
 void ImGuiDrawer::ClearDialogs() {

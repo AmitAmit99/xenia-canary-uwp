@@ -19,6 +19,7 @@
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.UI.Input.h>
 #include <winrt/windows.graphics.display.core.h>
+#include <winrt/Windows.System.h>
 
 using namespace winrt::Windows::Storage::Pickers;
 namespace UWP {
@@ -137,4 +138,13 @@ void SetAutomaticLaunch(std::string game_path) { m_game_path = game_path; }
 void SetDPI(int DPI) { m_DPI = DPI; }
 bool IsUIOpen() { return m_ui_open; }
 void SetUIOpen(bool is_open) { m_ui_open = is_open; }
+
+winrt::fire_and_forget LaunchUriAsync(std::string url) {
+  auto uri = winrt::Windows::Foundation::Uri(winrt::to_hstring(url));
+  co_await winrt::Windows::System::Launcher::LaunchUriAsync(uri);
+}
+
+void LaunchUri(const std::string& url) {
+  LaunchUriAsync(url);
+}
 }

@@ -11,13 +11,23 @@
 #include "xenia/base/platform_win.h"
 #include "xenia/base/string.h"
 #include "xenia/base/system.h"
+#if XE_PLATFORM_WINRT
+#include "xenia-canary-uwp/UWPUtil.h"
+#endif
 
 namespace xe {
 
 void LaunchWebBrowser(const std::string_view url) {
-  //auto wide_url = xe::to_utf16(url);
-  //ShellExecuteW(nullptr, L"open", reinterpret_cast<LPCWSTR>(wide_url.c_str()),
-  //              nullptr, nullptr, SW_SHOWNORMAL);
+#if XE_PLATFORM_WINRT
+  UWP::LaunchUri(std::string(url));
+#else
+  std::u16string url_u16 = xe::to_utf16(url);
+  std::wstring url_w(url_u16.begin(), url_u16.end());
+
+  std::wstring edge_uri = L"microsoft-edge:" + url_w;
+  ShellExecuteW(nullptr, L"open", edge_uri.c_str(), nullptr, nullptr,
+                SW_SHOWNORMAL);
+#endif
 }
 
 void LaunchFileExplorer(const std::filesystem::path& url) {

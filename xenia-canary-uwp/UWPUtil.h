@@ -22,4 +22,5 @@ void SetAutomaticLaunch(std::string game_path);
 void SetDPI(int DPI);
 bool IsUIOpen();
 void SetUIOpen(bool is_open);
+void LaunchUri(const std::string& url);
 }

@@ -67,7 +67,7 @@ DECLARE_bool(guide_button);
 
 DECLARE_bool(clear_memory_page_state);
 
-DECLARE_bool(d3d12_readback_resolve);
+DECLARE_bool(readback_memexport);
 
 DEFINE_bool(fullscreen, false, "Whether to launch the emulator in fullscreen.",
             "Display");
@@ -178,11 +178,12 @@ const std::string kRecentlyPlayedTitlesFilename = "recent.toml";
 const std::string kBaseTitle = "Xenia-canary";
 
 EmulatorWindow::EmulatorWindow(Emulator* emulator,
-                               ui::WindowedAppContext& app_context)
+                               ui::WindowedAppContext& app_context,
+                               uint32_t width, uint32_t height)
     : emulator_(emulator),
       app_context_(app_context),
       window_listener_(*this),
-      window_(ui::Window::Create(app_context, kBaseTitle, 1280, 720)),
+      window_(ui::Window::Create(app_context, kBaseTitle, width, height)),
       imgui_drawer_(
           std::make_unique<ui::ImGuiDrawer>(window_.get(), kZOrderImGui)),
       display_config_game_config_load_callback_(
@@ -205,19 +206,22 @@ EmulatorWindow::EmulatorWindow(Emulator* emulator,
 
   LoadRecentlyLaunchedTitles();
 
+#if XE_PLATFORM_WINRT
   if (cvars::skip_frontend) {
     UWP::SelectGameFromWinRT(emulator_);
   } else {
     gamelist_ = std::unique_ptr<WinRTFrontendDialog>(
         new WinRTFrontendDialog(imgui_drawer_.get(), *this));
   }
+#endif  // XE_PLATFORM_WINRT
 }
 
 std::unique_ptr<EmulatorWindow> EmulatorWindow::Create(
-    Emulator* emulator, ui::WindowedAppContext& app_context) {
+    Emulator* emulator, ui::WindowedAppContext& app_context, uint32_t width,
+    uint32_t height) {
   assert_true(app_context.IsInUIThread());
   std::unique_ptr<EmulatorWindow> emulator_window(
-      new EmulatorWindow(emulator, app_context));
+      new EmulatorWindow(emulator, app_context, width, height));
   if (!emulator_window->Initialize()) {
     return nullptr;
   }
@@ -1001,7 +1005,8 @@ void EmulatorWindow::InstallContent() {
     for (auto path : paths) {
       // Normalize the path and make absolute.
       auto abs_path = std::filesystem::absolute(path);
-      auto result = emulator_->InstallContentPackage(abs_path);
+      Emulator::ContentInstallEntry install_entry(abs_path);
+      auto result = emulator_->InstallContentPackage(abs_path, install_entry);
 
       if (result != X_STATUS_SUCCESS) {
         XELOGE("Failed to install content! Error code: {:08X}", result);
@@ -1025,7 +1030,8 @@ void EmulatorWindow::InstallContent() {
     for (auto path : files) {
       // Normalize the path and make absolute.
       auto abs_path = std::filesystem::absolute(path);
-      auto result = emulator_->InstallContentPackage(abs_path);
+      Emulator::ContentInstallEntry install_entry(abs_path);
+      auto result = emulator_->InstallContentPackage(abs_path, install_entry);
 
       if (result != X_STATUS_SUCCESS) {
         XELOGE("Failed to install content! Error code: {:08X}", result);
@@ -1172,17 +1178,17 @@ void EmulatorWindow::UpdateTitle() {
 
   // Title information, if available
   if (emulator()->is_title_open()) {
-    sb.AppendFormat(u8" | [{:08X}", emulator()->title_id());
+    sb.AppendFormat(" | [{:08X}", emulator()->title_id());
     auto title_version = emulator()->title_version();
     if (!title_version.empty()) {
-      sb.Append(u8" v");
+      sb.Append(" v");
       sb.Append(title_version);
     }
-    sb.Append(u8"]");
+    sb.Append("]");
 
     auto title_name = emulator()->title_name();
     if (!title_name.empty()) {
-      sb.Append(u8" ");
+      sb.Append(" ");
       sb.Append(title_name);
     }
   }
@@ -1192,28 +1198,28 @@ void EmulatorWindow::UpdateTitle() {
   if (graphics_system) {
     auto graphics_name = graphics_system->name();
     if (!graphics_name.empty()) {
-      sb.Append(u8" <");
+      sb.Append(" <");
       sb.Append(graphics_name);
-      sb.Append(u8">");
+      sb.Append(">");
     }
   }
 
   if (Clock::guest_time_scalar() != 1.0) {
-    sb.AppendFormat(u8" (@{:.2f}x)", Clock::guest_time_scalar());
+    sb.AppendFormat(" (@{:.2f}x)", Clock::guest_time_scalar());
   }
 
   if (initializing_shader_storage_) {
-    sb.Append(u8" (Preloading shaders\u2026)");
+    sb.Append(" (Preloading shaders\xe2\x80\xa6)");
   }
 
   patcher::Patcher* patcher = emulator()->patcher();
   if (patcher && patcher->IsAnyPatchApplied()) {
-    sb.Append(u8" [Patches Applied]");
+    sb.Append(" [Patches Applied]");
   }
 
   patcher::PluginLoader* pluginloader = emulator()->plugin_loader();
   if (pluginloader && pluginloader->IsAnyPluginLoaded()) {
-    sb.Append(u8" [Plugins Loaded]");
+    sb.Append(" [Plugins Loaded]");
   }
 
   window_->SetTitle(sb.to_string_view());
@@ -1377,7 +1383,7 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
       });
     } break;
     case ButtonFunctions::ClearMemoryPageState:
-      ToggleGPUSetting(gpu_cvar::ClearMemoryPageState);
+      ToggleGPUSetting(gpu::GPUSetting::ClearMemoryPageState);
 
       // Assume the user wants ClearCaches as well
       if (cvars::clear_memory_page_state) {
@@ -1388,7 +1394,7 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
       xe::threading::Sleep(delay);
       break;
     case ButtonFunctions::ReadbackResolve:
-      ToggleGPUSetting(gpu_cvar::ReadbackResolve);
+      ToggleGPUSetting(gpu::GPUSetting::ReadbackMemexport);
 
       // Extra Sleep
       xe::threading::Sleep(delay);
@@ -1421,7 +1427,7 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
       selected_title_index--;
       break;
     case ButtonFunctions::ToggleLogging:
-      logging::internal::ToggleLogLevel();
+      logging::ToggleLogLevel();
       break;
     case ButtonFunctions::Unknown:
     default:
@@ -1496,8 +1502,9 @@ void EmulatorWindow::GamepadHotKeys() {
     while (true) {
       auto input_lock = input_sys->lock();
 
-      for (uint32_t user_index = 0; user_index < MAX_USERS; ++user_index) {
-        X_RESULT result = input_sys->GetState(user_index, &state);
+      for (uint32_t user_index = 0; user_index < XUserMaxUserCount;
+           ++user_index) {
+        X_RESULT result = input_sys->GetState(user_index, 0, &state);
 
         // Release the lock before processing the hotkey
         input_lock.mutex()->unlock();
@@ -1519,15 +1526,15 @@ void EmulatorWindow::GamepadHotKeys() {
   }
 }
 
-void EmulatorWindow::ToggleGPUSetting(gpu_cvar value) {
+void EmulatorWindow::ToggleGPUSetting(gpu::GPUSetting value) {
   switch (value) {
-    case gpu_cvar::ClearMemoryPageState:
-      CommonSaveGPUSetting(CommonGPUSetting::ClearMemoryPageState,
-                           !cvars::clear_memory_page_state);
+    case gpu::GPUSetting::ClearMemoryPageState:
+      gpu::SaveGPUSetting(gpu::GPUSetting::ClearMemoryPageState,
+                          !cvars::clear_memory_page_state);
       break;
-    case gpu_cvar::ReadbackResolve:
-      D3D12SaveGPUSetting(D3D12GPUSetting::ReadbackResolve,
-                          !cvars::d3d12_readback_resolve);
+    case gpu::GPUSetting::ReadbackMemexport:
+      gpu::SaveGPUSetting(gpu::GPUSetting::ReadbackMemexport,
+                          !cvars::readback_memexport);
       break;
   }
 }
@@ -1535,8 +1542,8 @@ void EmulatorWindow::ToggleGPUSetting(gpu_cvar value) {
 // Determine if the Xbox Gamebar is enabled via the Windows registry
 bool EmulatorWindow::IsUseNexusForGameBarEnabled() {
 #ifdef _WIN32
-  const LPWSTR reg_path = L"SOFTWARE\\Microsoft\\GameBar";
-  const LPWSTR key = L"UseNexusForGameBarEnabled";
+  const LPCWSTR reg_path = L"SOFTWARE\\Microsoft\\GameBar";
+  const LPCWSTR key = L"UseNexusForGameBarEnabled";
 
   DWORD value = 0;
   DWORD dataSize = sizeof(value);
@@ -1590,7 +1597,7 @@ void EmulatorWindow::DisplayHotKeysConfig() {
   msg += "\n";
 
   msg += "Readback Resolve: " +
-         xe::string_util::BoolToString(cvars::d3d12_readback_resolve);
+         xe::string_util::BoolToString(cvars::readback_memexport);
   msg += "\n";
 
   msg += "Clear Memory Page State: " +
@@ -1610,13 +1617,13 @@ std::string EmulatorWindow::CanonicalizeFileExtension(
   return xe::utf8::lower_ascii(xe::path_to_utf8(path.extension()));
 }
 
-xe::X_STATUS EmulatorWindow::RunTitle(std::filesystem::path path_to_file) {
+xe::X_STATUS EmulatorWindow::RunTitle(const std::filesystem::path& path_to_file) {
   bool titleExists = !std::filesystem::exists(path_to_file);
 
   if (path_to_file.empty() || titleExists) {
-    char* log_msg = path_to_file.empty()
-                        ? "Failed to launch title path is empty."
-                        : "Failed to launch title path is invalid.";
+    const char* log_msg = path_to_file.empty()
+                              ? "Failed to launch title path is empty."
+                              : "Failed to launch title path is invalid.";
 
     XELOGE(log_msg);
 
@@ -1665,7 +1672,7 @@ xe::X_STATUS EmulatorWindow::RunTitle(std::filesystem::path path_to_file) {
         imgui_drawer_.get(), "Title Launch Failed!",
         "Failed to launch title.\n\nCheck xenia.log for technical details.");
   } else {
-    AddRecentlyLaunchedTitle(path_to_file, emulator_->title_name());
+    AddRecentlyLaunchedTitle(path_to_file, std::string(emulator_->title_name()));
 
     auto xam =
         emulator_->kernel_state()->GetKernelModule<kernel::xam::XamModule>(
@@ -1787,6 +1794,7 @@ void EmulatorWindow::AddRecentlyLaunchedTitle(
   file.close();
 }
 
+#if XE_PLATFORM_WINRT
 void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
   if (UWP::HasGamePath()) {
     UWP::SelectGameFromWinRT(emulator_window_.emulator());
@@ -1806,7 +1814,8 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
                        ImGuiWindowFlags_NoResize |
                        ImGuiWindowFlags_NoScrollbar |
                        ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav)) {
-    ImGui::Image(GetOrCreateBackground().get(), ImGui::GetIO().DisplaySize);
+    ImGui::Image(reinterpret_cast<ImTextureID>(GetOrCreateBackground().get()),
+                 ImGui::GetIO().DisplaySize);
     ImGui::End();
   }
   ImGui::PopStyleVar(3);
@@ -1888,7 +1897,7 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
           }
 
           auto c_readback_resolve = dynamic_cast<cvar::ConfigVar<bool>*>(
-              cvar::ConfigVars->find("d3d12_readback_resolve")->second);
+              cvar::ConfigVars->find("readback_memexport")->second);
           if (ImGui::Checkbox("Readback Resolve",
                               c_readback_resolve->current_value())) {
             c_readback_resolve->SetConfigValue(
@@ -2274,8 +2283,8 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
         auto cl = dynamic_cast<cvar::ConfigVar<std::string>*>(
             cvar::ConfigVars->find("cl")->second);
         std::string cl_text = (std::string)cl->GetTypedConfigValue();
-        if (cl_text != cl_buffer) {
-          cl->SetConfigValue(cl_buffer);
+        if (cl_text != cl_buffer_) {
+          cl->SetConfigValue(cl_buffer_);
           config::SaveConfig();
         }
 
@@ -2285,7 +2294,7 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
         }
 
         ImGui::SameLine();
-        ImGui::InputText("##cl-text", cl_buffer, 128);
+        ImGui::InputText("##cl-text", cl_buffer_, 128);
 
         if (ImGui::IsItemFocused()) {
           tooltip = cl->description();
@@ -2303,27 +2312,27 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
         if (ImGui::BeginListBox("##folders")) {
           for (auto path : UWP::GetPaths()) {
             if (ImGui::Selectable(path.c_str())) {
-              selectedPath = path;
+              selected_path_ = path;
             }
           }
           ImGui::EndListBox();
         }
 
-        if (selectedPath == "") {
+        if (selected_path_ == "") {
           ImGui::BeginDisabled();
         }
 
         if (ImGui::Button("Remove Path")) {
-          if (selectedPath != "") {
+          if (selected_path_ != "") {
             auto paths = UWP::GetPaths();
-            paths.erase(std::remove(paths.begin(), paths.end(), selectedPath),
+            paths.erase(std::remove(paths.begin(), paths.end(), selected_path_),
                         paths.end());
             UWP::SetGamePaths(paths);
-            selectedPath = "";
+            selected_path_ = "";
           }
         }
 
-        if (selectedPath == "") {
+        if (selected_path_ == "") {
           ImGui::EndDisabled();
         }
 
@@ -2452,15 +2461,36 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
 
       if (ImGui::BeginTabItem("About", nullptr)) {
         ImGui::TextWrapped(
-            "Xenia UWP 1.1.5a\nA fork of Xenia introducing Xbox support and a big "
-            "picture frontend.\n\n"
-            "Xenia's Website: https://xenia.jp/\n"
-            "Xenia's Patreon: https://www.patreon.com/xenia_project\n\n"
-            "This Xbox fork was developed by SirMangler.\n"
-            "Support me on Ko-Fi: https://ko-fi.com/sirmangler\n"
-            "Source Code: https://github.com/SirMangler/xenia/\n\n"
-            "Big thanks to TXF for creating the background, as well as to "
-            "Reverie and TRW for extensive testing and moral support!");
+            "Xenia UWP 1.7.0\nBased on commit "
+            "125b4c8c05851e48faa73fda2a593f0629c5f7df\n"
+            "A fork of Xenia introducing Xbox support and a big picture "
+            "frontend.\n");
+
+        ImGui::Spacing();
+
+        if (ImGui::Button("Xenia Website")) {
+          LaunchWebBrowser("https://xenia.jp/");
+        }
+        if (ImGui::Button("Xenia Team Donations")) {
+          LaunchWebBrowser("https://www.patreon.com/xenia_project");
+        }
+        if (ImGui::Button("Xbox Port Donations")) {
+          LaunchWebBrowser("https://ko-fi.com/sirmangler");
+        }
+        if (ImGui::Button("Get the Source Code")) {
+          LaunchWebBrowser("https://github.com/SirMangler/xenia/");
+        }
+        if (ImGui::Button("Get More from the Dev Store")) {
+          LaunchWebBrowser("https://xbdev.store/");
+        }
+        if (ImGui::Button("Xbox Emulation Hub")) {
+          LaunchWebBrowser("https://discord.gg/WCmxvvxHqu");
+        }
+
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "This UWP Xbox Port was originally made by SirMangler and the "
+            "hardwork of all the Xenia Project contributers over the years\n");
 
         ImGui::EndTabItem();
       }
@@ -2505,6 +2535,7 @@ EmulatorWindow::WinRTFrontendDialog::GetOrCreateBackground() {
   background_tex_ = std::move(tex);
   return background_tex_;
 }
+#endif  // XE_PLATFORM_WINRT
 
 }  // namespace app
 }  // namespace xe

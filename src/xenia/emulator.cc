@@ -139,7 +139,7 @@ Emulator::Emulator(const std::filesystem::path& command_line,
     }
   }
 
-#if XE_PLATFORM_WIN32 == 1
+#if XE_PLATFORM_WIN32 == 1 && !XE_PLATFORM_WINRT
   // Show a disclaimer that links to the quickstart
   // guide the first time they ever open the emulator
   uint64_t persistent_flags = GetPersistentEmulatorFlags();
@@ -523,7 +523,7 @@ Emulator::FileSignatureType GetFileSignature(
   }
 
   XELOGE("{}: {} ({:08X})", __func__, path.extension(), magic_value);
-  return FileSignatureType::Unknown;
+  return Emulator::FileSignatureType::Unknown;
 }
 
 X_STATUS Emulator::LaunchPath(const std::filesystem::path& path) {

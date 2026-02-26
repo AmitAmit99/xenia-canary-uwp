@@ -91,12 +91,46 @@ void UWP::UpdateImGuiIO() {
   hid::X_INPUT_STATE state;
   if (driver->GetState(0, &state) != X_STATUS_SUCCESS) return;
 
-  io.AddKeyEvent(ImGuiKey_GamepadFaceDown, state.gamepad.buttons & X_INPUT_GAMEPAD_A);
-  io.AddKeyEvent(ImGuiKey_GamepadFaceRight, state.gamepad.buttons & X_INPUT_GAMEPAD_B);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_LEFT);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadRight, state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_RIGHT);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadUp, state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_UP);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadDown, state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_DOWN);
+  const uint16_t buttons = state.gamepad.buttons;
+
+  io.AddKeyEvent(ImGuiKey_GamepadFaceDown,   (buttons & X_INPUT_GAMEPAD_A) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadFaceRight,  (buttons & X_INPUT_GAMEPAD_B) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadFaceLeft,   (buttons & X_INPUT_GAMEPAD_X) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadFaceUp,     (buttons & X_INPUT_GAMEPAD_Y) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadStart,      (buttons & X_INPUT_GAMEPAD_START) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadBack,       (buttons & X_INPUT_GAMEPAD_BACK) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadL1,         (buttons & X_INPUT_GAMEPAD_LEFT_SHOULDER) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadR1,         (buttons & X_INPUT_GAMEPAD_RIGHT_SHOULDER) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadL3,         (buttons & X_INPUT_GAMEPAD_LEFT_THUMB) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadR3,         (buttons & X_INPUT_GAMEPAD_RIGHT_THUMB) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadLeft,   (buttons & X_INPUT_GAMEPAD_DPAD_LEFT) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadRight,  (buttons & X_INPUT_GAMEPAD_DPAD_RIGHT) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadUp,     (buttons & X_INPUT_GAMEPAD_DPAD_UP) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadDown,   (buttons & X_INPUT_GAMEPAD_DPAD_DOWN) != 0);
+
+  // Left stick — threshold at ~25% (8000/32767)
+  constexpr float kStickDeadzone = 8000.0f / 32767.0f;
+  const float lx = state.gamepad.thumb_lx / 32767.0f;
+  const float ly = state.gamepad.thumb_ly / 32767.0f;
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft,  lx < -kStickDeadzone, lx < 0 ? -lx : 0.0f);
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, lx >  kStickDeadzone, lx > 0 ?  lx : 0.0f);
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp,    ly >  kStickDeadzone, ly > 0 ?  ly : 0.0f);
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown,  ly < -kStickDeadzone, ly < 0 ? -ly : 0.0f);
+
+  // Right stick
+  const float rx = state.gamepad.thumb_rx / 32767.0f;
+  const float ry = state.gamepad.thumb_ry / 32767.0f;
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickLeft,  rx < -kStickDeadzone, rx < 0 ? -rx : 0.0f);
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickRight, rx >  kStickDeadzone, rx > 0 ?  rx : 0.0f);
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickUp,    ry >  kStickDeadzone, ry > 0 ?  ry : 0.0f);
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickDown,  ry < -kStickDeadzone, ry < 0 ? -ry : 0.0f);
+
+  // Triggers as L2/R2
+  constexpr float kTriggerDeadzone = 30.0f / 255.0f;
+  const float lt = state.gamepad.left_trigger / 255.0f;
+  const float rt = state.gamepad.right_trigger / 255.0f;
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadL2, lt > kTriggerDeadzone, lt);
+  io.AddKeyAnalogEvent(ImGuiKey_GamepadR2, rt > kTriggerDeadzone, rt);
 }
 
 void RecurseFolderForGames(std::string path) {

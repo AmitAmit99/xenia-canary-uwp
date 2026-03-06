@@ -12,6 +12,7 @@ target_link_libraries(xenia-cpu PUBLIC xenia-base mspack)
 xe_target_defaults(xenia-cpu)
 
 if(XENIA_BUILD_TESTS)
+  set(CMAKE_FOLDER "tests")
   add_subdirectory(testing)
   add_subdirectory(ppc/testing)
 endif()

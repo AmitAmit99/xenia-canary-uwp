@@ -27,5 +27,6 @@ if(XENIA_BUILD_MISC)
 endif()
 
 if(XENIA_BUILD_TESTS)
+  set(CMAKE_FOLDER "tests")
   add_subdirectory(testing)
 endif()

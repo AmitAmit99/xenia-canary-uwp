@@ -13,5 +13,6 @@ target_link_libraries(xenia-base PUBLIC fmt)
 xe_target_defaults(xenia-base)
 
 if(XENIA_BUILD_TESTS)
+  set(CMAKE_FOLDER "tests")
   add_subdirectory(testing)
 endif()

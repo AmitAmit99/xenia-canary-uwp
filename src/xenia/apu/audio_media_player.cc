@@ -33,11 +33,11 @@ DEFINE_int32(xmp_default_volume, 70,
 namespace xe {
 namespace apu {
 
-int32_t InitializeAndOpenAvCodec(std::vector<uint8_t>* song_data,
+int32_t InitializeAndOpenAvCodec(std::span<uint8_t> song_data,
                                  AVFormatContext*& format_context,
                                  AVCodecContext*& av_context) {
   AVIOContext* io_ctx =
-      avio_alloc_context(song_data->data(), (int)song_data->size(), 0, nullptr,
+      avio_alloc_context(song_data.data(), (int)song_data.size(), 0, nullptr,
                          nullptr, nullptr, nullptr);
 
   format_context = avformat_alloc_context();
@@ -220,9 +220,8 @@ X_STATUS AudioMediaPlayer::Play(uint32_t playlist_handle, uint32_t song_handle,
 }
 
 void AudioMediaPlayer::Play() {
-  std::vector<uint8_t>* song_buffer = new std::vector<uint8_t>();
-
-  if (!LoadSongToMemory(song_buffer)) {
+  std::span<uint8_t> song_buffer = LoadSongToMemory();
+  if (song_buffer.empty()) {
     return;
   }
 
@@ -396,9 +395,9 @@ X_STATUS AudioMediaPlayer::Previous() {
   return X_STATUS_SUCCESS;
 }
 
-bool AudioMediaPlayer::LoadSongToMemory(std::vector<uint8_t>* buffer) {
+std::span<uint8_t> AudioMediaPlayer::LoadSongToMemory() {
   if (!active_song_) {
-    return false;
+    return {};
   }
 
   // Find file based on provided path?
@@ -410,16 +409,26 @@ bool AudioMediaPlayer::LoadSongToMemory(std::vector<uint8_t>* buffer) {
       &vfs_file, &file_action);
 
   if (result) {
-    return false;
+    return {};
   }
 
-  buffer->resize(vfs_file->entry()->size());
-  size_t bytes_read = 0;
-  result = vfs_file->ReadSync(
-      std::span<uint8_t>(buffer->data(), vfs_file->entry()->size()), 0,
-      &bytes_read);
+  std::span<uint8_t> buffer = {
+      static_cast<uint8_t*>(av_malloc(vfs_file->entry()->size())),
+      vfs_file->entry()->size()};
 
-  return !result;
+  if (buffer.empty()) {
+    return {};
+  }
+
+  size_t bytes_read = 0;
+  result = vfs_file->ReadSync(buffer, 0, &bytes_read);
+  if (result != X_ERROR_SUCCESS) {
+    // Read failed. We need to manually release resources from av_malloc.
+    av_freep(buffer.data());
+    return {};
+  }
+
+  return buffer;
 }
 
 void AudioMediaPlayer::AddPlaylist(uint32_t handle,

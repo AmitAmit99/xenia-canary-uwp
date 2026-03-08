@@ -24,6 +24,53 @@ __author__ = "ben.vanik@gmail.com (Ben Vanik)"
 
 self_path = os.path.dirname(os.path.abspath(__file__))
 
+# TODO: Automate getting these entries
+XENIA_TARGETS = [
+    "aes_128",
+    "capstone",
+    "dxbc",
+    "discord-rpc",
+    "fmt",
+    "glslang-spirv",
+    "imgui",
+    "libavcodec",
+    "libavformat",
+    "libavutil",
+    "mspack",
+    "pugixml",
+    "snappy",
+    "xxhash",
+    "zarchive",
+    "zlib-ng",
+    "zstd",
+    "xenia-app",
+    "xenia-app-discord",
+    "xenia-apu",
+    "xenia-apu-alsa",
+    "xenia-apu-nop",
+    "xenia-apu-sdl",
+    "xenia-base",
+    "xenia-core",
+    "xenia-cpu",
+    "xenia-cpu-backend-x64",
+    "xenia-debug-ui",
+    "xenia-gpu",
+    "xenia-gpu-null",
+    "xenia-gpu-vulkan",
+    "xenia-gpu-vulkan-spirv-shaders",
+    "xenia-helper-sdl",
+    "xenia-hid",
+    "xenia-hid-nop",
+    "xenia-hid-sdl",
+    "xenia-hid-skylander",
+    "xenia-kernel",
+    "xenia-patcher",
+    "xenia-ui",
+    "xenia-ui-vulkan",
+    "xenia-ui-vulkan-spirv-shaders",
+    "xenia-vfs",
+]
+
 class bcolors:
 #    HEADER = "\033[95m"
 #    OKBLUE = "\033[94m"
@@ -690,26 +737,86 @@ def create_clion_workspace():
     with open(os.path.join(".idea", "misc.xml"), "w") as f:
         f.write("""<?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="CMakeWorkspace" PROJECT_DIR="$PROJECT_DIR$">
-    <contentRoot DIR="$PROJECT_DIR$" />
+  <component name="CMakePythonSetting">
+    <option name="pythonIntegrationState" value="YES" />
   </component>
+  <component name="CMakeWorkspace" PROJECT_DIR="$PROJECT_DIR$" />
 </project>
 """)
 
-    # Set available configurations
-    # TODO Find a way to trigger a cmake reload
+    # Create workspace.xml file
     with open(os.path.join(".idea", "workspace.xml"), "w") as f:
+        # Write CmakePresetLoader
         f.write("""<?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="CMakeSettings">
-    <configurations>
-      <configuration PROFILE_NAME="Checked" CONFIG_NAME="Checked" />
-      <configuration PROFILE_NAME="Debug" CONFIG_NAME="Debug" />
-      <configuration PROFILE_NAME="Release" CONFIG_NAME="Release" />
-    </configurations>
+  <component name="CMakePresetLoader"><![CDATA[{
+  "useNewFormat": true
+}]]></component>
+""")
+        f.write("""  <component name="CMakeReloadState">
+    <option name="reloaded" value="true" />
   </component>
-</project>""")
+""")
 
+        # Write ConfigurationManager
+        f.write("""  <component name="CMakeRunConfigurationManager">\n""")
+        f.write("    <generated>\n")
+        # Loop over every entry
+        for target in XENIA_TARGETS:
+            f.write(f'      <config projectName="xenia" targetName="{target}" />\n')
+        f.write("    </generated>\n")
+        f.write("  </component>\n")
+
+        # Write CMakeSettings
+        f.write("""  <component name="CMakeSettings">\n""")
+        f.write("    <configurations>\n")
+        f.write("""      <configuration PROFILE_NAME="default - debug" ENABLED="true" FROM_PRESET="true" GENERATION_DIR="$PROJECT_DIR$/build" />\n""")
+        f.write("""      <configuration PROFILE_NAME="default - release" ENABLED="true" FROM_PRESET="true" GENERATION_DIR="$PROJECT_DIR$/build" />\n""")
+        f.write("""      <configuration PROFILE_NAME="default - checked" ENABLED="true" FROM_PRESET="true" GENERATION_DIR="$PROJECT_DIR$/build" />\n""")
+        f.write("    </configurations>\n")
+        f.write("  </component>\n")
+
+        # Write RunManager
+        # Write basic xenia-app manually
+        f.write("""  <component name="RunManager" selected="CMake Application.xenia-app">\n""")
+        f.write("""    <configuration default="true" type="CLionExternalRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true">\n""")
+        f.write("""      <method v="2">\n""")
+        f.write("""        <option name="CLION.EXTERNAL.BUILD" enabled="true" />\n""")
+        f.write("""      </method>\n""")
+        f.write("""    </configuration>\n""")
+
+        for target in XENIA_TARGETS:
+            if target != "xenia-app":
+                f.write(f'    <configuration name="{target}" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="xenia" TARGET_NAME="{target}" CONFIG_NAME="default - debug">\n')
+            else:
+                f.write(f'    <configuration name="{target}" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="xenia" TARGET_NAME="{target}" CONFIG_NAME="default - debug" RUN_TARGET_PROJECT_NAME="xenia" RUN_TARGET_NAME="{target}">\n')
+
+            f.write("""      <method v="2">\n""")
+            f.write("""        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />\n""")
+            f.write("""      </method>\n""")
+            f.write("""    </configuration>\n""")
+
+        # Write itemvalue list
+        f.write("""    <list>\n""")
+        for target in XENIA_TARGETS:
+            f.write(f'      <item itemvalue="CMake Application.{target}" />\n')
+
+        f.write("""    </list>\n""")
+        f.write("""  </component>\n""")
+        f.write("""</project>\n""")
+
+    os.makedirs(os.path.join(".idea", "codeStyles"), exist_ok=True)
+    with open(os.path.join(".idea", "codeStyles", "Project.xml"), "w") as f:
+        f.write("""<component name="ProjectCodeStyleConfiguration">
+  <code_scheme name="Project">
+    <RiderCodeStyleSettings>
+      <option name="/Default/CodeStyle/CodeFormatting/CppClangFormat/EnableClangFormatSupport/@EntryValue" value="true" type="bool" />
+    </RiderCodeStyleSettings>
+    <clangFormatSettings>
+      <option name="ENABLED" value="true" />
+    </clangFormatSettings>
+  </code_scheme>
+</component>""")
     return True
 
 
@@ -1789,6 +1896,7 @@ class DevenvCommand(Command):
             print("Launching Visual Studio...")
         elif has_bin("clion") or has_bin("clion.sh"):
             print("Launching CLion...")
+            create_clion_workspace()
         else:
             print("IDE not detected. CMakeLists.txt is in the project root.")
 

@@ -16,6 +16,11 @@
       "name": "vs",
       "displayName": "Visual Studio 2022",
       "generator": "Visual Studio 17 2022",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build"
     }
@@ -23,16 +28,19 @@
   "buildPresets": [
     {
       "name": "debug",
+      "displayName": "Debug",
       "configurePreset": "default",
       "configuration": "Debug"
     },
     {
       "name": "release",
+      "displayName": "Release",
       "configurePreset": "default",
       "configuration": "Release"
     },
     {
       "name": "checked",
+      "displayName": "Checked",
       "configurePreset": "default",
       "configuration": "Checked"
     },

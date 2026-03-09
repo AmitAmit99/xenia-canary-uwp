@@ -1076,7 +1076,7 @@ VkShaderModule VulkanPipelineCache::GetGeometryShader(GeometryShaderKey key) {
       (key.has_user_clip_planes ? kMaxUserClipPlanes : 0) +
       key.has_vertex_kill_and;
 
-  SpirvBuilder builder(spv::Spv_1_5,
+  SpirvBuilder builder(spv::Spv_1_0,
                        (SpirvShaderTranslator::kSpirvMagicToolId << 16) | 1,
                        nullptr);
   spv::Id ext_inst_glsl_std_450 = builder.import("GLSL.std.450");

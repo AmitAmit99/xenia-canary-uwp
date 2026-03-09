@@ -2241,7 +2241,7 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(
 
   std::vector<spv::Id> id_vector_temp;
   std::vector<unsigned int> uint_vector_temp;
-  SpirvBuilder builder(spv::Spv_1_5,
+  SpirvBuilder builder(spv::Spv_1_0,
                        (SpirvShaderTranslator::kSpirvMagicToolId << 16) | 1,
                        nullptr);
   spv::Id ext_inst_glsl_std_450 = builder.import("GLSL.std.450");
@@ -5506,7 +5506,7 @@ VkPipeline VulkanRenderTargetCache::GetDumpPipeline(DumpPipelineKey key) {
 
   std::vector<spv::Id> id_vector_temp;
 
-  SpirvBuilder builder(spv::Spv_1_5,
+  SpirvBuilder builder(spv::Spv_1_0,
                        (SpirvShaderTranslator::kSpirvMagicToolId << 16) | 1,
                        nullptr);
   spv::Id ext_inst_glsl_std_450 = builder.import("GLSL.std.450");

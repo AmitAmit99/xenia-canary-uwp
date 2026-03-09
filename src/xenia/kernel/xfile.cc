@@ -35,6 +35,16 @@ XFile::~XFile() {
   file_->Destroy();
 }
 
+uint64_t XFile::position() const {
+  std::lock_guard<std::mutex> lock(file_lock_);
+  return position_;
+}
+
+void XFile::set_position(uint64_t value) {
+  std::lock_guard<std::mutex> lock(file_lock_);
+  position_ = value;
+}
+
 X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info,
                                size_t length, const std::string_view file_name,
                                bool restart) {

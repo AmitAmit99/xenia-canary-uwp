@@ -440,6 +440,22 @@ bool MMIOHandler::ExceptionCallback(Exception* ex) {
     // clears the watch we just hit).
     // Do this under the lock so we don't introduce another race condition.
     auto lock = global_critical_region_.Acquire();
+#if XE_PLATFORM_LINUX
+    // On Linux, exception handling runs inside a signal handler (SIGSEGV).
+    // QueryProtect uses std::ifstream to read /proc/self/maps, which is NOT
+    // async-signal-safe and can corrupt heap state or deadlock if the signal
+    // interrupted malloc or another non-reentrant function.
+    // Instead, skip the race-condition check and go straight to the callback.
+    // The callback will handle it correctly — if watches were already cleared,
+    // TriggerCallbacks will find no watches and the page will be unprotected
+    // by the time the instruction retries.
+    if (access_violation_callback_) {
+      return access_violation_callback_(std::move(lock),
+                                        access_violation_callback_context_,
+                                        fault_host_address, is_write);
+    }
+    return false;
+#else
     memory::PageAccess cur_access;
     size_t page_length = memory::page_size();
     memory::QueryProtect(fault_host_address, page_length, cur_access);
@@ -457,6 +473,7 @@ bool MMIOHandler::ExceptionCallback(Exception* ex) {
                                         fault_host_address, is_write);
     }
     return false;
+#endif
   }
 
   auto rip = ex->pc();

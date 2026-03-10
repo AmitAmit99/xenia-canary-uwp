@@ -231,7 +231,7 @@ endfunction()
 function(xe_test_suite name base_path)
   cmake_parse_arguments(ARG "" "" "LINKS" ${ARGN})
 
-  file(GLOB _test_sources CONFIGURE_DEPENDS "${base_path}/*_test.cc")
+  file(GLOB _test_sources "${base_path}/*_test.cc")
 
   if(NOT _test_sources)
     return()

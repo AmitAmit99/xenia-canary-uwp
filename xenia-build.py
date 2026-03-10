@@ -673,12 +673,15 @@ def get_clang_format_binary():
     sys.exit(1)
 
 
-def run_cmake_configure(build_type="Release", cc=None):
+def run_cmake_configure(build_type="Release", cc=None, build_tests=False,
+                        extra_args=None):
     """Runs cmake configure on the project.
 
     Args:
       build_type: Build configuration (Debug, Release, Checked).
       cc: C compiler to use (e.g. 'clang', 'gcc').
+      build_tests: If True, enables building test suites.
+      extra_args: Additional arguments to pass to cmake (e.g. -D flags).
 
     Returns:
       Return code from cmake.
@@ -698,6 +701,10 @@ def run_cmake_configure(build_type="Release", cc=None):
             f"-DCMAKE_C_COMPILER={c_compiler}",
             f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
         ]
+    if build_tests:
+        args += ["-DXENIA_BUILD_TESTS=ON"]
+    if extra_args:
+        args += extra_args
 
     ret = subprocess.call(args)
 
@@ -977,10 +984,14 @@ class PremakeCommand(Command):
             *args, **kwargs)
         self.parser.add_argument(
             "--cc", choices=["clang", "gcc", "msc"], default=None, help="Compiler toolchain")
+        self.parser.add_argument(
+            "--build-tests", action="store_true", default=False,
+            help="Enables building test suites.")
 
     def execute(self, args, pass_args, cwd):
         print("Running cmake configure...\n")
-        ret = run_cmake_configure(cc=args["cc"])
+        ret = run_cmake_configure(cc=args["cc"],
+                                  build_tests=args["build_tests"])
         print_status(ResultStatus.SUCCESS if not ret else ResultStatus.FAILURE)
 
         return ret
@@ -1008,13 +1019,24 @@ class BaseBuildCommand(Command):
         self.parser.add_argument(
             "--no_premake", action="store_true",
             help="Skips running cmake configure before building.")
+        self.parser.add_argument(
+            "--build-tests", action="store_true", default=False,
+            help="Enables building test suites.")
+        self.parser.add_argument(
+            "--cmake-define", dest="cmake_defines", action="append",
+            default=[], metavar="KEY=VALUE",
+            help="Pass a CMake define (e.g. --cmake-define CMAKE_CXX_FLAGS=/DUSE_BCRYPT_RSA).")
 
     def execute(self, args, pass_args, cwd):
         config = args["config"].title()
 
+        extra_args = [f"-D{d}" for d in args["cmake_defines"]]
+
         if not args["no_premake"]:
             print("- running cmake configure...")
-            run_cmake_configure(build_type=config, cc=args["cc"])
+            run_cmake_configure(build_type=config, cc=args["cc"],
+                                build_tests=args["build_tests"],
+                                extra_args=extra_args)
             print("")
 
         print("- building (%s):%s..." % (

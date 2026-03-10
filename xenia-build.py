@@ -1223,7 +1223,8 @@ class TestCommand(BaseBuildCommand):
         # The test executables that will be built and run.
         test_targets = args["target"] or [
             "xenia-base-tests",
-            "xenia-cpu-ppc-tests"
+            "xenia-cpu-tests",
+            "xenia-kernel-tests",
             ]
         args["target"] = test_targets
 

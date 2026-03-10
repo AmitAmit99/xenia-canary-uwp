@@ -11,13 +11,16 @@
 #define XENIA_KERNEL_XTHREAD_H_
 
 #include <atomic>
-#include <csetjmp>
 #include <string>
 
 #include "xenia/base/mutex.h"
 #if XE_PLATFORM_LINUX
 #include <condition_variable>
+#include <csignal>
 #include <mutex>
+#endif
+#if XE_PLATFORM_WIN32
+#include <csetjmp>
 #endif
 #include "xenia/base/threading.h"
 #include "xenia/cpu/thread.h"
@@ -340,6 +343,15 @@ struct X_KTHREAD {
 };
 static_assert_size(X_KTHREAD, 0xAB0);
 
+#if XE_PLATFORM_LINUX
+// Exception thrown by XThread::Reenter() to unwind through JIT frames.
+// C++ exception unwinding uses DWARF .eh_frame info registered for JIT code,
+// ensuring destructors and RAII guards in host C++ frames are properly called.
+struct FiberReentryException {
+  uint32_t address;
+};
+#endif
+
 class XThread : public XObject, public cpu::Thread {
  public:
   static const XObject::Type kObjectType = XObject::Type::Thread;
@@ -484,9 +496,14 @@ class XThread : public XObject, public cpu::Thread {
   std::condition_variable suspend_cv_;
 #endif
 
-  // Reentry context for setjmp/longjmp based stack unwinding
+  // Reentry mechanism for fiber-based stack switching.
+  // On Linux, C++ exceptions are used instead of setjmp/longjmp so that
+  // destructors and RAII guards in host C++ frames are properly unwound.
+  // JIT code has DWARF .eh_frame unwind info registered via __register_frame.
+#if XE_PLATFORM_WIN32
   std::jmp_buf reentry_jmp_buf_;
   uint32_t reentry_address_ = 0;
+#endif
 
   std::mutex thread_lock_;
 };

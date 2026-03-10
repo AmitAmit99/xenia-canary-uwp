@@ -9,6 +9,10 @@
 
 #include "xenia/kernel/xthread.h"
 
+#if XE_PLATFORM_LINUX
+#include <signal.h>
+#endif
+
 #include "xenia/base/byte_stream.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform.h"
@@ -541,29 +545,59 @@ void XThread::Execute() {
     want_exit_code = true;
   }
 
-  // Set up reentry jump buffer for fiber-based stack switching.
-  // When Reenter() is called (e.g., by KeSetCurrentStackPointers), it will
-  // longjmp back here instead of throwing an exception through JIT code.
+  // Set up reentry mechanism for fiber-based stack switching.
+  // When Reenter() is called (e.g., by KeSetCurrentStackPointers), it
+  // unwinds back here to re-enter at a new guest address.
+  //
+  // On Linux, C++ exceptions are used so that DWARF unwind info (registered
+  // for JIT code via __register_frame) allows proper destructor/RAII cleanup
+  // through both JIT and host C++ frames.
+  //
+  // On Windows, setjmp/longjmp is used because MSVC's longjmp performs SEH
+  // stack unwinding which already calls destructors.
   uint32_t next_address;
+#if XE_PLATFORM_LINUX
+  try {
+    exit_code = static_cast<int>(kernel_state()->processor()->Execute(
+        thread_state_, address, args.data(), args.size()));
+    next_address = 0;
+  } catch (const FiberReentryException& e) {
+    // Ensure SIGRTMIN (used for thread suspend) is not left blocked.
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGRTMIN);
+    pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
+    next_address = e.address;
+  }
+
+  while (next_address != 0) {
+    try {
+      kernel_state()->processor()->ExecuteRaw(thread_state_, next_address);
+      next_address = 0;
+      if (want_exit_code) {
+        exit_code = static_cast<int>(thread_state_->context()->r[3]);
+      }
+    } catch (const FiberReentryException& e) {
+      sigset_t set;
+      sigemptyset(&set);
+      sigaddset(&set, SIGRTMIN);
+      pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
+      next_address = e.address;
+    }
+  }
+#else
   if (setjmp(reentry_jmp_buf_) != 0) {
-    // Longjmp returned here - reentry requested
     next_address = reentry_address_;
   } else {
-    // Initial execution
     exit_code = static_cast<int>(kernel_state()->processor()->Execute(
         thread_state_, address, args.data(), args.size()));
     next_address = 0;
   }
 
-  // Handle reentry loop for fiber switching.
-  // See XThread::Reenter comments.
   while (next_address != 0) {
-    // Set up jump buffer for potential reentries during this execution
     if (setjmp(reentry_jmp_buf_) != 0) {
-      // Nested reentry occurred
       next_address = reentry_address_;
     } else {
-      // Execute at the reentry address
       kernel_state()->processor()->ExecuteRaw(thread_state_, next_address);
       next_address = 0;
       if (want_exit_code) {
@@ -571,6 +605,7 @@ void XThread::Execute() {
       }
     }
   }
+#endif
 
   // If we got here it means the execute completed without an exit being called.
   // Treat the return code as an implicit exit code (if desired).
@@ -578,12 +613,18 @@ void XThread::Execute() {
 }
 
 void XThread::Reenter(uint32_t address) {
-  // Use setjmp/longjmp instead of exceptions to avoid issues with unwinding
-  // through JIT-compiled code, which lacks exception handling metadata.
-  // This is called when the game switches fiber stacks (e.g., via
+  // Called when the game switches fiber stacks (e.g., via
   // KeSetCurrentStackPointers in games like Forza Horizon 2).
+  // Must unwind through all frames between here and Execute().
+#if XE_PLATFORM_LINUX
+  // Throw a C++ exception that unwinds through JIT frames (using DWARF
+  // .eh_frame info) and host frames (using compiler-generated DWARF),
+  // calling destructors properly along the way.
+  throw FiberReentryException{address};
+#else
   reentry_address_ = address;
   std::longjmp(reentry_jmp_buf_, 1);
+#endif
 }
 
 void XThread::EnterCriticalRegion() {

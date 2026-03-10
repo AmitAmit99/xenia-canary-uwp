@@ -16,6 +16,7 @@
 
 #include <pthread.h>
 #include <sched.h>
+#include <semaphore.h>
 #include <signal.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -572,6 +573,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
         exit_code_(0),
         state_(State::kUninitialized),
         suspend_count_(0) {
+    sem_init(&suspend_sem_, 0, 0);
 #if XE_PLATFORM_ANDROID
     android_pre_api_26_name_[0] = '\0';
 #endif
@@ -613,6 +615,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
         exit_code_(0),
         state_(State::kRunning),
         suspend_count_(0) {
+    sem_init(&suspend_sem_, 0, 0);
 #if XE_PLATFORM_ANDROID
     android_pre_api_26_name_[0] = '\0';
 #endif
@@ -802,9 +805,13 @@ class PosixCondition<Thread> final : public PosixConditionBase {
       *out_previous_suspend_count = suspend_count_;
     }
     --suspend_count_;
-    // If suspend count reaches 0, transition to running
+    // If suspend count reaches 0, transition to running and wake the thread
     if (suspend_count_ == 0 && state_ == State::kSuspended) {
       state_ = State::kRunning;
+      // Post to the semaphore to wake the thread from WaitSuspended.
+      // sem_post is async-signal-safe, so this is safe even if called
+      // from unusual contexts.
+      sem_post(&suspend_sem_);
     }
     state_signal_.notify_all();
     return true;
@@ -830,8 +837,8 @@ class PosixCondition<Thread> final : public PosixConditionBase {
 
     if (is_current_thread) {
       // Self-suspension: Instead of sending a signal, directly call
-      // WaitSuspended This avoids the signal handler complexity for the
-      // self-suspend case
+      // WaitSuspended. This avoids the signal handler complexity for the
+      // self-suspend case.
       WaitSuspended();
       return true;
     }
@@ -887,11 +894,16 @@ class PosixCondition<Thread> final : public PosixConditionBase {
                        [this] { return state_ != State::kUninitialized; });
   }
 
-  /// Set state to suspended and wait until it reset by another thread
+  /// Set state to suspended and wait until it is reset by another thread.
+  /// Uses sem_wait which is async-signal-safe, allowing this to be called
+  /// from a signal handler (e.g., the SIGRTMIN suspend signal handler)
+  /// without risking deadlock or heap corruption from non-reentrant
+  /// mutex/condvar operations.
   void WaitSuspended() {
-    std::unique_lock lock(state_mutex_);
-    state_signal_.wait(lock, [this] { return suspend_count_ == 0; });
-    state_ = State::kRunning;
+    int ret;
+    do {
+      ret = sem_wait(&suspend_sem_);
+    } while (ret == -1 && errno == EINTR);
   }
 
   void* native_handle() const override {
@@ -905,12 +917,14 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     if (thread_) {
       pthread_join(thread_, nullptr);
     }
+    sem_destroy(&suspend_sem_);
   }
   pthread_t thread_;
   bool signaled_;
   int exit_code_;
   State state_;             // Protected by state_mutex_
   uint32_t suspend_count_;  // Protected by state_mutex_
+  sem_t suspend_sem_;       // Async-signal-safe suspend/resume semaphore
   mutable std::mutex state_mutex_;
   mutable std::mutex callback_mutex_;
   mutable std::condition_variable state_signal_;

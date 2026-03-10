@@ -15,10 +15,6 @@
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
 
-#ifdef XE_PLATFORM_WIN32
-#include "xenia/base/platform_win.h"  // for bcrypt.h
-#endif
-
 #include "third_party/crypto/TinySHA1.hpp"
 #include "third_party/crypto/des/des.cpp"
 #include "third_party/crypto/des/des.h"
@@ -26,6 +22,7 @@
 #include "third_party/crypto/des/descbc.h"
 #include "third_party/crypto/sha256.cpp"
 #include "third_party/crypto/sha256.h"
+#include "xenia/kernel/xboxkrnl/xecrypt_rsa.h"
 
 extern "C" {
 #include "third_party/FFmpeg/libavutil/md5.h"
@@ -697,105 +694,17 @@ DECLARE_XBOXKRNL_EXPORT1(XeCryptBnQw_SwapDwQwLeBe, kNone, kImplemented);
 dword_result_t XeCryptBnQwNeRsaPubCrypt_entry(pointer_t<uint64_t> qw_a,
                                               pointer_t<uint64_t> qw_b,
                                               pointer_t<XECRYPT_RSA> rsa) {
-  // 0 indicates failure (but not a BOOL return value)
-#ifndef XE_PLATFORM_WIN32
-  XELOGE(
-      "XeCryptBnQwNeRsaPubCrypt called but no implementation available for "
-      "this platform!");
-  assert_always();
-  return 1;
-#else
-  uint32_t modulus_size = rsa->size * 8;
+  uint32_t num_qwords = rsa->size;
+  uint32_t exponent = rsa->public_exponent;
+  const uint8_t* input_bytes = reinterpret_cast<const uint8_t*>(&qw_a[0]);
+  uint8_t* output_bytes = reinterpret_cast<uint8_t*>(&qw_b[0]);
+  const uint8_t* mod_bytes =
+      reinterpret_cast<const uint8_t*>(&rsa[1]);  // modulus follows header
 
-  // Convert XECRYPT blob into BCrypt format
-  ULONG key_size = sizeof(BCRYPT_RSAKEY_BLOB) + sizeof(uint32_t) + modulus_size;
-  auto key_buf = std::make_unique<uint8_t[]>(key_size);
-  auto* key_header = reinterpret_cast<BCRYPT_RSAKEY_BLOB*>(key_buf.get());
-
-  key_header->Magic = BCRYPT_RSAPUBLIC_MAGIC;
-  key_header->BitLength = modulus_size * 8;
-  key_header->cbPublicExp = sizeof(uint32_t);
-  key_header->cbModulus = modulus_size;
-  key_header->cbPrime1 = key_header->cbPrime2 = 0;
-
-  // Copy in exponent/modulus, luckily these are BE inside BCrypt blob
-  uint32_t* key_exponent = reinterpret_cast<uint32_t*>(&key_header[1]);
-  *key_exponent = rsa->public_exponent.value;
-
-  // ...except modulus needs to be reversed in 64-bit chunks for BCrypt to make
-  // use of it properly for some reason
-  uint64_t* key_modulus = reinterpret_cast<uint64_t*>(&key_exponent[1]);
-  uint64_t* xecrypt_modulus = reinterpret_cast<uint64_t*>(&rsa[1]);
-  std::reverse_copy(xecrypt_modulus, xecrypt_modulus + rsa->size, key_modulus);
-
-  BCRYPT_ALG_HANDLE hAlgorithm = NULL;
-  NTSTATUS status = BCryptOpenAlgorithmProvider(
-      &hAlgorithm, BCRYPT_RSA_ALGORITHM, MS_PRIMITIVE_PROVIDER, 0);
-
-  if (!BCRYPT_SUCCESS(status)) {
-    XELOGE(
-        "XeCryptBnQwNeRsaPubCrypt: BCryptOpenAlgorithmProvider failed with "
-        "status {:#X}!",
-        status);
-    return 0;
-  }
-
-  BCRYPT_KEY_HANDLE hKey = NULL;
-  status = BCryptImportKeyPair(hAlgorithm, NULL, BCRYPT_RSAPUBLIC_BLOB, &hKey,
-                               key_buf.get(), key_size, 0);
-
-  if (!BCRYPT_SUCCESS(status)) {
-    XELOGE(
-        "XeCryptBnQwNeRsaPubCrypt: BCryptImportKeyPair failed with status "
-        "{:#X}!",
-        status);
-
-    if (hAlgorithm) {
-      BCryptCloseAlgorithmProvider(hAlgorithm, 0);
-    }
-
-    return 0;
-  }
-
-  // Byteswap & reverse the input into output, as BCrypt wants MSB first
-  uint64_t* output = qw_b;
-  uint8_t* output_bytes = reinterpret_cast<uint8_t*>(output);
-  xe::copy_and_swap<uint64_t>(output, qw_a, rsa->size);
-  std::reverse(output_bytes, output_bytes + modulus_size);
-
-  // BCryptDecrypt only works with private keys, fortunately BCryptEncrypt
-  // performs the right actions needed for us to decrypt the input
-  ULONG result_size = 0;
-  status =
-      BCryptEncrypt(hKey, output_bytes, modulus_size, nullptr, nullptr, 0,
-                    output_bytes, modulus_size, &result_size, BCRYPT_PAD_NONE);
-
-  assert(result_size == modulus_size);
-
-  if (!BCRYPT_SUCCESS(status)) {
-    XELOGE("XeCryptBnQwNeRsaPubCrypt: BCryptEncrypt failed with status {:#X}!",
-           status);
-  } else {
-    // Reverse data & byteswap again so data is as game expects
-    std::reverse(output_bytes, output_bytes + modulus_size);
-    xe::copy_and_swap(output, output, rsa->size);
-  }
-
-  if (hKey) {
-    BCryptDestroyKey(hKey);
-  }
-  if (hAlgorithm) {
-    BCryptCloseAlgorithmProvider(hAlgorithm, 0);
-  }
-
-  return BCRYPT_SUCCESS(status) ? 1 : 0;
-#endif
+  return XeCryptBnQwNeRsaPubCrypt(input_bytes, output_bytes, mod_bytes,
+                                  num_qwords, exponent);
 }
-#ifdef XE_PLATFORM_WIN32
 DECLARE_XBOXKRNL_EXPORT1(XeCryptBnQwNeRsaPubCrypt, kNone, kImplemented);
-#else
-DECLARE_XBOXKRNL_EXPORT1(XeCryptBnQwNeRsaPubCrypt, kNone, kStub);
-#endif
 
 dword_result_t XeCryptBnQwBeSigVerify_entry(pointer_t<XECRYPT_SIG> sig,
                                             lpvoid_t hash, lpstring_t salt,

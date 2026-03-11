@@ -582,8 +582,8 @@ dword_result_t RtlInitializeCriticalSectionAndSpinCount_entry(
   return xeRtlInitializeCriticalSectionAndSpinCount(cs, cs.guest_address(),
                                                     spin_count);
 }
-DECLARE_XBOXKRNL_EXPORT1(RtlInitializeCriticalSectionAndSpinCount, kNone,
-                         kImplemented);
+DECLARE_XBOXKRNL_EXPORT2(RtlInitializeCriticalSectionAndSpinCount, kNone,
+                         kImplemented, kHighFrequency);
 
 static void CriticalSectionPrefetchW(const void* vp) {
 #if XE_ARCH_AMD64 == 1

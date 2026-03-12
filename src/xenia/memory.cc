@@ -1932,7 +1932,13 @@ bool PhysicalHeap::TriggerCallbacks(
     }
   }
   if (!any_watched) {
-    return false;
+    // No watches on this page — another thread already cleared them (race
+    // condition between the fault firing and acquiring the lock). Return true
+    // so the faulting instruction retries; the page is now unprotected and the
+    // access will succeed. This is the signal-safe equivalent of the
+    // QueryProtect check in the non-Linux path of
+    // MMIOHandler::ExceptionCallback.
+    return true;
   }
 
   // Trigger callbacks.

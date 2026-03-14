@@ -271,18 +271,8 @@ inline T fpfs(const std::string_view value, bool force_hex) {
     }
     std::memcpy(&result, &pun, sizeof(PUN));
   } else {
-#if XE_COMPILER_CLANG || XE_COMPILER_GNUC
     auto temp = std::string(range);
-    result = std::strtod(temp.c_str(), nullptr);
-#else
-    auto [p, error] = std::from_chars(range.data(), range.data() + range.size(),
-                                      result, std::chars_format::general);
-    // TODO(gibbed): do something more with errors?
-    if (error != std::errc()) {
-      assert_always();
-      return T();
-    }
-#endif
+    result = static_cast<T>(std::strtod(temp.c_str(), nullptr));
     if (is_negative) {
       result = -result;
     }

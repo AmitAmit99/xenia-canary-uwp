@@ -39,15 +39,14 @@ void CreateProfileUI::OnDraw(ImGuiIO& io) {
   }
 
   ImGui::TextUnformatted("Gamertag:");
-  ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_));
+  if (ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_))) {
+    valid_gamertag_ = profile_manager->IsGamertagValid(std::string(gamertag_));
+  }
 
-  const std::string gamertag_string = std::string(gamertag_);
-  bool valid = profile_manager->IsGamertagValid(gamertag_string);
-
-  ImGui::BeginDisabled(!valid);
+  ImGui::BeginDisabled(!valid_gamertag_);
   if (ImGui::Button("Create")) {
     bool autologin = (profile_manager->GetAccountCount() == 0);
-    if (profile_manager->CreateProfile(gamertag_string, autologin,
+    if (profile_manager->CreateProfile(std::string(gamertag_), autologin,
                                        migration_) &&
         migration_) {
       emulator_->DataMigration(0xB13EBABEBABEBABE);

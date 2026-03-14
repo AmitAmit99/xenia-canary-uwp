@@ -148,14 +148,14 @@ void SigninUI::OnDraw(ImGuiIO& io) {
         }
 
         ImGui::TextUnformatted("Gamertag:");
-        ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_));
+        if (ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_))) {
+          valid_gamertag_ =
+              profile_manager_->IsGamertagValid(std::string(gamertag_));
+        }
 
-        const std::string gamertag_string = gamertag_;
-        bool valid = profile_manager_->IsGamertagValid(gamertag_string);
-
-        ImGui::BeginDisabled(!valid);
+        ImGui::BeginDisabled(!valid_gamertag_);
         if (ImGui::Button("Create")) {
-          profile_manager_->CreateProfile(gamertag_string, false);
+          profile_manager_->CreateProfile(std::string(gamertag_), false);
           std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
           ImGui::CloseCurrentPopup();
           creating_profile_ = false;

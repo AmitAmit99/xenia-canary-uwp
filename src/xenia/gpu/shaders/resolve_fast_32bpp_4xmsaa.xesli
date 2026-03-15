@@ -42,27 +42,35 @@ entry_inputs_end_code_begin_compute_xe
       kXenosMsaaSamples_4X, resolve_info.edram_is_depth, 0u,
       XeResolveFirstSampleIndex(resolve_info.sample_select),
       resolve_info.resolution_scale);
+  // For 32bpp 4xMSAA, samples 0 and 1 are at consecutive int positions
+  // (horizontally adjacent in the sample grid). Each Load4 reads 4 consecutive
+  // samples spanning 2 pixels. Samples 0/1 (sample_select 0/1) produce a
+  // 16-byte-aligned address, but samples 2/3 (sample_select 2/3) add a +4 byte
+  // offset (the horizontal sample offset in the EDRAM tile). Align the load
+  // address down to 16 bytes and select the correct pair via swizzle: .xz for
+  // aligned (samples 0/1 at positions 0,2 within the uint4), .yw for
+  // offset-by-4 (samples 2/3 at positions 1,3 within the uint4).
+  uint source_address_aligned = source_address & ~15u;
   uint4_xe pixels_0123, pixels_4567;
   dont_flatten_xe
-  if (resolve_info.sample_select != kXenosCopySampleSelect_2 &&
-      resolve_info.sample_select != kXenosCopySampleSelect_3) {
+  if ((source_address & 15u) == 0u) {
     pixels_0123.xy = byte_buffer_align16_load16_xe(xe_resolve_edram,
-                                                   source_address).xz;
+                                                   source_address_aligned).xz;
     pixels_0123.zw = byte_buffer_align16_load16_xe(xe_resolve_edram,
-                                                   source_address + 0x10u).xz;
+                                                   source_address_aligned + 0x10u).xz;
     pixels_4567.xy = byte_buffer_align16_load16_xe(xe_resolve_edram,
-                                                   source_address + 0x20u).xz;
+                                                   source_address_aligned + 0x20u).xz;
     pixels_4567.zw = byte_buffer_align16_load16_xe(xe_resolve_edram,
-                                                   source_address + 0x30u).xz;
+                                                   source_address_aligned + 0x30u).xz;
   } else {
     pixels_0123.xy = byte_buffer_align16_load16_xe(xe_resolve_edram,
-                                                   source_address).yw;
+                                                   source_address_aligned).yw;
     pixels_0123.zw = byte_buffer_align16_load16_xe(xe_resolve_edram,
-                                                   source_address + 0x10u).yw;
+                                                   source_address_aligned + 0x10u).yw;
     pixels_4567.xy = byte_buffer_align16_load16_xe(xe_resolve_edram,
-                                                   source_address + 0x20u).yw;
+                                                   source_address_aligned + 0x20u).yw;
     pixels_4567.zw = byte_buffer_align16_load16_xe(xe_resolve_edram,
-                                                   source_address + 0x30u).yw;
+                                                   source_address_aligned + 0x30u).yw;
   }
   dont_flatten_xe
   if (pixel_index.x == 0u &&

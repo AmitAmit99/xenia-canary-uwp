@@ -32,6 +32,7 @@ bool IsWritableExecutableMemoryPreferred() {
 
 using xe::swcache::CacheLine;
 
+#if XE_ARCH_AMD64
 static constexpr unsigned NUM_CACHELINES_IN_PAGE = 4096 / sizeof(CacheLine);
 
 #if defined(__clang__)
@@ -216,6 +217,13 @@ void vastcpy(uint8_t* XE_RESTRICT physaddr, uint8_t* XE_RESTRICT rdmapping,
   return vastcpy_dispatch((CacheLine*)physaddr, (CacheLine*)rdmapping,
                           written_length);
 }
+#else   // !XE_ARCH_AMD64
+XE_NOINLINE
+void vastcpy(uint8_t* XE_RESTRICT physaddr, uint8_t* XE_RESTRICT rdmapping,
+             uint32_t written_length) {
+  std::memcpy(physaddr, rdmapping, written_length);
+}
+#endif  // XE_ARCH_AMD64
 }  // namespace memory
 
 // TODO(benvanik): fancy AVX versions.

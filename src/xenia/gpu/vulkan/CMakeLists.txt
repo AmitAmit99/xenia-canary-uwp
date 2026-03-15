@@ -28,7 +28,7 @@ if(XENIA_BUILD_MISC)
   )
   target_link_libraries(xenia-gpu-vulkan-trace-viewer PRIVATE
     xenia-apu xenia-apu-nop xenia-base xenia-core xenia-cpu
-    xenia-gpu xenia-gpu-vulkan xenia-hid xenia-hid-nop xenia-hid-skylander
+    xenia-gpu xenia-gpu-vulkan xenia-hid xenia-hid-nop
     xenia-kernel xenia-patcher xenia-ui xenia-ui-vulkan xenia-vfs
     aes_128 capstone fmt glslang-spirv imgui libavcodec libavutil mspack snappy xxhash
   )
@@ -57,7 +57,7 @@ if(XENIA_BUILD_MISC)
   )
   target_link_libraries(xenia-gpu-vulkan-trace-dump PRIVATE
     xenia-apu xenia-apu-nop xenia-base xenia-core xenia-cpu
-    xenia-gpu xenia-gpu-vulkan xenia-hid xenia-hid-nop xenia-hid-skylander
+    xenia-gpu xenia-gpu-vulkan xenia-hid xenia-hid-nop
     xenia-kernel xenia-patcher xenia-ui xenia-ui-vulkan xenia-vfs
     aes_128 capstone fmt glslang-spirv imgui libavcodec libavutil mspack snappy xxhash
   )

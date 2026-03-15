@@ -825,14 +825,24 @@ class PosixCondition<Thread> final : public PosixConditionBase {
 
     // Check if we're trying to suspend ourselves
     bool is_current_thread = pthread_self() == thread_;
+    bool already_suspended = false;
 
     {
       std::unique_lock lock(state_mutex_);
       if (out_previous_suspend_count) {
         *out_previous_suspend_count = suspend_count_;
       }
+      already_suspended = (state_ == State::kSuspended);
       state_ = State::kSuspended;
       ++suspend_count_;
+    }
+
+    // If already suspended, just increment the count — don't send another
+    // signal. A second pthread_kill while the thread is in sem_wait would
+    // nest signal handlers and create multiple outstanding sem_waits, but
+    // Resume only posts once when count reaches 0.
+    if (already_suspended) {
+      return true;
     }
 
     if (is_current_thread) {

@@ -869,17 +869,20 @@ void Value::Permute(Value* src1, Value* src2, TypeName type) {
       perm.u8[i * 2] = v * 2;
       perm.u8[i * 2 + 1] = v * 2 + 1;
     }
-    auto lod = [](const vec128_t& v) {
-      return _mm_loadu_si128((const __m128i*)&v);
-    };
-    auto sto = [](vec128_t& v, __m128i x) {
-      return _mm_storeu_si128((__m128i*)&v, x);
+    // Shuffle bytes: for each byte in perm, select from src
+    // (equivalent to _mm_shuffle_epi8)
+    auto shuffle_bytes = [](const vec128_t& src, const vec128_t& idx,
+                            vec128_t& out) {
+      for (int i = 0; i < 16; i++) {
+        uint8_t sel = idx.u8[i];
+        out.u8[i] = (sel & 0x80) ? 0 : src.u8[sel & 0xF];
+      }
     };
 
-    __m128i xmm1 = lod(src1->constant.v128);
-    __m128i xmm2 = lod(src2->constant.v128);
-    xmm1 = _mm_shuffle_epi8(xmm1, lod(perm));
-    xmm2 = _mm_shuffle_epi8(xmm2, lod(perm));
+    vec128_t shuf1, shuf2;
+    shuffle_bytes(src1->constant.v128, perm, shuf1);
+    shuffle_bytes(src2->constant.v128, perm, shuf2);
+
     uint8_t mask = 0;
     for (int i = 0; i < 8; i++) {
       if (perm_ctrl.i16[i] == 0) {
@@ -887,14 +890,14 @@ void Value::Permute(Value* src1, Value* src2, TypeName type) {
       }
     }
 
-    vec128_t unp_mask = vec128b(0);
+    // Blend: select from shuf1 where mask bit is set, shuf2 otherwise
     for (int i = 0; i < 8; i++) {
       if (mask & (1 << i)) {
-        unp_mask.u16[i] = 0xFFFF;
+        constant.v128.u16[i] = shuf1.u16[i];
+      } else {
+        constant.v128.u16[i] = shuf2.u16[i];
       }
     }
-
-    sto(constant.v128, _mm_blendv_epi8(xmm1, xmm2, lod(unp_mask)));
 
   } else {
     assert_unhandled_case(type);

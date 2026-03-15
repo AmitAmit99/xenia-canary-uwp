@@ -31,7 +31,6 @@ using xe::cpu::ppc::PPCContext;
 class TestFunction {
  public:
   TestFunction(std::function<void(hir::HIRBuilder& b)> generator) {
-    memory_size = 16 * 1024 * 1024;
     memory.reset(new Memory());
     memory->Initialize();
 
@@ -71,10 +70,10 @@ class TestFunction {
       auto fn = processor->ResolveFunction(0x80000000);
 
       uint32_t stack_size = 64 * 1024;
-      uint32_t stack_address = memory_size - stack_size;
-      uint32_t thread_state_address = stack_address - 0x1000;
-      auto thread_state = std::make_unique<ThreadState>(processor.get(), 0x100);
-      assert_always();  // TODO: Allocate a thread stack!!!
+      uint32_t stack_address = memory->SystemHeapAlloc(stack_size);
+      uint32_t stack_base = stack_address + stack_size;
+      auto thread_state =
+          std::make_unique<ThreadState>(processor.get(), 0x100, stack_base);
       auto ctx = thread_state->context();
       ctx->lr = 0xBCBCBCBC;
 
@@ -83,10 +82,12 @@ class TestFunction {
       fn->Call(thread_state.get(), uint32_t(ctx->lr));
 
       post_call(ctx);
+
+      thread_state.reset();
+      memory->SystemHeapFree(stack_address);
     }
   }
 
-  uint32_t memory_size;
   std::unique_ptr<Memory> memory;
   std::vector<std::unique_ptr<Processor>> processors;
 };

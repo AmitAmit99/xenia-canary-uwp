@@ -11,7 +11,14 @@
 
 #include "third_party/imgui/imgui.h"
 #include "third_party/stb/stb_image_write.h"
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wabsolute-value"
+#endif
 #include "third_party/tomlplusplus/toml.hpp"
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #include "xenia/base/assert.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"

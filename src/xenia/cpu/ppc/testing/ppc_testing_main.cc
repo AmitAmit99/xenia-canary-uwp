@@ -569,7 +569,7 @@ void ProtectedRunTest(TestSuite& test_suite, TestRunner& runner,
                       TestCase& test_case, int& failed_count,
                       int& passed_count) {
 #if XE_COMPILER_MSVC
-  __try {
+  try {
     if (!runner.Setup(test_suite)) {
       fprintf(stderr, "  [%s] FAILED SETUP\n", test_case.name.c_str());
       fflush(stderr);
@@ -583,9 +583,9 @@ void ProtectedRunTest(TestSuite& test_suite, TestRunner& runner,
       fflush(stderr);
       ++failed_count;
     }
-  } __except (filter(GetExceptionCode())) {
-    fprintf(stderr, "  [%s] FAILED (UNSUPPORTED INSTRUCTION)\n",
-            test_case.name.c_str());
+  } catch (const std::exception& e) {
+    fprintf(stderr, "  [%s] CRASHED (C++ exception: %s)\n",
+            test_case.name.c_str(), e.what());
     fflush(stderr);
     ++failed_count;
   }

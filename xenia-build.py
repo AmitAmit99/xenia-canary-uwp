@@ -946,9 +946,8 @@ class PullCommand(Command):
             "checkout",
             default_branch,
             ])
-        print("")
 
-        print("- pulling self...")
+        print("\n- pulling self...")
         if args["merge"]:
             shell_call([
                 "git",
@@ -963,9 +962,8 @@ class PullCommand(Command):
 
         print("\n- pulling dependencies...")
         git_submodule_update()
-        print("")
 
-        print("- running cmake configure...")
+        print("\n- running cmake configure...")
         if run_cmake_configure() == 0:
             print_status(ResultStatus.SUCCESS)
 

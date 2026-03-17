@@ -1636,8 +1636,11 @@ void D3D12CommandProcessor::ShutdownContext() {
 XE_FORCEINLINE
 void D3D12CommandProcessor::WriteRegisterForceinline(uint32_t index,
                                                      uint32_t value) {
+  // Parallel range check: is index within any of these GPU register ranges?
+  // Each range maps to a bit in movmask (by byte pair position).
+  register_file_->values[index] = value;
+#if XE_ARCH_AMD64
   __m128i to_rangecheck = _mm_set1_epi16(static_cast<short>(index));
-
   __m128i lower_bounds = _mm_setr_epi16(
       XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 - 1,
       XE_GPU_REG_SHADER_CONSTANT_000_X - 1,
@@ -1648,25 +1651,33 @@ void D3D12CommandProcessor::WriteRegisterForceinline(uint32_t index,
       XE_GPU_REG_SHADER_CONSTANT_511_W + 1,
       XE_GPU_REG_SHADER_CONSTANT_LOOP_31 + 1, XE_GPU_REG_SCRATCH_REG7 + 1,
       XE_GPU_REG_COHER_STATUS_HOST + 1, XE_GPU_REG_DC_LUT_30_COLOR + 1, 0, 0);
-
-  // quick pre-test
-  // todo: figure out just how unlikely this is. if very (it ought to be,
-  // theres a ton of registers other than these) make this predicate
-  // branchless and mark with unlikely, then make HandleSpecialRegisterWrite
-  // noinline yep, its very unlikely. these ORS here are meant to be bitwise
-  // ors, so that we do not do branching evaluation of the conditions (we will
-  // almost always take all of the branches)
-  /* unsigned expr =
-      (index - XE_GPU_REG_SCRATCH_REG0 < 8) |
-                  (index == XE_GPU_REG_COHER_STATUS_HOST) |
-                  ((index - XE_GPU_REG_DC_LUT_RW_INDEX) <=
-                   (XE_GPU_REG_DC_LUT_30_COLOR - XE_GPU_REG_DC_LUT_RW_INDEX));*/
   __m128i is_above_lower = _mm_cmpgt_epi16(to_rangecheck, lower_bounds);
   __m128i is_below_upper = _mm_cmplt_epi16(to_rangecheck, upper_bounds);
   __m128i is_within_range = _mm_and_si128(is_above_lower, is_below_upper);
-  register_file_->values[index] = value;
-
   uint32_t movmask = static_cast<uint32_t>(_mm_movemask_epi8(is_within_range));
+#else
+  auto in_range = [index](uint32_t lo, uint32_t hi) -> uint32_t {
+    return (index > lo && index < hi) ? 0x3 : 0;
+  };
+  uint32_t movmask = 0;
+  movmask |= in_range(XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 - 1,
+                      XE_GPU_REG_SHADER_CONSTANT_FETCH_31_5 + 1)
+             << 0;
+  movmask |= in_range(XE_GPU_REG_SHADER_CONSTANT_000_X - 1,
+                      XE_GPU_REG_SHADER_CONSTANT_511_W + 1)
+             << 2;
+  movmask |= in_range(XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031 - 1,
+                      XE_GPU_REG_SHADER_CONSTANT_LOOP_31 + 1)
+             << 4;
+  movmask |= in_range(XE_GPU_REG_SCRATCH_REG0 - 1, XE_GPU_REG_SCRATCH_REG7 + 1)
+             << 6;
+  movmask |= in_range(XE_GPU_REG_COHER_STATUS_HOST - 1,
+                      XE_GPU_REG_COHER_STATUS_HOST + 1)
+             << 8;
+  movmask |=
+      in_range(XE_GPU_REG_DC_LUT_RW_INDEX - 1, XE_GPU_REG_DC_LUT_30_COLOR + 1)
+      << 10;
+#endif
 
   if (movmask) {
     if (movmask & (1 << 3)) {

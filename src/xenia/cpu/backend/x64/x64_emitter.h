@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "xenia/base/arena.h"
+#include "xenia/cpu/backend/code_cache_base.h"
 #include "xenia/cpu/function.h"
 #include "xenia/cpu/function_trace_data.h"
 #include "xenia/cpu/hir/hir_builder.h"
@@ -37,8 +38,6 @@ namespace x64 {
 using namespace amd64;
 class X64Backend;
 class X64CodeCache;
-
-struct EmitFunctionInfo;
 
 enum RegisterFlags {
   REG_DEST = (1 << 0),

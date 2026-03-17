@@ -44,12 +44,14 @@ TEST_CASE("SET_ROUNDING_MODE_TOWARD_POS_INF", "[instr]") {
         // 2^-24 = 5.960464477539063e-08
         ctx->f[5] = std::ldexp(1.0, -24);
       },
-      [](PPCContext* ctx) {
+      [&test](PPCContext* ctx) {
         auto result = static_cast<float>(ctx->f[3]);
         // With round-toward-positive-infinity, 1.0f + 2^-24 should round
         // up to the next representable float above 1.0f.
         float expected = std::nextafterf(1.0f, 2.0f);
         REQUIRE(result == expected);
+        // Reset to nearest so subsequent tests aren't affected.
+        test.processors[0]->backend()->SetGuestRoundingMode(ctx, 0);
       });
 }
 
@@ -69,10 +71,12 @@ TEST_CASE("SET_ROUNDING_MODE_TOWARD_ZERO", "[instr]") {
         ctx->f[4] = 1.0;
         ctx->f[5] = std::ldexp(1.0, -24);
       },
-      [](PPCContext* ctx) {
+      [&test](PPCContext* ctx) {
         auto result = static_cast<float>(ctx->f[3]);
         // With round-toward-zero, 1.0f + 2^-24 should truncate to 1.0f.
         REQUIRE(result == 1.0f);
+        // Reset to nearest so subsequent tests aren't affected.
+        test.processors[0]->backend()->SetGuestRoundingMode(ctx, 0);
       });
 }
 

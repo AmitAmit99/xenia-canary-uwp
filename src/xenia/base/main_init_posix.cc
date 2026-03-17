@@ -6,6 +6,10 @@
 * Released under the BSD license - see LICENSE in the root for more details. *
 ******************************************************************************
 */
+
+#include "xenia/base/platform.h"
+
+#if XE_ARCH_AMD64
 #include <gdk/gdk.h>
 #include <gtk/gtk.h>
 #include <xbyak/xbyak/xbyak_util.h>
@@ -44,3 +48,4 @@ class StartupCpuFeatureCheck {
 // https://reviews.llvm.org/D12689#243295
 __attribute__((
     init_priority(101))) static StartupCpuFeatureCheck gStartupAvxCheck;
+#endif  // XE_ARCH_AMD64

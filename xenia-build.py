@@ -1935,9 +1935,13 @@ class DevenvCommand(Command):
                 "-A", "x64",
                 "-DXENIA_BUILD_TESTS=ON",
             ])
-            sln_path = os.path.join(vs_build_dir, "xenia.sln")
-            print(f"Opening {sln_path} in Visual Studio...")
-            shell_call(["devenv", sln_path])
+            # Since VS 2026 default solution extension is slnx.
+            slnx_path = os.path.join(vs_build_dir, "xenia.slnx")
+            if not os.path.exists(slnx_path):
+                slnx_path = os.path.join(vs_build_dir, "xenia.sln")
+
+            print(f"Opening {slnx_path} in Visual Studio...")
+            shell_call(["devenv", slnx_path])
         elif has_bin("clion"):
             shell_call(["clion", "."])
         elif has_bin("clion.sh"):

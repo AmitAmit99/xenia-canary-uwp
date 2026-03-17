@@ -122,6 +122,10 @@ if(MSVC)
   add_compile_definitions($<$<CONFIG:Release>:_NO_DEBUG_HEAP=1>)
   add_compile_options($<$<CONFIG:Release>:/Gw>)
   add_compile_options($<$<CONFIG:Release>:/GS->)  # NoBufferSecurityCheck
+  add_compile_options($<$<CONFIG:Release>:/Zi>)    # Generate PDB debug info
+  add_link_options($<$<CONFIG:Release>:/DEBUG>)     # Emit .pdb for the linked binary
+  add_link_options($<$<CONFIG:Release>:/OPT:REF>)   # Remove unreferenced functions/data
+  add_link_options($<$<CONFIG:Release>:/OPT:ICF>)   # Fold identical COMDATs
   # Replace /Ob2 with /Ob3 in CMake's default Release flags
   string(REPLACE "/Ob2" "/Ob3" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
   string(REPLACE "/Ob2" "/Ob3" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")

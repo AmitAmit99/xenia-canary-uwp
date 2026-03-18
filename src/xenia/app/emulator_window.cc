@@ -337,6 +337,7 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
                         ImGuiWindowFlags_AlwaysAutoResize |
                         ImGuiWindowFlags_HorizontalScrollbar)) {
     ImGui::End();
+    Close();
     return;
   }
 
@@ -567,6 +568,7 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
   ImGui::End();
 
   if (!dialog_open) {
+    Close();
     emulator_window_.ToggleDisplayConfigDialog();
     // `this` might have been destroyed by ToggleDisplayConfigDialog.
     return;
@@ -1539,10 +1541,14 @@ void EmulatorWindow::ToggleFullscreen() {
 
 void EmulatorWindow::ToggleDisplayConfigDialog() {
   if (!display_config_dialog_) {
-    display_config_dialog_ = std::unique_ptr<DisplayConfigDialog>(
-        new DisplayConfigDialog(imgui_drawer_.get(), *this));
+    display_config_dialog_ =
+        std::make_unique<DisplayConfigDialog>(imgui_drawer_.get(), *this);
   } else {
-    display_config_dialog_.reset();
+    if (display_config_dialog_->IsClosing()) {
+      display_config_dialog_.release();
+    } else {
+      display_config_dialog_.reset();
+    }
   }
 }
 

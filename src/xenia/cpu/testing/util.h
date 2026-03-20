@@ -77,6 +77,10 @@ class TestFunction {
       auto ctx = thread_state->context();
       ctx->lr = 0xBCBCBCBC;
 
+      // Reset hardware FPU rounding mode to nearest before each run,
+      // in case a prior test left it dirty.
+      processor->backend()->SetGuestRoundingMode(ctx, 0);
+
       pre_call(ctx);
 
       fn->Call(thread_state.get(), uint32_t(ctx->lr));

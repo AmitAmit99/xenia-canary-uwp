@@ -458,3 +458,196 @@ TEST_CASE("MULTIPLE_BUILTIN_CALLS", "[backend]") {
 
   memory->SystemHeapFree(stack_address);
 }
+
+// =============================================================================
+// NJM (Non-Java Mode) default initialization
+// =============================================================================
+// Tests that the backend context initializes with NJM enabled by default,
+// matching x64 behavior. NJM controls flush-to-zero for denormals.
+static uint32_t observed_njm_flags = 0;
+static void ReadBackendFlags(ppc::PPCContext* ctx, void* arg0, void* arg1) {
+  // Read the backend flags from the backend context, which lives just
+  // before the PPCContext in memory.
+#if XE_ARCH_AMD64
+  auto* bctx = reinterpret_cast<xe::cpu::backend::x64::X64BackendContext*>(
+      reinterpret_cast<intptr_t>(ctx) -
+      sizeof(xe::cpu::backend::x64::X64BackendContext));
+  observed_njm_flags = bctx->flags;
+#elif XE_ARCH_ARM64
+  auto* bctx = reinterpret_cast<xe::cpu::backend::a64::A64BackendContext*>(
+      reinterpret_cast<intptr_t>(ctx) -
+      sizeof(xe::cpu::backend::a64::A64BackendContext));
+  observed_njm_flags = bctx->flags;
+#endif
+}
+
+TEST_CASE("NJM_DEFAULT_ON", "[backend]") {
+  observed_njm_flags = 0;
+
+  auto memory = std::make_unique<Memory>();
+  memory->Initialize();
+
+  std::unique_ptr<xe::cpu::backend::Backend> backend;
+#if XE_ARCH_AMD64
+  backend.reset(new xe::cpu::backend::x64::X64Backend());
+#elif XE_ARCH_ARM64
+  backend.reset(new xe::cpu::backend::a64::A64Backend());
+#endif
+  REQUIRE(backend);
+
+  auto processor = std::make_unique<Processor>(memory.get(), nullptr);
+  processor->Setup(std::move(backend));
+
+  auto* builtin_fn = processor->DefineBuiltin(
+      "ReadBackendFlags", ReadBackendFlags, nullptr, nullptr);
+
+  auto module = std::make_unique<TestModule>(
+      processor.get(), "Test",
+      [](uint32_t address) { return address == 0x80000000; },
+      [builtin_fn](HIRBuilder& b) {
+        b.CallExtern(builtin_fn);
+        b.Return();
+        return true;
+      },
+      /*skip_cf_simplification=*/true);
+  processor->AddModule(std::move(module));
+  processor->backend()->CommitExecutableRange(0x80000000, 0x80010000);
+
+  auto fn = processor->ResolveFunction(0x80000000);
+  REQUIRE(fn != nullptr);
+
+  uint32_t stack_size = 64 * 1024;
+  uint32_t stack_address = memory->SystemHeapAlloc(stack_size);
+  auto thread_state = std::make_unique<ThreadState>(processor.get(), 0x100,
+                                                    stack_address + stack_size);
+  auto ctx = thread_state->context();
+  ctx->lr = 0xBCBCBCBC;
+
+  fn->Call(thread_state.get(), uint32_t(ctx->lr));
+
+  // NJM bit (bit 2) should be set by default.
+#if XE_ARCH_AMD64
+  REQUIRE((observed_njm_flags &
+           (1U << xe::cpu::backend::x64::kX64BackendNJMOn)) != 0);
+#elif XE_ARCH_ARM64
+  REQUIRE((observed_njm_flags &
+           (1U << xe::cpu::backend::a64::kA64BackendNJMOn)) != 0);
+#endif
+
+  memory->SystemHeapFree(stack_address);
+}
+
+// =============================================================================
+// Atomic Exchange I32
+// =============================================================================
+// Tests that AtomicExchange correctly swaps a value in memory and returns
+// the old value.
+// NOTE: OPCODE_ATOMIC_EXCHANGE uses a HOST address (not guest), per the
+// x64 backend comment: "the address we use here is a real, host address!"
+TEST_CASE("ATOMIC_EXCHANGE_I32", "[backend]") {
+  TestFunction test([](HIRBuilder& b) {
+    // r[4] holds the host address directly.
+    auto addr = LoadGPR(b, 4);
+    auto new_val = b.Truncate(LoadGPR(b, 5), hir::INT32_TYPE);
+    auto old_val = b.AtomicExchange(addr, new_val);
+    StoreGPR(b, 3, b.ZeroExtend(old_val, hir::INT64_TYPE));
+    b.Return();
+  });
+
+  // Allocate guest memory and compute the host pointer.
+  uint32_t guest_addr = test.memory->SystemHeapAlloc(4);
+  REQUIRE(guest_addr != 0);
+  auto* host_ptr = test.memory->TranslateVirtual(guest_addr);
+
+  test.Run(
+      [&](PPCContext* ctx) {
+        *reinterpret_cast<uint32_t*>(host_ptr) = 0xAABBCCDD;
+        // Pass the HOST address in r[4].
+        ctx->r[4] = reinterpret_cast<uint64_t>(host_ptr);
+        ctx->r[5] = 0x11223344;
+      },
+      [&](PPCContext* ctx) {
+        // r[3] should have the old value.
+        REQUIRE(static_cast<uint32_t>(ctx->r[3]) == 0xAABBCCDD);
+        // Memory should now have the new value.
+        REQUIRE(*reinterpret_cast<uint32_t*>(host_ptr) == 0x11223344);
+      });
+
+  test.memory->SystemHeapFree(guest_addr);
+}
+
+// =============================================================================
+// DOT_PRODUCT_3 — inline NEON dot product of first 3 vector elements
+// =============================================================================
+TEST_CASE("DOT_PRODUCT_3", "[backend]") {
+  TestFunction test([](HIRBuilder& b) {
+    auto src1 = LoadVR(b, 10);
+    auto src2 = LoadVR(b, 11);
+    auto result = b.DotProduct3(src1, src2);
+    StoreVR(b, 3, result);
+    b.Return();
+  });
+
+  // Simple case: (1,2,3,ignored) . (4,5,6,ignored) = 1*4+2*5+3*6 = 32
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->v[10] = vec128f(1.0f, 2.0f, 3.0f, 99.0f);
+        ctx->v[11] = vec128f(4.0f, 5.0f, 6.0f, 99.0f);
+      },
+      [](PPCContext* ctx) {
+        REQUIRE(ctx->v[3].f32[0] == 32.0f);
+        REQUIRE(ctx->v[3].f32[1] == 32.0f);
+        REQUIRE(ctx->v[3].f32[2] == 32.0f);
+        REQUIRE(ctx->v[3].f32[3] == 32.0f);
+      });
+
+  // Zero vector.
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->v[10] = vec128f(0.0f, 0.0f, 0.0f, 0.0f);
+        ctx->v[11] = vec128f(1.0f, 2.0f, 3.0f, 4.0f);
+      },
+      [](PPCContext* ctx) { REQUIRE(ctx->v[3].f32[0] == 0.0f); });
+
+  // Element 4 should be ignored.
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->v[10] = vec128f(1.0f, 0.0f, 0.0f, 1000.0f);
+        ctx->v[11] = vec128f(1.0f, 0.0f, 0.0f, 1000.0f);
+      },
+      [](PPCContext* ctx) { REQUIRE(ctx->v[3].f32[0] == 1.0f); });
+}
+
+// =============================================================================
+// DOT_PRODUCT_4 — inline NEON dot product of all 4 vector elements
+// =============================================================================
+TEST_CASE("DOT_PRODUCT_4", "[backend]") {
+  TestFunction test([](HIRBuilder& b) {
+    auto src1 = LoadVR(b, 10);
+    auto src2 = LoadVR(b, 11);
+    auto result = b.DotProduct4(src1, src2);
+    StoreVR(b, 3, result);
+    b.Return();
+  });
+
+  // (1,2,3,4) . (5,6,7,8) = 5+12+21+32 = 70
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->v[10] = vec128f(1.0f, 2.0f, 3.0f, 4.0f);
+        ctx->v[11] = vec128f(5.0f, 6.0f, 7.0f, 8.0f);
+      },
+      [](PPCContext* ctx) {
+        REQUIRE(ctx->v[3].f32[0] == 70.0f);
+        REQUIRE(ctx->v[3].f32[1] == 70.0f);
+        REQUIRE(ctx->v[3].f32[2] == 70.0f);
+        REQUIRE(ctx->v[3].f32[3] == 70.0f);
+      });
+
+  // Length-squared: (3,4,0,0) . (3,4,0,0) = 25
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->v[10] = vec128f(3.0f, 4.0f, 0.0f, 0.0f);
+        ctx->v[11] = vec128f(3.0f, 4.0f, 0.0f, 0.0f);
+      },
+      [](PPCContext* ctx) { REQUIRE(ctx->v[3].f32[0] == 25.0f); });
+}

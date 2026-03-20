@@ -95,6 +95,10 @@ if(MSVC)
     /ignore:4006  # Ignores complaints about empty obj files
     /ignore:4221
   )
+
+  cmake_path(GET CMAKE_BINARY_DIR PARENT_PATH CMAKE_PARENT_DIR)
+  include_directories(${CMAKE_PARENT_DIR})
+
   # Global Windows system libraries
   link_libraries(
     ntdll wsock32 ws2_32 xinput comctl32 shcore shlwapi dxguid bcrypt

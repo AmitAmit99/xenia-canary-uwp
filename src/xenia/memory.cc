@@ -28,6 +28,10 @@
 
 DEFINE_bool(protect_zero, true, "Protect the zero page from reads and writes.",
             "Memory");
+DEFINE_bool(emit_inline_mmio_checks, false,
+            "Emit inline MMIO range checks for all I32 loads/stores instead "
+            "of relying on exception-based MMIO detection.",
+            "CPU");
 DEFINE_bool(protect_on_release, false,
             "Protect released memory to prevent accesses.", "Memory");
 DEFINE_bool(scribble_heap, false,
@@ -550,11 +554,13 @@ bool Memory::AddVirtualMappedRange(uint32_t virtual_address, uint32_t mask,
                                    uint32_t size, void* context,
                                    cpu::MMIOReadCallback read_callback,
                                    cpu::MMIOWriteCallback write_callback) {
-  if (!xe::memory::AllocFixed(TranslateVirtual(virtual_address), size,
-                              xe::memory::AllocationType::kCommit,
-                              xe::memory::PageAccess::kNoAccess)) {
-    XELOGE("Unable to map range; commit/protect failed");
-    return false;
+  if (!cvars::emit_inline_mmio_checks) {
+    if (!xe::memory::AllocFixed(TranslateVirtual(virtual_address), size,
+                                xe::memory::AllocationType::kCommit,
+                                xe::memory::PageAccess::kNoAccess)) {
+      XELOGE("Unable to map range; commit/protect failed");
+      return false;
+    }
   }
   return mmio_handler_->RegisterRange(virtual_address, mask, size, context,
                                       read_callback, write_callback);

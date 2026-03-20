@@ -31,6 +31,7 @@ DEFINE_bool(emit_mmio_aware_stores_for_recorded_exception_addresses, true,
             "Uses info gathered via record_mmio_access_exceptions to emit "
             "special stores that are faster than trapping the exception",
             "CPU");
+DECLARE_bool(emit_inline_mmio_checks);
 
 namespace xe {
 namespace cpu {
@@ -1292,6 +1293,35 @@ struct LOAD_OFFSET_I32
       e.CallNativeSafe(addrptr);
       e.mov(i.dest, e.eax);
     } else {
+      Xbyak::Label normal_access, done;
+      bool inline_mmio = cvars::emit_inline_mmio_checks && !IsTracingData();
+      if (inline_mmio) {
+        // Compute guest address (src1 + src2) for range check.
+        if (i.src1.is_constant) {
+          e.mov(e.eax, (uint32_t)i.src1.constant());
+        } else {
+          e.mov(e.eax, i.src1.reg().cvt32());
+        }
+        if (i.src2.is_constant) {
+          e.add(e.eax, (uint32_t)i.src2.constant());
+        } else {
+          e.add(e.eax, i.src2.reg().cvt32());
+        }
+        e.cmp(e.eax, 0x7FC00000);
+        e.jb(normal_access, e.T_NEAR);
+        e.cmp(e.eax, 0x7FFFFFFF);
+        e.ja(normal_access, e.T_NEAR);
+        // MMIO path
+        void* mmio_fn = (void*)&MMIOAwareLoad<uint32_t, false>;
+        if (i.instr->flags & LoadStoreFlags::LOAD_STORE_BYTE_SWAP) {
+          mmio_fn = (void*)&MMIOAwareLoad<uint32_t, true>;
+        }
+        e.mov(e.GetNativeParam(0).cvt32(), e.eax);
+        e.CallNativeSafe(mmio_fn);
+        e.mov(i.dest, e.eax);
+        e.jmp(done, e.T_NEAR);
+        e.L(normal_access);
+      }
       auto addr = ComputeMemoryAddressOffset(e, i.src1, i.src2);
       if (i.instr->flags & LoadStoreFlags::LOAD_STORE_BYTE_SWAP) {
         if (e.IsFeatureEnabled(kX64EmitMovbe)) {
@@ -1302,6 +1332,9 @@ struct LOAD_OFFSET_I32
         }
       } else {
         e.mov(i.dest, e.dword[addr]);
+      }
+      if (inline_mmio) {
+        e.L(done);
       }
     }
   }
@@ -1401,6 +1434,39 @@ struct STORE_OFFSET_I32
       e.CallNativeSafe(addrptr);
 
     } else {
+      Xbyak::Label normal_access, done;
+      bool inline_mmio = cvars::emit_inline_mmio_checks && !IsTracingData();
+      if (inline_mmio) {
+        // Compute guest address (src1 + src2) for range check.
+        if (i.src1.is_constant) {
+          e.mov(e.eax, (uint32_t)i.src1.constant());
+        } else {
+          e.mov(e.eax, i.src1.reg().cvt32());
+        }
+        if (i.src2.is_constant) {
+          e.add(e.eax, (uint32_t)i.src2.constant());
+        } else {
+          e.add(e.eax, i.src2.reg().cvt32());
+        }
+        e.cmp(e.eax, 0x7FC00000);
+        e.jb(normal_access, e.T_NEAR);
+        e.cmp(e.eax, 0x7FFFFFFF);
+        e.ja(normal_access, e.T_NEAR);
+        // MMIO path
+        void* mmio_fn = (void*)&MMIOAwareStore<uint32_t, false>;
+        if (i.instr->flags & LoadStoreFlags::LOAD_STORE_BYTE_SWAP) {
+          mmio_fn = (void*)&MMIOAwareStore<uint32_t, true>;
+        }
+        e.mov(e.GetNativeParam(0).cvt32(), e.eax);
+        if (i.src3.is_constant) {
+          e.mov(e.GetNativeParam(1).cvt32(), i.src3.constant());
+        } else {
+          e.mov(e.GetNativeParam(1).cvt32(), i.src3);
+        }
+        e.CallNativeSafe(mmio_fn);
+        e.jmp(done, e.T_NEAR);
+        e.L(normal_access);
+      }
       auto addr = ComputeMemoryAddressOffset(e, i.src1, i.src2);
       if (i.instr->flags & LoadStoreFlags::LOAD_STORE_BYTE_SWAP) {
         if (i.src3.is_constant) {
@@ -1423,6 +1489,9 @@ struct STORE_OFFSET_I32
         } else {
           e.mov(e.dword[addr], i.src3);
         }
+      }
+      if (inline_mmio) {
+        e.L(done);
       }
     }
   }
@@ -1507,6 +1576,30 @@ struct LOAD_I32 : Sequence<LOAD_I32, I<OPCODE_LOAD, I32Op, I64Op>> {
       e.CallNativeSafe(addrptr);
       e.mov(i.dest, e.eax);
     } else {
+      Xbyak::Label normal_access, done;
+      bool inline_mmio = cvars::emit_inline_mmio_checks && !IsTracingData();
+      if (inline_mmio) {
+        // Compute guest address for range check.
+        if (i.src1.is_constant) {
+          e.mov(e.eax, (uint32_t)i.src1.constant());
+        } else {
+          e.mov(e.eax, i.src1.reg().cvt32());
+        }
+        e.cmp(e.eax, 0x7FC00000);
+        e.jb(normal_access, e.T_NEAR);
+        e.cmp(e.eax, 0x7FFFFFFF);
+        e.ja(normal_access, e.T_NEAR);
+        // MMIO path
+        void* mmio_fn = (void*)&MMIOAwareLoad<uint32_t, false>;
+        if (i.instr->flags & LoadStoreFlags::LOAD_STORE_BYTE_SWAP) {
+          mmio_fn = (void*)&MMIOAwareLoad<uint32_t, true>;
+        }
+        e.mov(e.GetNativeParam(0).cvt32(), e.eax);
+        e.CallNativeSafe(mmio_fn);
+        e.mov(i.dest, e.eax);
+        e.jmp(done, e.T_NEAR);
+        e.L(normal_access);
+      }
       auto addr = ComputeMemoryAddress(e, i.src1);
       if (i.instr->flags & LoadStoreFlags::LOAD_STORE_BYTE_SWAP) {
         if (e.IsFeatureEnabled(kX64EmitMovbe)) {
@@ -1522,6 +1615,9 @@ struct LOAD_I32 : Sequence<LOAD_I32, I<OPCODE_LOAD, I32Op, I64Op>> {
         e.mov(e.GetNativeParam(1).cvt32(), i.dest);
         e.lea(e.GetNativeParam(0), e.ptr[addr]);
         e.CallNative(reinterpret_cast<void*>(TraceMemoryLoadI32));
+      }
+      if (inline_mmio) {
+        e.L(done);
       }
     }
   }
@@ -1671,6 +1767,34 @@ struct STORE_I32 : Sequence<STORE_I32, I<OPCODE_STORE, VoidOp, I64Op, I32Op>> {
       e.CallNativeSafe(addrptr);
 
     } else {
+      Xbyak::Label normal_access, done;
+      bool inline_mmio = cvars::emit_inline_mmio_checks && !IsTracingData();
+      if (inline_mmio) {
+        // Compute guest address for range check.
+        if (i.src1.is_constant) {
+          e.mov(e.eax, (uint32_t)i.src1.constant());
+        } else {
+          e.mov(e.eax, i.src1.reg().cvt32());
+        }
+        e.cmp(e.eax, 0x7FC00000);
+        e.jb(normal_access, e.T_NEAR);
+        e.cmp(e.eax, 0x7FFFFFFF);
+        e.ja(normal_access, e.T_NEAR);
+        // MMIO path
+        void* mmio_fn = (void*)&MMIOAwareStore<uint32_t, false>;
+        if (i.instr->flags & LoadStoreFlags::LOAD_STORE_BYTE_SWAP) {
+          mmio_fn = (void*)&MMIOAwareStore<uint32_t, true>;
+        }
+        e.mov(e.GetNativeParam(0).cvt32(), e.eax);
+        if (i.src2.is_constant) {
+          e.mov(e.GetNativeParam(1).cvt32(), i.src2.constant());
+        } else {
+          e.mov(e.GetNativeParam(1).cvt32(), i.src2);
+        }
+        e.CallNativeSafe(mmio_fn);
+        e.jmp(done, e.T_NEAR);
+        e.L(normal_access);
+      }
       auto addr = ComputeMemoryAddress(e, i.src1);
       if (i.instr->flags & LoadStoreFlags::LOAD_STORE_BYTE_SWAP) {
         if (i.src2.is_constant) {
@@ -1694,6 +1818,9 @@ struct STORE_I32 : Sequence<STORE_I32, I<OPCODE_STORE, VoidOp, I64Op, I32Op>> {
           e.lea(e.GetNativeParam(0), e.ptr[addr]);
           e.CallNative(reinterpret_cast<void*>(TraceMemoryStoreI32));
         }
+      }
+      if (inline_mmio) {
+        e.L(done);
       }
     }
   }

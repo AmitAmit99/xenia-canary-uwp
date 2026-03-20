@@ -35,10 +35,11 @@ else()
   set(XE_PLATFORM_NAME "Linux")
 endif()
 
-# Output directories (use PROJECT_SOURCE_DIR so VS and Ninja share the same paths)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/build/bin/${XE_PLATFORM_NAME}")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/build/bin/${XE_PLATFORM_NAME}")
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/build/obj/${XE_PLATFORM_NAME}")
+# Output directories — use CMAKE_BINARY_DIR so each build tree (build/, build-arm64/,
+# build/vs-arm64/, etc.) gets its own output paths.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${XE_PLATFORM_NAME}")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${XE_PLATFORM_NAME}")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/obj/${XE_PLATFORM_NAME}")
 
 # Create scratch/ if needed
 file(MAKE_DIRECTORY "${PROJECT_SOURCE_DIR}/scratch")
@@ -53,6 +54,7 @@ include(cmake/XeniaHelpers.cmake)
 include_directories(
   ${PROJECT_SOURCE_DIR}
   ${PROJECT_SOURCE_DIR}/src
+  ${CMAKE_BINARY_DIR}
   ${PROJECT_SOURCE_DIR}/third_party
 )
 

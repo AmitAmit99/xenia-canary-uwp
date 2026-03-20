@@ -96,8 +96,12 @@ if(MSVC)
     /ignore:4221
   )
 
+  # In VS we're in build/vs directory. For backward compability move back directory above.
   cmake_path(GET CMAKE_BINARY_DIR PARENT_PATH CMAKE_PARENT_DIR)
   include_directories(${CMAKE_PARENT_DIR})
+
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_PARENT_DIR}/bin/${XE_PLATFORM_NAME}")
+  set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_PARENT_DIR}/bin/${XE_PLATFORM_NAME}")
 
   # Global Windows system libraries
   link_libraries(

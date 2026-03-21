@@ -88,8 +88,8 @@ struct A64BackendContext {
 
 // Default FPCR for FPU mode (round to nearest, no flush to zero).
 constexpr unsigned int DEFAULT_FPU_FPCR = 0;
-// Default FPCR for VMX mode (flush to zero, default NaN).
-constexpr unsigned int DEFAULT_VMX_FPCR = (1 << 24) | (1 << 25);  // FZ | DN
+// Default FPCR for VMX mode (flush to zero, preserve NaN payloads).
+constexpr unsigned int DEFAULT_VMX_FPCR = (1 << 24);  // FZ
 
 class A64Backend : public Backend {
  public:

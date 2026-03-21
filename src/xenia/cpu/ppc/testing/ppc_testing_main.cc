@@ -22,6 +22,7 @@
 #include "xenia/cpu/raw_module.h"
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
@@ -659,16 +660,16 @@ bool RunTests(const std::vector<std::string>& test_names) {
 
   XELOGI("{} tests loaded.", test_suites.size());
 
-  // Count test cases across all suites, filtering out skipped tests
+  // Collect all test cases across all suites, filtering out skipped tests
+  std::vector<std::pair<TestSuite*, TestCase*>> all_tests;
   int skipped_count = 0;
-  size_t total_cases = 0;
   for (auto& test_suite : test_suites) {
     for (auto& test_case : test_suite.test_cases()) {
       if (skip_list.find(test_case.name) != skip_list.end()) {
         ++skipped_count;
-      } else {
-        ++total_cases;
+        continue;
       }
+      all_tests.push_back({&test_suite, &test_case});
     }
   }
 
@@ -677,40 +678,157 @@ bool RunTests(const std::vector<std::string>& test_names) {
             skipped_count);
   }
   fprintf(stderr, "Running %zu test suites, %zu test cases...\n",
-          test_suites.size(), total_cases);
+          test_suites.size(), all_tests.size());
+
+  auto start_time = std::chrono::steady_clock::now();
 
 #if XE_COMPILER_MSVC
-  // On Windows, use a single shared test runner
+  // On Windows, run tests serially grouped by suite
   TestRunner runner;
-#else
-  // On POSIX, each test will create its own runner in a forked process
-  // Pass a dummy value that won't be used
-  TestRunner* runner_ptr = nullptr;
-  TestRunner& runner = *runner_ptr;  // Never dereferenced on POSIX
-#endif
-
-  // Run tests grouped by suite, printing a dot after each suite completes
+  int suite_index = 0;
+  int suite_total = 0;
+  size_t tests_done = 0;
+  size_t total_tests = all_tests.size();
   for (auto& test_suite : test_suites) {
-    bool suite_has_tests = false;
     for (auto& test_case : test_suite.test_cases()) {
-      if (skip_list.find(test_case.name) != skip_list.end()) {
-        continue;
+      if (skip_list.find(test_case.name) == skip_list.end()) {
+        ++suite_total;
+        break;
       }
-      suite_has_tests = true;
-      ProtectedRunTest(test_suite, runner, test_case, failed_count,
-                       passed_count);
-    }
-    if (suite_has_tests) {
-      fprintf(stdout, ".");
-      fflush(stdout);
     }
   }
+  for (auto& test_suite : test_suites) {
+    // Collect non-skipped test cases for this suite
+    std::vector<TestCase*> suite_tests;
+    for (auto& test_case : test_suite.test_cases()) {
+      if (skip_list.find(test_case.name) == skip_list.end()) {
+        suite_tests.push_back(&test_case);
+      }
+    }
+    if (suite_tests.empty()) continue;
+    ++suite_index;
 
-  fprintf(stdout, "\n");
-  fflush(stdout);
-  fprintf(stderr, "Total tests: %d\n", failed_count + passed_count);
+    int pct =
+        total_tests ? static_cast<int>(tests_done * 100 / total_tests) : 0;
+    fprintf(stdout, "[%d/%d] %s (%zu tests) %d%%\n", suite_index, suite_total,
+            test_suite.name().c_str(), suite_tests.size(), pct);
+    fflush(stdout);
+    for (size_t i = 0; i < suite_tests.size(); i++) {
+      ProtectedRunTest(test_suite, runner, *suite_tests[i], failed_count,
+                       passed_count);
+      ++tests_done;
+      if ((i + 1) % 500 == 0 && i + 1 < suite_tests.size()) {
+        pct = static_cast<int>(tests_done * 100 / total_tests);
+        fprintf(stdout, "  ... %zu/%zu %d%%\n", i + 1, suite_tests.size(), pct);
+        fflush(stdout);
+      }
+    }
+  }
+#else
+  // On POSIX, run tests in parallel using thread pool + fork per test.
+  // Each thread forks one child at a time, ensuring only one Memory/shm
+  // instance per thread (avoids shm name collisions between concurrent
+  // children).
+  unsigned int num_cores = std::thread::hardware_concurrency();
+  if (num_cores == 0) num_cores = 4;
+  num_cores = std::max(1u, num_cores * 3 / 4);
+
+  fprintf(stderr, "Running tests in parallel using %u workers\n", num_cores);
+
+  // Per-suite tracking for progress output
+  struct SuiteInfo {
+    TestSuite* suite;
+    size_t total;
+    std::atomic<size_t> completed{0};
+  };
+  std::unordered_map<TestSuite*, size_t> suite_map;
+  std::vector<std::unique_ptr<SuiteInfo>> suite_info;
+  std::vector<size_t> test_to_suite(all_tests.size());
+  for (size_t i = 0; i < all_tests.size(); i++) {
+    auto* suite = all_tests[i].first;
+    auto it = suite_map.find(suite);
+    if (it == suite_map.end()) {
+      it = suite_map.emplace(suite, suite_info.size()).first;
+      auto si = std::make_unique<SuiteInfo>();
+      si->suite = suite;
+      si->total = 0;
+      suite_info.push_back(std::move(si));
+    }
+    test_to_suite[i] = it->second;
+    suite_info[it->second]->total++;
+  }
+  int suite_total = static_cast<int>(suite_info.size());
+  std::atomic<int> suites_completed{0};
+  std::atomic<size_t> tests_completed{0};
+  size_t total_tests = all_tests.size();
+
+  std::mutex result_mutex;
+  std::atomic<size_t> test_index{0};
+
+  auto worker = [&]() {
+    // Dummy runner for API compatibility (not used on POSIX)
+    TestRunner* runner_ptr = nullptr;
+    TestRunner& runner = *runner_ptr;
+
+    while (true) {
+      size_t idx = test_index.fetch_add(1);
+      if (idx >= all_tests.size()) break;
+
+      auto& [test_suite, test_case] = all_tests[idx];
+      int local_failed = 0;
+      int local_passed = 0;
+
+      ProtectedRunTest(*test_suite, runner, *test_case, local_failed,
+                       local_passed);
+
+      {
+        std::lock_guard<std::mutex> lock(result_mutex);
+        failed_count += local_failed;
+        passed_count += local_passed;
+      }
+
+      size_t done = tests_completed.fetch_add(1) + 1;
+      auto& si = *suite_info[test_to_suite[idx]];
+      size_t suite_done = si.completed.fetch_add(1) + 1;
+
+      if (suite_done == si.total) {
+        int num = suites_completed.fetch_add(1) + 1;
+        int pct = static_cast<int>(done * 100 / total_tests);
+        std::lock_guard<std::mutex> lock(result_mutex);
+        fprintf(stdout, "[%d/%d] %s (%zu tests) %d%%\n", num, suite_total,
+                si.suite->name().c_str(), si.total, pct);
+        fflush(stdout);
+      } else if (suite_done % 500 == 0) {
+        int pct = static_cast<int>(done * 100 / total_tests);
+        std::lock_guard<std::mutex> lock(result_mutex);
+        fprintf(stdout, "  ... %s %zu/%zu %d%%\n", si.suite->name().c_str(),
+                suite_done, si.total, pct);
+        fflush(stdout);
+      }
+    }
+  };
+
+  std::vector<std::thread> threads;
+  for (unsigned int i = 0; i < num_cores; ++i) {
+    threads.emplace_back(worker);
+  }
+
+  for (auto& thread : threads) {
+    thread.join();
+  }
+#endif
+
+  auto end_time = std::chrono::steady_clock::now();
+  auto elapsed_sec =
+      std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time)
+          .count();
+  int minutes = static_cast<int>(elapsed_sec / 60);
+  int seconds = static_cast<int>(elapsed_sec % 60);
+
+  fprintf(stderr, "\nTotal tests: %d\n", failed_count + passed_count);
   fprintf(stderr, "Passed: %d\n", passed_count);
   fprintf(stderr, "Failed: %d\n", failed_count);
+  fprintf(stderr, "Time: %dm %ds\n", minutes, seconds);
   fflush(stderr);
 
   return failed_count ? false : true;

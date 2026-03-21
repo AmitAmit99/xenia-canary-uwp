@@ -47,10 +47,10 @@ constexpr uint8_t AbsMax = 0b11;  // Larger absolute value
 };  // namespace FpRangeSelect
 
 namespace FpRangeSign {
-constexpr uint8_t OperandA = 0b00;  // Copy sign of operand A
-constexpr uint8_t Preserve = 0b01;  // Leave sign as is
-constexpr uint8_t Positive = 0b10;  // Set Positive
-constexpr uint8_t Negative = 0b11;  // Set Negative
+constexpr uint8_t OperandA = 0b0000;  // Copy sign of operand A
+constexpr uint8_t Preserve = 0b0100;  // Leave sign as is
+constexpr uint8_t Positive = 0b1000;  // Set Positive
+constexpr uint8_t Negative = 0b1100;  // Set Negative
 };  // namespace FpRangeSign
 
 }  // namespace x64

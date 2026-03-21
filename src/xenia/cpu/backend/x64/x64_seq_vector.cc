@@ -165,7 +165,8 @@ struct VECTOR_DENORMFLUSH
       e.vptestnmd(denormal_mask, i.src1,
                   e.GetXmmConstPtr(XMMSingleDenormalMask));
       e.vxorps(e.xmm1, e.xmm1, e.xmm1);
-      e.vrangeps(i.dest.reg() | denormal_mask, i.src1, e.xmm1,
+      e.vmovaps(i.dest, i.src1);
+      e.vrangeps(i.dest.reg() | denormal_mask, i.dest, e.xmm1,
                  FpRangeSelect::AbsMin | FpRangeSign::OperandA);
       return;
     }

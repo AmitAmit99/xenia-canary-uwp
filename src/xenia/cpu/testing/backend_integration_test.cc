@@ -651,3 +651,90 @@ TEST_CASE("DOT_PRODUCT_4", "[backend]") {
       },
       [](PPCContext* ctx) { REQUIRE(ctx->v[3].f32[0] == 25.0f); });
 }
+
+// =============================================================================
+// FPCR preservation across GuestToHostThunk
+// =============================================================================
+// Tests that the guest scalar rounding mode survives a host callback.
+// The GuestToHostThunk must restore fpcr_fpu after the host call returns,
+// otherwise the host C++ runtime's FPCR state leaks into subsequent guest ops.
+
+static void FpcrClobberingBuiltin(ppc::PPCContext* ctx, void* arg0,
+                                  void* arg1) {
+  // Deliberately clobber FPCR to round-to-nearest (mode 0).
+  // If the thunk doesn't restore, the guest will see this mode.
+#if XE_ARCH_ARM64
+#if XE_COMPILER_MSVC
+  _WriteStatusReg(0x5A20, 0ULL);
+#else
+  __asm__ volatile("msr fpcr, %0" : : "r"(0ULL));
+#endif
+#elif XE_ARCH_AMD64
+  _mm_setcsr((_mm_getcsr() & ~0x6000) | 0x0000);  // round-to-nearest
+#endif
+}
+
+TEST_CASE("FPCR_PRESERVED_ACROSS_HOST_CALLBACK", "[backend]") {
+  auto memory = std::make_unique<Memory>();
+  memory->Initialize();
+
+  std::unique_ptr<xe::cpu::backend::Backend> backend;
+#if XE_ARCH_AMD64
+  backend.reset(new xe::cpu::backend::x64::X64Backend());
+#elif XE_ARCH_ARM64
+  backend.reset(new xe::cpu::backend::a64::A64Backend());
+#endif
+  REQUIRE(backend);
+
+  auto processor = std::make_unique<Processor>(memory.get(), nullptr);
+  processor->Setup(std::move(backend));
+
+  auto* builtin_fn = processor->DefineBuiltin(
+      "FpcrClobber", FpcrClobberingBuiltin, nullptr, nullptr);
+
+  // Set rounding to toward-+inf (mode 2), call the host callback (which
+  // clobbers FPCR to round-to-nearest), then do a scalar add.
+  // If the thunk restores FPCR properly, the add uses toward-+inf.
+  auto module = std::make_unique<TestModule>(
+      processor.get(), "Test",
+      [](uint32_t address) { return address == 0x80000000; },
+      [builtin_fn](HIRBuilder& b) {
+        b.SetRoundingMode(b.LoadConstantInt32(2));  // toward +inf
+        b.CallExtern(builtin_fn);
+        // Scalar add after the host call.
+        auto a = b.Convert(LoadFPR(b, 4), FLOAT32_TYPE);
+        auto c = b.Convert(LoadFPR(b, 5), FLOAT32_TYPE);
+        auto sum = b.Add(a, c);
+        StoreFPR(b, 3, b.Convert(sum, FLOAT64_TYPE));
+        b.Return();
+        return true;
+      },
+      /*skip_cf_simplification=*/true);
+  processor->AddModule(std::move(module));
+  processor->backend()->CommitExecutableRange(0x80000000, 0x80010000);
+
+  auto fn = processor->ResolveFunction(0x80000000);
+  REQUIRE(fn != nullptr);
+
+  uint32_t stack_size = 64 * 1024;
+  uint32_t stack_address = memory->SystemHeapAlloc(stack_size);
+  auto thread_state = std::make_unique<ThreadState>(processor.get(), 0x100,
+                                                    stack_address + stack_size);
+  auto ctx = thread_state->context();
+  ctx->lr = 0xBCBCBCBC;
+  processor->backend()->SetGuestRoundingMode(ctx, 0);
+
+  ctx->f[4] = 1.0;
+  ctx->f[5] = std::ldexp(1.0, -24);
+
+  fn->Call(thread_state.get(), uint32_t(ctx->lr));
+
+  auto result = static_cast<float>(ctx->f[3]);
+  // Toward-+inf: 1.0 + 2^-24 rounds up.
+  float expected = std::nextafterf(1.0f, 2.0f);
+  REQUIRE(result == expected);
+
+  // Reset rounding mode.
+  processor->backend()->SetGuestRoundingMode(ctx, 0);
+  memory->SystemHeapFree(stack_address);
+}

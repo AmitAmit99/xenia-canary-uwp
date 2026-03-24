@@ -7,6 +7,11 @@ on:
         description: 'Full commit SHA for tagging'
         required: true
         type: string
+      branch:
+        description: 'Branch name used as release tag suffix (e.g. canary_experimental)'
+        required: false
+        type: string
+        default: 'canary_experimental'
 
 jobs:
   release:
@@ -23,16 +28,19 @@ jobs:
           fetch-depth: 0
 
       - name: Build release notes
-        id: meta
+        id: notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           FULL_SHA="${{ inputs.tag }}"
           SHORT_SHA="${FULL_SHA::7}"
+          BRANCH="${{ inputs.branch }}"
           TAG_NAME="${SHORT_SHA}"
+          TITLE="${SHORT_SHA}_${BRANCH}"
 
           echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
 
           PREV_TAG=$(gh release list \
             --repo "${REPO}" \
@@ -135,8 +143,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          TAG: ${{ steps.meta.outputs.tag_name }}
-          BODY: ${{ steps.meta.outputs.body }}
+          TAG: ${{ steps.notes.outputs.tag_name }}
+          TITLE: ${{ steps.notes.outputs.title }}
+          BODY: ${{ steps.notes.outputs.body }}
           TARGET: ${{ inputs.tag }}
         run: |
           echo "${BODY}" > release_notes.md
@@ -153,7 +162,7 @@ jobs:
             gh release create "${TAG}" \
               --repo "${REPO}" \
               --target "${{ inputs.tag }}" \
-              --title "${TAG}" \
+              --title "${TITLE}" \
               --notes-file release_notes.md \
               --latest \
               release_assets/*

@@ -839,7 +839,8 @@ struct MEMSET_I64
       }
       // 1-3 byte remainder unlikely for dcbz/dcbz128, skip for now.
     } else {
-      // General case: use a loop.
+      // General case: splat byte to NEON register, then 16-byte bulk loop
+      // with a byte loop for the 0-15 byte tail.
       if (i.src2.is_constant) {
         e.mov(e.w1, static_cast<uint64_t>(i.src2.constant() & 0xFF));
       } else {
@@ -850,15 +851,29 @@ struct MEMSET_I64
       } else {
         e.mov(e.x2, i.src3.reg());
       }
-      // Byte-fill loop: store w1 to [x0] for x2 bytes.
-      auto& loop = e.NewCachedLabel();
       auto& done = e.NewCachedLabel();
       e.cbz(e.x2, done);
-      e.L(loop);
+      // Splat fill byte across v0 for 16-byte stores.
+      e.dup(VReg(0).b16, e.w1);
+      // 16-byte bulk loop.
+      auto& loop16 = e.NewCachedLabel();
+      auto& tail = e.NewCachedLabel();
+      e.L(loop16);
+      e.cmp(e.x2, 16);
+      e.b(LO, tail);
+      e.str(QReg(0), ptr(e.x0));
+      e.add(e.x0, e.x0, 16);
+      e.sub(e.x2, e.x2, 16);
+      e.b(loop16);
+      // Byte loop for remaining 0-15 bytes.
+      e.L(tail);
+      e.cbz(e.x2, done);
+      auto& byte_loop = e.NewCachedLabel();
+      e.L(byte_loop);
       e.strb(e.w1, ptr(e.x0));
       e.add(e.x0, e.x0, 1);
       e.subs(e.x2, e.x2, 1);
-      e.b(Xbyak_aarch64::NE, loop);
+      e.b(Xbyak_aarch64::NE, byte_loop);
       e.L(done);
     }
   }

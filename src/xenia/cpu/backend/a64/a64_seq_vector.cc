@@ -1094,302 +1094,6 @@ struct LOAD_VECTOR_SHR_I8
 EMITTER_OPCODE_TABLE(OPCODE_LOAD_VECTOR_SHR, LOAD_VECTOR_SHR_I8);
 
 // ============================================================================
-// PACK/UNPACK C helper functions (called via CallNativeSafe)
-// ============================================================================
-
-// PACK FLOAT16_2: pack first 2 floats to Xenos half-float format.
-// Args: x0=PPCContext*, x1=pointer to vec128_t (in-place).
-static void EmulatePACK_FLOAT16_2(void* /*ctx*/, void* vdata) {
-  auto* data = reinterpret_cast<vec128_t*>(vdata);
-  vec128_t result = {};
-  for (int i = 0; i < 2; i++) {
-    result.u16[7 - i] = float_to_xenos_half(data->f32[i]);
-  }
-  *data = result;
-}
-
-// PACK FLOAT16_4: pack all 4 floats to Xenos half-float (round to even).
-static void EmulatePACK_FLOAT16_4(void* /*ctx*/, void* vdata) {
-  auto* data = reinterpret_cast<vec128_t*>(vdata);
-  vec128_t result = {};
-  for (int idx = 0; idx < 4; ++idx) {
-    result.u16[7 - (idx ^ 2)] =
-        float_to_xenos_half(data->f32[idx], false, true);
-  }
-  *data = result;
-}
-
-// PACK UINT_2101010: XYZ 10-bit signed saturated, W 2-bit unsigned saturated.
-static void EmulatePACK_UINT_2101010(void* /*ctx*/, void* vdata) {
-  auto* data = reinterpret_cast<vec128_t*>(vdata);
-  // Clamp and extract integer values from magic float encoding.
-  // Input floats are in 3.0+val*2^-22 format.
-  auto clamp_extract = [](uint32_t bits, int32_t min_val, int32_t max_val,
-                          uint32_t mask) -> uint32_t {
-    // Reinterpret as float for clamping.
-    float f;
-    memcpy(&f, &bits, 4);
-    float fmin, fmax;
-    uint32_t umin = 0x40400000u + static_cast<uint32_t>(min_val);
-    uint32_t umax = 0x40400000u + static_cast<uint32_t>(max_val);
-    memcpy(&fmin, &umin, 4);
-    memcpy(&fmax, &umax, 4);
-    if (std::isnan(f) || f < fmin) f = fmin;
-    if (f > fmax) f = fmax;
-    uint32_t fbits;
-    memcpy(&fbits, &f, 4);
-    return fbits & mask;
-  };
-  uint32_t x = clamp_extract(data->u32[0], -511, 511, 0x3FF);
-  uint32_t y = clamp_extract(data->u32[1], -511, 511, 0x3FF);
-  uint32_t z = clamp_extract(data->u32[2], -511, 511, 0x3FF);
-  uint32_t w = clamp_extract(data->u32[3], 0, 3, 0x3);
-  vec128_t result = {};
-  result.u32[3] = x | (y << 10) | (z << 20) | (w << 30);
-  *data = result;
-}
-
-// PACK ULONG_4202020: XYZ 20-bit signed saturated, W 4-bit unsigned saturated.
-static void EmulatePACK_ULONG_4202020(void* /*ctx*/, void* vdata) {
-  auto* data = reinterpret_cast<vec128_t*>(vdata);
-  auto clamp_extract = [](uint32_t bits, int32_t min_val, int32_t max_val,
-                          uint32_t mask) -> uint32_t {
-    float f;
-    memcpy(&f, &bits, 4);
-    float fmin, fmax;
-    uint32_t umin = 0x40400000u + static_cast<uint32_t>(min_val);
-    uint32_t umax = 0x40400000u + static_cast<uint32_t>(max_val);
-    memcpy(&fmin, &umin, 4);
-    memcpy(&fmax, &umax, 4);
-    if (std::isnan(f) || f < fmin) f = fmin;
-    if (f > fmax) f = fmax;
-    uint32_t fbits;
-    memcpy(&fbits, &f, 4);
-    return fbits & mask;
-  };
-  uint32_t x = clamp_extract(data->u32[0], -524287, 524287, 0xFFFFF);
-  uint32_t y = clamp_extract(data->u32[1], -524287, 524287, 0xFFFFF);
-  uint32_t z = clamp_extract(data->u32[2], -524287, 524287, 0xFFFFF);
-  uint32_t w = clamp_extract(data->u32[3], 0, 15, 0xF);
-  // Pack: 64-bit result in lanes 2-3
-  uint64_t packed =
-      static_cast<uint64_t>(x) | (static_cast<uint64_t>(y) << 20) |
-      (static_cast<uint64_t>(z) << 40) | (static_cast<uint64_t>(w) << 60);
-  vec128_t result = {};
-  result.u32[2] = static_cast<uint32_t>(packed >> 32);
-  result.u32[3] = static_cast<uint32_t>(packed);
-  *data = result;
-}
-
-// UNPACK FLOAT16_2: convert 2 Xenos half-floats to float.
-static void EmulateUNPACK_FLOAT16_2(void* /*ctx*/, void* vdata) {
-  auto* data = reinterpret_cast<vec128_t*>(vdata);
-  vec128_t src = *data;
-  vec128_t result = {};
-  for (int i = 0; i < 2; i++) {
-    result.f32[i] = xenos_half_to_float(src.u16[VEC128_W(6 + i)]);
-  }
-  result.f32[2] = 0.0f;
-  result.f32[3] = 1.0f;
-  *data = result;
-}
-
-// UNPACK FLOAT16_4: convert 4 Xenos half-floats to float.
-static void EmulateUNPACK_FLOAT16_4(void* /*ctx*/, void* vdata) {
-  auto* data = reinterpret_cast<vec128_t*>(vdata);
-  vec128_t src = *data;
-  vec128_t result = {};
-  for (int idx = 0; idx < 4; ++idx) {
-    result.f32[idx] = xenos_half_to_float(src.u16[VEC128_W(4 + idx)]);
-  }
-  *data = result;
-}
-
-// UNPACK SHORT_2: unpack 2 signed shorts to magic float format (3.0+val*2^-22).
-static void EmulateUNPACK_SHORT_2(void* /*ctx*/, void* vdata) {
-  auto* data = reinterpret_cast<vec128_t*>(vdata);
-  // Source: packed value in lane 3.
-  // Upper halfword = X, lower halfword = Y.
-  int16_t x_val = static_cast<int16_t>(data->u16[7]);
-  int16_t y_val = static_cast<int16_t>(data->u16[6]);
-  vec128_t result = {};
-  // Sign-extend to 32-bit and add magic constant.
-  // Magic constant {3.0f, 3.0f, 0.0f, 1.0f} for SHORT2/SHORT4 unpack.
-  result.u32[0] =
-      0x40400000u + static_cast<uint32_t>(static_cast<int32_t>(x_val));
-  result.u32[1] =
-      0x40400000u + static_cast<uint32_t>(static_cast<int32_t>(y_val));
-  result.u32[2] = 0;
-  result.u32[3] = 0x3F800000u;
-  // Overflow check: if result == 0x403F8000, replace with QNaN.
-  for (int j = 0; j < 4; j++) {
-    if (result.u32[j] == 0x403F8000u) {
-      result.u32[j] = 0x7FC00000u;
-    }
-  }
-  *data = result;
-}
-
-// UNPACK SHORT_4: unpack 4 signed shorts to magic float format.
-static void EmulateUNPACK_SHORT_4(void* /*ctx*/, void* vdata) {
-  auto* data = reinterpret_cast<vec128_t*>(vdata);
-  // Source: lanes 2-3 contain 2 packed values, each with 2 shorts.
-  // Lane 3: upper half = X, lower half = Y
-  // Lane 2: upper half = Z, lower half = W
-  int16_t x_val = static_cast<int16_t>(data->u16[7]);
-  int16_t y_val = static_cast<int16_t>(data->u16[6]);
-  int16_t z_val = static_cast<int16_t>(data->u16[5]);
-  int16_t w_val = static_cast<int16_t>(data->u16[4]);
-  vec128_t result = {};
-  result.u32[0] =
-      0x40400000u + static_cast<uint32_t>(static_cast<int32_t>(x_val));
-  result.u32[1] =
-      0x40400000u + static_cast<uint32_t>(static_cast<int32_t>(y_val));
-  result.u32[2] =
-      0x40400000u + static_cast<uint32_t>(static_cast<int32_t>(z_val));
-  result.u32[3] =
-      0x40400000u + static_cast<uint32_t>(static_cast<int32_t>(w_val));
-  for (int j = 0; j < 4; j++) {
-    if (result.u32[j] == 0x403F8000u) {
-      result.u32[j] = 0x7FC00000u;
-    }
-  }
-  *data = result;
-}
-
-// UNPACK UINT_2101010: unpack 10-10-10-2 to magic float format.
-static void EmulateUNPACK_UINT_2101010(void* /*ctx*/, void* vdata) {
-  auto* data = reinterpret_cast<vec128_t*>(vdata);
-  uint32_t packed = data->u32[3];
-  // Extract components.
-  int32_t x = static_cast<int32_t>(packed & 0x3FF);
-  int32_t y = static_cast<int32_t>((packed >> 10) & 0x3FF);
-  int32_t z = static_cast<int32_t>((packed >> 20) & 0x3FF);
-  uint32_t w = (packed >> 30) & 0x3;
-  // Sign-extend XYZ (10-bit signed).
-  if (x & 0x200) x |= ~0x3FF;
-  if (y & 0x200) y |= ~0x3FF;
-  if (z & 0x200) z |= ~0x3FF;
-  // Build magic float: 3.0 + val * 2^-22 for XYZ, 1.0 + val for W.
-  vec128_t result = {};
-  result.u32[0] = 0x40400000u + static_cast<uint32_t>(x);
-  result.u32[1] = 0x40400000u + static_cast<uint32_t>(y);
-  result.u32[2] = 0x40400000u + static_cast<uint32_t>(z);
-  result.u32[3] = 0x3F800000u + w;
-  // Overflow check.
-  uint32_t overflow_xyz = 0x403FFE00u;
-  for (int j = 0; j < 3; j++) {
-    if (result.u32[j] == overflow_xyz) {
-      result.u32[j] = 0x7FC00000u;
-    }
-  }
-  *data = result;
-}
-
-// UNPACK ULONG_4202020: unpack 20-20-20-4 to magic float format.
-static void EmulateUNPACK_ULONG_4202020(void* /*ctx*/, void* vdata) {
-  auto* data = reinterpret_cast<vec128_t*>(vdata);
-  // 64-bit packed value in lanes 2-3.
-  uint64_t packed = (static_cast<uint64_t>(data->u32[2]) << 32) |
-                    static_cast<uint64_t>(data->u32[3]);
-  int32_t x = static_cast<int32_t>(packed & 0xFFFFF);
-  int32_t y = static_cast<int32_t>((packed >> 20) & 0xFFFFF);
-  int32_t z = static_cast<int32_t>((packed >> 40) & 0xFFFFF);
-  uint32_t w = static_cast<uint32_t>((packed >> 60) & 0xF);
-  // Sign-extend XYZ (20-bit signed).
-  if (x & 0x80000) x |= ~0xFFFFF;
-  if (y & 0x80000) y |= ~0xFFFFF;
-  if (z & 0x80000) z |= ~0xFFFFF;
-  vec128_t result = {};
-  result.u32[0] = 0x40400000u + static_cast<uint32_t>(x);
-  result.u32[1] = 0x40400000u + static_cast<uint32_t>(y);
-  result.u32[2] = 0x40400000u + static_cast<uint32_t>(z);
-  result.u32[3] = 0x3F800000u + w;
-  uint32_t overflow_xyz = 0x40380000u;
-  for (int j = 0; j < 3; j++) {
-    if (result.u32[j] == overflow_xyz) {
-      result.u32[j] = 0x7FC00000u;
-    }
-  }
-  *data = result;
-}
-
-// LVL/LVR/STVL/STVR C helper functions.
-// Args: x0=PPCContext*, x1=host_addr(uint64_t), x2=data_ptr(void*)
-
-static void EmulateLVL(void* /*ctx*/, uint64_t host_addr, void* result_ptr) {
-  uint32_t offset = static_cast<uint32_t>(host_addr) & 0xF;
-  const uint8_t* aligned =
-      reinterpret_cast<const uint8_t*>(host_addr & ~0xFull);
-  uint8_t mem[16];
-  memcpy(mem, aligned, 16);
-  // Shuffle: base = {3,2,1,0,7,6,5,4,11,10,9,8,15,14,13,12} (bswap within
-  // lanes) ctrl[i] = base[i] + offset; if > 15, output 0.
-  static const uint8_t base[16] = {3,  2,  1, 0, 7,  6,  5,  4,
-                                   11, 10, 9, 8, 15, 14, 13, 12};
-  uint8_t result[16] = {};
-  for (int i = 0; i < 16; i++) {
-    int idx = base[i] + offset;
-    if (idx <= 15) {
-      result[i] = mem[idx];
-    }
-  }
-  memcpy(result_ptr, result, 16);
-}
-
-static void EmulateLVR(void* /*ctx*/, uint64_t host_addr, void* result_ptr) {
-  uint32_t offset = static_cast<uint32_t>(host_addr) & 0xF;
-  uint8_t result[16] = {};
-  if (offset == 0) {
-    memcpy(result_ptr, result, 16);
-    return;
-  }
-  const uint8_t* aligned =
-      reinterpret_cast<const uint8_t*>(host_addr & ~0xFull);
-  uint8_t mem[16];
-  memcpy(mem, aligned, 16);
-  // Same base shuffle as LVL, but keep only indices > 15 (using idx & 0xF).
-  static const uint8_t base[16] = {3,  2,  1, 0, 7,  6,  5,  4,
-                                   11, 10, 9, 8, 15, 14, 13, 12};
-  for (int i = 0; i < 16; i++) {
-    int idx = base[i] + offset;
-    if (idx > 15) {
-      result[i] = mem[idx & 0xF];
-    }
-  }
-  memcpy(result_ptr, result, 16);
-}
-
-static void EmulateSTVL(void* /*ctx*/, uint64_t host_addr, void* src_data) {
-  uint32_t offset = static_cast<uint32_t>(host_addr) & 0xF;
-  uint8_t* aligned = reinterpret_cast<uint8_t*>(host_addr & ~0xFull);
-  const uint8_t* src = reinterpret_cast<const uint8_t*>(src_data);
-  uint8_t mem[16];
-  memcpy(mem, aligned, 16);
-  // Write bytes offset..15: mem[i] = src[bswap_lane_idx(i - offset)]
-  for (int i = static_cast<int>(offset); i < 16; i++) {
-    mem[i] = src[bswap_lane_idx(i - static_cast<int>(offset))];
-  }
-  memcpy(aligned, mem, 16);
-}
-
-static void EmulateSTVR(void* /*ctx*/, uint64_t host_addr, void* src_data) {
-  uint32_t offset = static_cast<uint32_t>(host_addr) & 0xF;
-  if (offset == 0) return;
-  uint8_t* aligned = reinterpret_cast<uint8_t*>(host_addr & ~0xFull);
-  const uint8_t* src = reinterpret_cast<const uint8_t*>(src_data);
-  uint8_t mem[16];
-  memcpy(mem, aligned, 16);
-  // Write bytes 0..(offset-1) from the right part of the source.
-  for (int i = 0; i < static_cast<int>(offset); i++) {
-    // Use pshufb-compatible index: (i - offset) ^ 0x83, take bits 3:0
-    int src_idx =
-        (static_cast<uint8_t>(i - static_cast<int>(offset)) ^ 0x83) & 0x0F;
-    mem[i] = src[src_idx];
-  }
-  memcpy(aligned, mem, 16);
-}
-
 // ============================================================================
 // OPCODE_PACK
 // ============================================================================
@@ -1484,6 +1188,66 @@ struct PACK : Sequence<PACK, I<OPCODE_PACK, V128Op, V128Op, V128Op>> {
     LoadV128Const(e, 0, ctrl);
     e.tbl(VReg(d).b16, VReg(d).b16, 1, VReg(0).b16);
   }
+  // Inline Xenos float→half conversion for 4 float32 lanes in v0.
+  // Xenos half saturates to 0x7FFF instead of producing IEEE inf/NaN.
+  // Denormals flush to zero (preserve_denormal=false).
+  // If round_to_even is true, applies round-to-nearest-even before truncation.
+  // Result: 4 halfwords in the low 16 bits of each 32-bit lane in v1.
+  // Clobbers v0-v3, w0.  Sign is spilled to GUEST_SCRATCH.
+  static void EmitFloatToXenosHalf4(A64Emitter& e, bool round_to_even) {
+    // v0 = input float32 bits.  Extract sign, compute abs.
+    e.ushr(VReg(1).s4, VReg(0).s4, 31);
+    e.shl(VReg(1).s4, VReg(1).s4, 15);  // v1 = sign at bit 15
+    // Spill sign to stack (we need all 4 scratch regs).
+    e.str(QReg(1),
+          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+
+    // v0 = abs (clear sign bit)
+    e.shl(VReg(0).s4, VReg(0).s4, 1);
+    e.ushr(VReg(0).s4, VReg(0).s4, 1);
+
+    // Normal path: rebias exponent and shift.
+    // result = abs + 0xC8000000 (subtract 112 from float exponent, unsigned)
+    e.mov(e.w0, 0xC8000000u);
+    e.dup(VReg(2).s4, e.w0);
+    e.add(VReg(2).s4, VReg(0).s4, VReg(2).s4);  // v2 = rebiased
+
+    if (round_to_even) {
+      // Round to nearest even: result += 0xFFF + ((result >> 13) & 1)
+      e.ushr(VReg(3).s4, VReg(2).s4, 13);
+      e.movi(VReg(1).s4, 1);
+      e.and_(VReg(3).b16, VReg(3).b16, VReg(1).b16);  // (result>>13)&1
+      e.mov(e.w0, 0xFFFu);
+      e.dup(VReg(1).s4, e.w0);
+      e.add(VReg(3).s4, VReg(3).s4, VReg(1).s4);  // 0xFFF + bit
+      e.add(VReg(2).s4, VReg(2).s4, VReg(3).s4);  // rounded
+    }
+
+    // Shift and mask to 15 bits.
+    e.ushr(VReg(2).s4, VReg(2).s4, 13);
+    e.mov(e.w0, 0x7FFFu);
+    e.dup(VReg(3).s4, e.w0);
+    e.and_(VReg(2).b16, VReg(2).b16, VReg(3).b16);  // v2 = normal result
+
+    // Saturation: where abs >= 0x47FFE000, force to 0x7FFF.
+    // v3 already holds 0x7FFF splat = saturation value.
+    e.mov(e.w0, 0x47FFE000u);
+    e.dup(VReg(1).s4, e.w0);
+    e.cmhs(VReg(1).s4, VReg(0).s4, VReg(1).s4);    // v1 = sat mask
+    e.bsl(VReg(1).b16, VReg(3).b16, VReg(2).b16);  // v1 = sat?7FFF:normal
+
+    // Flush: where abs < 0x38800000, force to 0.
+    e.mov(e.w0, 0x38800000u);
+    e.dup(VReg(2).s4, e.w0);
+    e.cmhi(VReg(2).s4, VReg(2).s4, VReg(0).s4);    // v2 = small mask
+    e.bic(VReg(1).b16, VReg(1).b16, VReg(2).b16);  // zero where small
+
+    // Restore sign from stack and combine.
+    e.ldr(QReg(0),
+          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+    e.orr(VReg(1).b16, VReg(1).b16, VReg(0).b16);
+    // v1 = 4 Xenos halfs in low 16 bits of each 32-bit lane.
+  }
   static void EmitFLOAT16_2(A64Emitter& e, const EmitArgType& i) {
     assert_true(i.src2.value->IsConstantZero());
     if (i.src1.is_constant) {
@@ -1496,12 +1260,16 @@ struct PACK : Sequence<PACK, I<OPCODE_PACK, V128Op, V128Op, V128Op>> {
     }
     int s = i.src1.reg().getIdx();
     int d = i.dest.reg().getIdx();
-    e.str(QReg(s),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-    e.add(e.x1, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
-    e.CallNativeSafe(reinterpret_cast<void*>(EmulatePACK_FLOAT16_2));
-    e.ldr(QReg(d),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+    e.mov(VReg(0).b16, VReg(s).b16);
+    EmitFloatToXenosHalf4(e, false);
+    // v1 has halfs in s[0..3].  FLOAT16_2 uses only lanes 0,1.
+    // Output: h[7]=half(f32[0]), h[6]=half(f32[1]), rest=0.
+    // Narrow to halfwords, swap within word pairs, place at top of vector.
+    e.xtn(VReg(0).h4, VReg(1).s4);    // v0.h[0..3] = narrowed halfs
+    e.rev32(VReg(0).h4, VReg(0).h4);  // swap within word pairs
+    // v0.s[0] now has {half[1], half[0]} — put at s[3] of zeroed dest.
+    e.movi(VReg(d).d2, 0);
+    e.ins(VReg(d).s4[3], VReg(0).s4[0]);
   }
   static void EmitFLOAT16_4(A64Emitter& e, const EmitArgType& i) {
     if (i.src1.is_constant) {
@@ -1515,32 +1283,101 @@ struct PACK : Sequence<PACK, I<OPCODE_PACK, V128Op, V128Op, V128Op>> {
     }
     int s = i.src1.reg().getIdx();
     int d = i.dest.reg().getIdx();
-    e.str(QReg(s),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-    e.add(e.x1, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
-    e.CallNativeSafe(reinterpret_cast<void*>(EmulatePACK_FLOAT16_4));
-    e.ldr(QReg(d),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+    e.mov(VReg(0).b16, VReg(s).b16);
+    EmitFloatToXenosHalf4(e, true);
+    // v1 has halfs in s[0..3].  Output mapping:
+    //   idx0→h[5], idx1→h[4], idx2→h[7], idx3→h[6]
+    // = upper 64 bits with within-word swap, lower 64 bits zero.
+    // Narrow to halfwords.
+    e.xtn(VReg(0).h4, VReg(1).s4);    // v0.h[0..3] = narrowed halfs
+    e.rev32(VReg(0).h4, VReg(0).h4);  // swap within word pairs
+    // v0 low 64 = {half[1],half[0], half[3],half[2]} — goes to upper 64.
+    e.movi(VReg(d).d2, 0);
+    e.ins(VReg(d).d2[1], VReg(0).d2[0]);
   }
   static void EmitUINT_2101010(A64Emitter& e, const EmitArgType& i) {
+    // Inline PACK: clamp magic floats, extract bit fields, shift, OR-fold.
     int s = SrcVReg(e, i.src1, 2);
     int d = i.dest.reg().getIdx();
-    e.str(QReg(s),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-    e.add(e.x1, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
-    e.CallNativeSafe(reinterpret_cast<void*>(EmulatePACK_UINT_2101010));
-    e.ldr(QReg(d),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+
+    // Clamp to valid range: fmaxnm(src, min) then fminnm(result, max).
+    // fmaxnm clamps NaN to min (NaN packs as the minimum value).
+    // XYZ min=0x403FFE01 (-511), max=0x404001FF (+511)
+    // W   min=0x40400000 (0),    max=0x40400003 (+3)
+    e.mov(e.x0, 0x403FFE01403FFE01ull);
+    e.fmov(DReg(0), e.x0);
+    e.mov(e.x0, 0x40400000403FFE01ull);
+    e.ins(VReg(0).d2[1], e.x0);
+    e.fmaxnm(VReg(d).s4, VReg(s).s4, VReg(0).s4);
+
+    e.mov(e.x0, 0x404001FF404001FFull);
+    e.fmov(DReg(0), e.x0);
+    e.mov(e.x0, 0x40400003404001FFull);
+    e.ins(VReg(0).d2[1], e.x0);
+    e.fminnm(VReg(d).s4, VReg(d).s4, VReg(0).s4);
+
+    // Mask to extract encoded integer bits: {0x3FF, 0x3FF, 0x3FF, 0x3}
+    e.mov(e.x0, 0x000003FF000003FFull);
+    e.fmov(DReg(0), e.x0);
+    e.mov(e.x0, 0x00000003000003FFull);
+    e.ins(VReg(0).d2[1], e.x0);
+    e.and_(VReg(d).b16, VReg(d).b16, VReg(0).b16);
+
+    // Variable left-shift to position each field: {<<0, <<10, <<20, <<30}
+    e.mov(e.x0, 0x0000000A00000000ull);  // {0, 10}
+    e.fmov(DReg(0), e.x0);
+    e.mov(e.x0, 0x0000001E00000014ull);  // {20, 30}
+    e.ins(VReg(0).d2[1], e.x0);
+    e.ushl(VReg(d).s4, VReg(d).s4, VReg(0).s4);
+
+    // OR-fold all 4 lanes into one packed value.
+    e.ext(VReg(0).b16, VReg(d).b16, VReg(d).b16, 4);
+    e.orr(VReg(d).b16, VReg(d).b16, VReg(0).b16);
+    e.ext(VReg(0).b16, VReg(d).b16, VReg(d).b16, 8);
+    e.orr(VReg(d).b16, VReg(d).b16, VReg(0).b16);
+    // Result is in all 4 lanes; consumer reads u32[3].
   }
   static void EmitULONG_4202020(A64Emitter& e, const EmitArgType& i) {
+    // Inline PACK: clamp magic floats, extract bit fields, pack into 64-bit.
+    // 20-bit fields cross 32-bit boundaries, so use scalar GPR packing.
     int s = SrcVReg(e, i.src1, 2);
     int d = i.dest.reg().getIdx();
-    e.str(QReg(s),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-    e.add(e.x1, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
-    e.CallNativeSafe(reinterpret_cast<void*>(EmulatePACK_ULONG_4202020));
-    e.ldr(QReg(d),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+
+    // Clamp: fmaxnm(src, min) then fminnm(result, max).
+    // XYZ min=0x40400000+(-524287)=0x40380001, max=0x40400000+524287=0x4047FFFF
+    // W   min=0x40400000+0=0x40400000, max=0x40400000+15=0x4040000F
+    e.mov(e.x0, 0x4038000140380001ull);
+    e.fmov(DReg(0), e.x0);
+    e.mov(e.x0, 0x4040000040380001ull);
+    e.ins(VReg(0).d2[1], e.x0);
+    e.fmaxnm(VReg(d).s4, VReg(s).s4, VReg(0).s4);
+
+    e.mov(e.x0, 0x4047FFFF4047FFFFull);
+    e.fmov(DReg(0), e.x0);
+    e.mov(e.x0, 0x4040000F4047FFFFull);
+    e.ins(VReg(0).d2[1], e.x0);
+    e.fminnm(VReg(d).s4, VReg(d).s4, VReg(0).s4);
+
+    // Extract clamped values to GPRs: mask low bits from magic float encoding.
+    // XYZ: & 0xFFFFF (20 bits), W: & 0xF (4 bits)
+    e.umov(e.w1, VReg(d).s4[0]);
+    e.and_(e.w1, e.w1, 0xFFFFF);  // x
+    e.umov(e.w2, VReg(d).s4[1]);
+    e.and_(e.w2, e.w2, 0xFFFFF);  // y
+    e.umov(e.w3, VReg(d).s4[2]);
+    e.and_(e.w3, e.w3, 0xFFFFF);  // z
+    e.umov(e.w4, VReg(d).s4[3]);
+    e.and_(e.w4, e.w4, 0xF);  // w
+
+    // Pack into 64-bit: x | (y<<20) | (z<<40) | (w<<60)
+    e.orr(e.x0, e.x1, e.x2, LSL, 20);
+    e.orr(e.x0, e.x0, e.x3, LSL, 40);
+    e.orr(e.x0, e.x0, e.x4, LSL, 60);
+
+    // Store as u32[2]=high, u32[3]=low.  ror 32 swaps halves for LE layout.
+    e.ror(e.x0, e.x0, 32);
+    e.movi(VReg(d).d2, 0);
+    e.ins(VReg(d).d2[1], e.x0);
   }
   // Keep existing 8_IN_16 and 16_IN_32 implementations unchanged:
   static void Emit8_IN_16(A64Emitter& e, const EmitArgType& i, uint32_t flags) {
@@ -1681,16 +1518,6 @@ struct UNPACK : Sequence<UNPACK, I<OPCODE_UNPACK, V128Op, V128Op>> {
     e.fmov(VReg(0).s4, 1.0f);
     e.orr(VReg(d).b16, VReg(d).b16, VReg(0).b16);
   }
-  static void EmitCallHelper(A64Emitter& e, const EmitArgType& i, void* fn) {
-    int s = SrcVReg(e, i.src1, 2);
-    int d = i.dest.reg().getIdx();
-    e.str(QReg(s),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-    e.add(e.x1, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
-    e.CallNativeSafe(fn);
-    e.ldr(QReg(d),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-  }
   // Inline Xenos half→float conversion for 4 lanes in v0 (zero-extended
   // to 32-bit).  Xenos half-float has no inf/NaN (exp=31 is a normal
   // value), so we cannot use fcvtl.  Instead: integer shift + bias.
@@ -1766,9 +1593,23 @@ struct UNPACK : Sequence<UNPACK, I<OPCODE_UNPACK, V128Op, V128Op>> {
     e.uxtl2(VReg(0).s4, VReg(s).h8);
     EmitXenosHalfToFloat4(e, d);
   }
+  // Apply the magic-float overflow fixup on 4 lanes in v0.
+  // If any lane equals 0x403F8000 (short value -32768 overflows the
+  // encoding), replace it with QNaN 0x7FC00000.  Result in v_dest.
+  // Clobbers v0-v2, w0.
+  static void EmitMagicFloatOverflowCheck(A64Emitter& e, int dest) {
+    e.mov(e.w0, 0x403F8000u);
+    e.dup(VReg(1).s4, e.w0);
+    e.cmeq(VReg(1).s4, VReg(0).s4, VReg(1).s4);
+    e.mov(e.w0, 0x7FC00000u);
+    e.dup(VReg(2).s4, e.w0);
+    e.bsl(VReg(1).b16, VReg(2).b16, VReg(0).b16);
+    if (dest != 1) {
+      e.mov(VReg(dest).b16, VReg(1).b16);
+    }
+  }
   static void EmitSHORT_2(A64Emitter& e, const EmitArgType& i) {
     if (i.src1.is_constant && i.src1.value->IsConstantZero()) {
-      // Return {3.0, 3.0, 0.0, 1.0}
       vec128_t c;
       c.f32[0] = 3.0f;
       c.f32[1] = 3.0f;
@@ -1777,7 +1618,23 @@ struct UNPACK : Sequence<UNPACK, I<OPCODE_UNPACK, V128Op, V128Op>> {
       LoadV128Const(e, i.dest.reg().getIdx(), c);
       return;
     }
-    EmitCallHelper(e, i, reinterpret_cast<void*>(EmulateUNPACK_SHORT_2));
+    // Source shorts at h[6],h[7] (top 32 bits).  Rotate to h[0..1],
+    // sign-extend to 32-bit, add magic constant, fix ordering.
+    int s = SrcVReg(e, i.src1, 0);
+    int d = i.dest.reg().getIdx();
+    e.ext(VReg(0).b16, VReg(s).b16, VReg(s).b16, 12);
+    e.sxtl(VReg(0).s4, VReg(0).h4);
+    // v0 = {sext(h[6])=y, sext(h[7])=x, junk, junk}
+    e.mov(e.w0, 0x40400000u);
+    e.dup(VReg(1).s4, e.w0);
+    e.add(VReg(0).s4, VReg(0).s4, VReg(1).s4);
+    // Swap low pair to get {magic+x, magic+y, ...}
+    e.rev64(VReg(0).s4, VReg(0).s4);
+    // Set lanes 2,3 = {0.0f, 1.0f}
+    e.ins(VReg(0).s4[2], e.wzr);
+    e.mov(e.w0, 0x3F800000u);
+    e.ins(VReg(0).s4[3], e.w0);
+    EmitMagicFloatOverflowCheck(e, d);
   }
   static void EmitSHORT_4(A64Emitter& e, const EmitArgType& i) {
     if (i.src1.is_constant && i.src1.value->IsConstantZero()) {
@@ -1789,7 +1646,18 @@ struct UNPACK : Sequence<UNPACK, I<OPCODE_UNPACK, V128Op, V128Op>> {
       LoadV128Const(e, i.dest.reg().getIdx(), c);
       return;
     }
-    EmitCallHelper(e, i, reinterpret_cast<void*>(EmulateUNPACK_SHORT_4));
+    // Source shorts at h[4..7] (upper 64 bits).
+    int s = SrcVReg(e, i.src1, 0);
+    int d = i.dest.reg().getIdx();
+    // Sign-extend upper halfs: sxtl2 h[4..7] → s[0..3] = {w, z, y, x}
+    e.sxtl2(VReg(0).s4, VReg(s).h8);
+    e.mov(e.w0, 0x40400000u);
+    e.dup(VReg(1).s4, e.w0);
+    e.add(VReg(0).s4, VReg(0).s4, VReg(1).s4);
+    // Reorder {w,z,y,x} → {x,y,z,w}: rev64 then swap halves.
+    e.rev64(VReg(0).s4, VReg(0).s4);                  // {z,w,x,y}
+    e.ext(VReg(0).b16, VReg(0).b16, VReg(0).b16, 8);  // {x,y,z,w}
+    EmitMagicFloatOverflowCheck(e, d);
   }
   static void EmitUINT_2101010(A64Emitter& e, const EmitArgType& i) {
     if (i.src1.is_constant && i.src1.value->IsConstantZero()) {
@@ -1801,7 +1669,52 @@ struct UNPACK : Sequence<UNPACK, I<OPCODE_UNPACK, V128Op, V128Op>> {
       LoadV128Const(e, i.dest.reg().getIdx(), c);
       return;
     }
-    EmitCallHelper(e, i, reinterpret_cast<void*>(EmulateUNPACK_UINT_2101010));
+    // Inline UNPACK: extract 10-10-10-2 fields, sign-extend XYZ, add magic.
+    int s = SrcVReg(e, i.src1, 0);
+    int d = i.dest.reg().getIdx();
+
+    // Splat the packed u32[3] to all 4 lanes.
+    e.dup(VReg(0).s4, VReg(s).s4[3]);
+
+    // Mask per-lane bit fields: {0x3FF, 0xFFC00, 0x3FF00000, 0xC0000000}
+    e.mov(e.x0, 0x000FFC00000003FFull);
+    e.fmov(DReg(1), e.x0);
+    e.mov(e.x0, 0xC00000003FF00000ull);
+    e.ins(VReg(1).d2[1], e.x0);
+    e.and_(VReg(0).b16, VReg(0).b16, VReg(1).b16);
+
+    // Variable right-shift to align each field to bit 0.
+    // Shift counts: {0, -10, -20, -30} (negative = right shift for ushl).
+    e.mov(e.x0, 0xFFFFFFF600000000ull);  // {0, -10}
+    e.fmov(DReg(1), e.x0);
+    e.mov(e.x0, 0xFFFFFFE2FFFFFFECull);  // {-20, -30}
+    e.ins(VReg(1).d2[1], e.x0);
+    e.ushl(VReg(0).s4, VReg(0).s4, VReg(1).s4);
+
+    // Sign-extend XYZ from 10-bit via shl 22 + sshr 22.
+    // W is 2-bit unsigned — shl 22 puts it at bits 22-23 with bit 31=0,
+    // so sshr 22 zero-extends it correctly.
+    e.shl(VReg(0).s4, VReg(0).s4, 22);
+    e.sshr(VReg(0).s4, VReg(0).s4, 22);
+
+    // Add magic constants: {3.0, 3.0, 3.0, 1.0}
+    e.mov(e.x0, 0x4040000040400000ull);
+    e.fmov(DReg(1), e.x0);
+    e.mov(e.x0, 0x3F80000040400000ull);
+    e.ins(VReg(1).d2[1], e.x0);
+    e.add(VReg(0).s4, VReg(0).s4, VReg(1).s4);
+
+    // Overflow check: XYZ == 0x403FFE00 → QNaN (0x7FC00000).
+    // W result (0x3F800000..0x3F800003) never matches, so splat is safe.
+    e.mov(e.w0, 0x403FFE00u);
+    e.dup(VReg(1).s4, e.w0);
+    e.cmeq(VReg(1).s4, VReg(0).s4, VReg(1).s4);
+    e.mov(e.w0, 0x7FC00000u);
+    e.dup(VReg(2).s4, e.w0);
+    e.bsl(VReg(1).b16, VReg(2).b16, VReg(0).b16);
+    if (d != 1) {
+      e.mov(VReg(d).b16, VReg(1).b16);
+    }
   }
   static void EmitULONG_4202020(A64Emitter& e, const EmitArgType& i) {
     if (i.src1.is_constant && i.src1.value->IsConstantZero()) {
@@ -1813,7 +1726,45 @@ struct UNPACK : Sequence<UNPACK, I<OPCODE_UNPACK, V128Op, V128Op>> {
       LoadV128Const(e, i.dest.reg().getIdx(), c);
       return;
     }
-    EmitCallHelper(e, i, reinterpret_cast<void*>(EmulateUNPACK_ULONG_4202020));
+    // Inline UNPACK: extract 20-20-20-4 fields from 64-bit packed value,
+    // sign-extend XYZ, add magic constants.  Fields cross 32-bit boundaries
+    // so we use scalar GPR extraction via sbfx/ubfx.
+    int s = SrcVReg(e, i.src1, 0);
+    int d = i.dest.reg().getIdx();
+
+    // Extract 64-bit packed from d2[1] (u32[2]:u32[3]).
+    // LE d2[1] = u32[2] | (u32[3]<<32), but packed = (u32[2]<<32) | u32[3].
+    // ror by 32 swaps the two 32-bit halves.
+    e.umov(e.x0, VReg(s).d2[1]);
+    e.ror(e.x0, e.x0, 32);
+
+    // Extract and sign-extend each field.
+    e.sbfx(e.x1, e.x0, 0, 20);   // x: bits 0-19, signed
+    e.sbfx(e.x2, e.x0, 20, 20);  // y: bits 20-39, signed
+    e.sbfx(e.x3, e.x0, 40, 20);  // z: bits 40-59, signed
+    e.ubfx(e.x4, e.x0, 60, 4);   // w: bits 60-63, unsigned
+
+    // Add magic constants and insert into dest vector.
+    e.mov(e.w0, 0x40400000u);
+    e.add(e.w1, e.w1, e.w0);  // x + 3.0
+    e.add(e.w2, e.w2, e.w0);  // y + 3.0
+    e.add(e.w3, e.w3, e.w0);  // z + 3.0
+    e.mov(e.w0, 0x3F800000u);
+    e.add(e.w4, e.w4, e.w0);  // w + 1.0
+
+    e.ins(VReg(d).s4[0], e.w1);
+    e.ins(VReg(d).s4[1], e.w2);
+    e.ins(VReg(d).s4[2], e.w3);
+    e.ins(VReg(d).s4[3], e.w4);
+
+    // Overflow: XYZ == 0x40380000 → QNaN.  W can't match.
+    e.mov(e.w0, 0x40380000u);
+    e.dup(VReg(0).s4, e.w0);
+    e.cmeq(VReg(0).s4, VReg(d).s4, VReg(0).s4);
+    e.mov(e.w0, 0x7FC00000u);
+    e.dup(VReg(1).s4, e.w0);
+    e.bsl(VReg(0).b16, VReg(1).b16, VReg(d).b16);
+    e.mov(VReg(d).b16, VReg(0).b16);
   }
   // Keep existing 8_IN_16 and 16_IN_32 implementations unchanged:
   static void Emit8_IN_16(A64Emitter& e, const EmitArgType& i, uint32_t flags) {
@@ -1947,15 +1898,55 @@ EMITTER_OPCODE_TABLE(OPCODE_LVR, LVR_V128);
 // ============================================================================
 struct STVL_V128 : Sequence<STVL_V128, I<OPCODE_STVL, VoidOp, I64Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    // Inline STVL using 2-register TBL over {original_mem, rev32(src)}.
+    // STVL writes bytes offset..15 from the byte-swapped source.
+    // ctrl[i] = i (keep original) where i < offset,
+    // ctrl[i] = 16 + (i - offset) (from rev32(src)) where i >= offset.
+    // This equals: ctrl = identity + (mask & delta)
+    //   where mask = (i >= offset), delta = (16 - offset).
     auto addr = ComputeMemoryAddress(e, i.src1);
     int s = SrcVReg(e, i.src2, 2);
-    // Store source vec to scratch for C helper to read.
-    e.str(QReg(s),
+
+    // x0 = host address, w17 = offset, x16 = aligned address (saved).
+    e.add(e.x0, e.GetMembaseReg(), addr);
+    e.and_(e.w17, e.w0, 0xF);
+    e.and_(e.x0, e.x0, ~0xFull);
+    e.mov(e.x16, e.x0);  // save aligned addr for final store
+
+    // v0 = original mem (table reg 0), v1 = rev32(src) (table reg 1).
+    e.ldr(QReg(0), ptr(e.x0));
+    e.rev32(VReg(1).b16, VReg(s).b16);
+
+    // Build identity {0,1,...,15} in v2.
+    e.mov(e.x0, 0x0706050403020100ull);
+    e.fmov(DReg(2), e.x0);
+    e.mov(e.x0, 0x0F0E0D0C0B0A0908ull);
+    e.ins(VReg(2).d2[1], e.x0);
+
+    // Save identity to stack scratch (needed after mask computation).
+    e.str(QReg(2),
           ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-    // x1 = host address, x2 = src data pointer
-    e.add(e.x1, e.GetMembaseReg(), addr);
-    e.add(e.x2, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
-    e.CallNativeSafe(reinterpret_cast<void*>(EmulateSTVL));
+
+    // v3 = mask: 0xFF where i >= offset.
+    e.dup(VReg(3).b16, e.w17);
+    e.cmhs(VReg(3).b16, VReg(2).b16, VReg(3).b16);
+
+    // v2 = delta splat = (16 - offset).
+    e.mov(e.w0, 16);
+    e.sub(e.w0, e.w0, e.w17);
+    e.dup(VReg(2).b16, e.w0);
+
+    // v3 = masked delta = mask & delta.
+    e.and_(VReg(3).b16, VReg(3).b16, VReg(2).b16);
+
+    // Restore identity and compute ctrl = identity + masked_delta.
+    e.ldr(QReg(2),
+          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+    e.add(VReg(2).b16, VReg(2).b16, VReg(3).b16);
+
+    // 2-register TBL: blend original mem and rev32(src).
+    e.tbl(VReg(2).b16, VReg(0).b16, 2, VReg(2).b16);
+    e.str(QReg(2), ptr(e.x16));
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_STVL, STVL_V128);
@@ -1965,13 +1956,57 @@ EMITTER_OPCODE_TABLE(OPCODE_STVL, STVL_V128);
 // ============================================================================
 struct STVR_V128 : Sequence<STVR_V128, I<OPCODE_STVR, VoidOp, I64Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    // Inline STVR using 2-register TBL over {original_mem, rev32(src)}.
+    // STVR writes bytes 0..offset-1 from the byte-swapped source tail.
+    // ctrl[i] = 16 + (16 - offset + i) where i < offset (from rev32(src)),
+    // ctrl[i] = i (keep original) where i >= offset.
+    // This equals: ctrl = identity + (mask & delta)
+    //   where mask = (i < offset), delta = (32 - offset).
+    // When offset == 0, no bytes are written (mask is all-zero → identity →
+    // load and store back the same memory, effectively a no-op).
     auto addr = ComputeMemoryAddress(e, i.src1);
     int s = SrcVReg(e, i.src2, 2);
-    e.str(QReg(s),
+
+    // x0 = host address, w17 = offset, x16 = aligned address (saved).
+    e.add(e.x0, e.GetMembaseReg(), addr);
+    e.and_(e.w17, e.w0, 0xF);
+    e.and_(e.x0, e.x0, ~0xFull);
+    e.mov(e.x16, e.x0);
+
+    // v0 = original mem (table reg 0), v1 = rev32(src) (table reg 1).
+    e.ldr(QReg(0), ptr(e.x0));
+    e.rev32(VReg(1).b16, VReg(s).b16);
+
+    // Build identity in v2.
+    e.mov(e.x0, 0x0706050403020100ull);
+    e.fmov(DReg(2), e.x0);
+    e.mov(e.x0, 0x0F0E0D0C0B0A0908ull);
+    e.ins(VReg(2).d2[1], e.x0);
+
+    // Save identity to stack scratch.
+    e.str(QReg(2),
           ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-    e.add(e.x1, e.GetMembaseReg(), addr);
-    e.add(e.x2, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
-    e.CallNativeSafe(reinterpret_cast<void*>(EmulateSTVR));
+
+    // v3 = mask: 0xFF where i < offset (complement of STVL's mask).
+    e.dup(VReg(3).b16, e.w17);
+    e.cmhi(VReg(3).b16, VReg(3).b16, VReg(2).b16);
+
+    // v2 = delta splat = (32 - offset).
+    e.mov(e.w0, 32);
+    e.sub(e.w0, e.w0, e.w17);
+    e.dup(VReg(2).b16, e.w0);
+
+    // v3 = masked delta.
+    e.and_(VReg(3).b16, VReg(3).b16, VReg(2).b16);
+
+    // Restore identity and compute ctrl.
+    e.ldr(QReg(2),
+          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+    e.add(VReg(2).b16, VReg(2).b16, VReg(3).b16);
+
+    // 2-register TBL and store.
+    e.tbl(VReg(2).b16, VReg(0).b16, 2, VReg(2).b16);
+    e.str(QReg(2), ptr(e.x16));
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_STVR, STVR_V128);

@@ -4794,31 +4794,55 @@ EMITTER_OPCODE_TABLE(OPCODE_TO_SINGLE, TOSINGLE);
 // ============================================================================
 struct SET_NJM : Sequence<SET_NJM, I<OPCODE_SET_NJM, VoidOp, I8Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    // NJM (Non-Java Mode) maps to ARM64 FPCR FZ (Flush-to-Zero) bit (bit 24).
-    // When NJM=1, enable flush-to-zero. When NJM=0, disable.
-    // mrs x0, FPCR  (op0=3, op1=3, CRn=4, CRm=4, op2=0)
-    e.mrs(e.x0, 3, 3, 4, 4, 0);
+    // NJM (Non-Java Mode) is a VMX/AltiVec feature (VSCR bit 16) that
+    // controls flush-to-zero for vector operations.  It does NOT affect
+    // scalar FPU behaviour.  On ARM64 this maps to FPCR.FZ (bit 24) in
+    // the cached fpcr_vmx value, which EmitWithVmxFpcr loads before
+    // each vector FP operation.
+    auto bctx = e.GetBackendCtxReg();
+
+    // Toggle FZ bit in cached fpcr_vmx.
+    e.ldr(e.w0, ptr(bctx, static_cast<uint32_t>(
+                              offsetof(A64BackendContext, fpcr_vmx))));
     if (i.src1.is_constant) {
       if (i.src1.constant()) {
-        e.orr(e.x0, e.x0, (1u << 24));  // Set FZ bit
+        e.orr(e.w0, e.w0, (1u << 24));  // NJM=1: set FZ
       } else {
-        e.and_(e.x0, e.x0, ~(1ull << 24));  // Clear FZ bit
+        e.and_(e.w0, e.w0, ~(1u << 24));  // NJM=0: clear FZ
       }
     } else {
-      // Dynamic: test src1, set/clear FZ accordingly.
       auto& set_fz = e.NewCachedLabel();
       auto& done = e.NewCachedLabel();
       e.cbnz(i.src1, set_fz);
-      // NJM=0: clear FZ
-      e.and_(e.x0, e.x0, ~(1ull << 24));
+      e.and_(e.w0, e.w0, ~(1u << 24));  // NJM=0: clear FZ
       e.b(done);
       e.L(set_fz);
-      // NJM=1: set FZ
-      e.orr(e.x0, e.x0, (1u << 24));
+      e.orr(e.w0, e.w0, (1u << 24));  // NJM=1: set FZ
       e.L(done);
     }
-    // msr FPCR, x0  (op0=3, op1=3, CRn=4, CRm=4, op2=0)
-    e.msr(3, 3, 4, 4, 0, e.x0);
+    e.str(e.w0, ptr(bctx, static_cast<uint32_t>(
+                              offsetof(A64BackendContext, fpcr_vmx))));
+
+    // Update kA64BackendNJMOn flag.
+    e.ldr(e.w0,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+    if (i.src1.is_constant) {
+      if (i.src1.constant()) {
+        e.orr(e.w0, e.w0, 1u << kA64BackendNJMOn);
+      } else {
+        e.mov(e.w1, 1u << kA64BackendNJMOn);
+        e.bic(e.w0, e.w0, e.w1);
+      }
+    } else {
+      e.mov(e.w1, 1u << kA64BackendNJMOn);
+      e.bic(e.w0, e.w0, e.w1);
+      e.tst(i.src1, 0xFF);
+      e.csel(e.w1, e.w1, e.wzr, Xbyak_aarch64::Cond::NE);
+      e.orr(e.w0, e.w0, e.w1);
+    }
+    e.str(e.w0,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+
     e.ForgetFpcrMode();
   }
 };

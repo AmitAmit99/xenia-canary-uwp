@@ -85,4 +85,3 @@ jobs:
     secrets: inherit
     with:
       tag: ${{ github.sha }}
-      branch: ${{ github.ref_name }}

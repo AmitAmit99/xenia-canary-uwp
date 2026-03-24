@@ -7,11 +7,6 @@ on:
         description: 'Full commit SHA for tagging'
         required: true
         type: string
-      branch:
-        description: 'Branch name used as release tag suffix (e.g. canary_experimental)'
-        required: false
-        type: string
-        default: 'canary_experimental'
 
 jobs:
   release:
@@ -35,8 +30,7 @@ jobs:
         run: |
           FULL_SHA="${{ inputs.tag }}"
           SHORT_SHA="${FULL_SHA::7}"
-          BRANCH="${{ inputs.branch }}"
-          TAG_NAME="${SHORT_SHA}_${BRANCH}"
+          TAG_NAME="${SHORT_SHA}"
 
           echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
 
@@ -161,7 +155,6 @@ jobs:
               --target "${{ inputs.tag }}" \
               --title "${TAG}" \
               --notes-file release_notes.md \
-              --notes "${BODY}" \
               --latest \
               release_assets/*
           fi

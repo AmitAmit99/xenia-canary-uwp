@@ -2402,7 +2402,10 @@ struct CNTLZ_I8 : Sequence<CNTLZ_I8, I<OPCODE_CNTLZ, I8Op, I8Op>> {
       e.mov(i.dest, static_cast<uint64_t>(count));
     } else {
       // clz operates on 32-bit, so shift left 24 to put byte in top.
+      // OR a sentinel bit at position 23 so that a zero byte yields 8,
+      // not 32.
       e.lsl(e.w0, i.src1, 24);
+      e.orr(e.w0, e.w0, 1u << 23);
       e.clz(i.dest, e.w0);
     }
   }
@@ -2418,7 +2421,9 @@ struct CNTLZ_I16 : Sequence<CNTLZ_I16, I<OPCODE_CNTLZ, I8Op, I16Op>> {
       }
       e.mov(i.dest, static_cast<uint64_t>(count));
     } else {
+      // Sentinel bit at position 15 caps the result at 16 for zero input.
       e.lsl(e.w0, i.src1, 16);
+      e.orr(e.w0, e.w0, 1u << 15);
       e.clz(i.dest, e.w0);
     }
   }

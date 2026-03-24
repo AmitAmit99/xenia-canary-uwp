@@ -1691,6 +1691,40 @@ struct UNPACK : Sequence<UNPACK, I<OPCODE_UNPACK, V128Op, V128Op>> {
     e.ldr(QReg(d),
           ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
   }
+  // Inline Xenos half→float conversion for 4 lanes in v0 (zero-extended
+  // to 32-bit).  Xenos half-float has no inf/NaN (exp=31 is a normal
+  // value), so we cannot use fcvtl.  Instead: integer shift + bias.
+  // Result written to v_dest.  Clobbers v0-v3, w0.
+  static void EmitXenosHalfToFloat4(A64Emitter& e, int dest) {
+    // v0 = zero-extended halfs (16-bit values in 32-bit lanes).
+    // abs = v0 & 0x7FFF
+    e.mov(e.w0, 0x7FFFu);
+    e.dup(VReg(1).s4, e.w0);
+    e.and_(VReg(2).b16, VReg(0).b16, VReg(1).b16);  // v2 = abs
+
+    // value = (abs << 13) + 0x38000000  (bias adjustment: 112 << 23)
+    e.shl(VReg(1).s4, VReg(2).s4, 13);
+    e.mov(e.w0, 0x38000000u);
+    e.dup(VReg(3).s4, e.w0);
+    e.add(VReg(1).s4, VReg(1).s4, VReg(3).s4);  // v1 = biased value
+
+    // sign = (v0 >> 15) << 31
+    e.ushr(VReg(3).s4, VReg(0).s4, 15);
+    e.shl(VReg(3).s4, VReg(3).s4, 31);  // v3 = sign at bit 31
+
+    // result = sign | value
+    e.orr(VReg(0).b16, VReg(3).b16, VReg(1).b16);
+
+    // Flush to ±0 where exponent == 0 (denormals and zeros).
+    // exp = abs >> 10
+    e.ushr(VReg(1).s4, VReg(2).s4, 10);
+    e.cmeq(VReg(1).s4, VReg(1).s4, 0);  // v1 = mask: all-1s where exp==0
+    // Where exp==0: use sign only (±0), else: use full result.
+    e.bsl(VReg(1).b16, VReg(3).b16, VReg(0).b16);
+
+    // Fix PPC word-pair ordering.
+    e.rev64(VReg(dest).s4, VReg(1).s4);
+  }
   static void EmitFLOAT16_2(A64Emitter& e, const EmitArgType& i) {
     if (i.src1.is_constant) {
       vec128_t result = {};
@@ -1703,7 +1737,17 @@ struct UNPACK : Sequence<UNPACK, I<OPCODE_UNPACK, V128Op, V128Op>> {
       LoadV128Const(e, i.dest.reg().getIdx(), result);
       return;
     }
-    EmitCallHelper(e, i, reinterpret_cast<void*>(EmulateUNPACK_FLOAT16_2));
+    // Input halfs are at h[6],h[7] (bytes 12-15). Rotate to h[0],h[1]
+    // and zero-extend to 32-bit lanes for the conversion helper.
+    int s = SrcVReg(e, i.src1, 0);
+    int d = i.dest.reg().getIdx();
+    e.ext(VReg(0).b16, VReg(s).b16, VReg(s).b16, 12);
+    e.uxtl(VReg(0).s4, VReg(0).h4);
+    EmitXenosHalfToFloat4(e, d);
+    // Only lanes 0,1 are valid. Set lanes 2,3 = {0.0f, 1.0f}.
+    e.ins(VReg(d).s4[2], e.wzr);
+    e.mov(e.w0, 0x3F800000u);
+    e.ins(VReg(d).s4[3], e.w0);
   }
   static void EmitFLOAT16_4(A64Emitter& e, const EmitArgType& i) {
     if (i.src1.is_constant) {
@@ -1715,7 +1759,12 @@ struct UNPACK : Sequence<UNPACK, I<OPCODE_UNPACK, V128Op, V128Op>> {
       LoadV128Const(e, i.dest.reg().getIdx(), result);
       return;
     }
-    EmitCallHelper(e, i, reinterpret_cast<void*>(EmulateUNPACK_FLOAT16_4));
+    // Input halfs are at h[4..7] (upper 64 bits). Zero-extend to 32-bit
+    // lanes and run the conversion.
+    int s = SrcVReg(e, i.src1, 0);
+    int d = i.dest.reg().getIdx();
+    e.uxtl2(VReg(0).s4, VReg(s).h8);
+    EmitXenosHalfToFloat4(e, d);
   }
   static void EmitSHORT_2(A64Emitter& e, const EmitArgType& i) {
     if (i.src1.is_constant && i.src1.value->IsConstantZero()) {

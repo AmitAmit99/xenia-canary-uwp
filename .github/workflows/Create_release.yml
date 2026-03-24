@@ -161,7 +161,6 @@ jobs:
           else
             gh release create "${TAG}" \
               --repo "${REPO}" \
-              --target "${{ inputs.tag }}" \
               --title "${TITLE}" \
               --notes-file release_notes.md \
               --latest \

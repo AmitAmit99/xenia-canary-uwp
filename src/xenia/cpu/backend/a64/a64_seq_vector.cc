@@ -1824,15 +1824,33 @@ EMITTER_OPCODE_TABLE(OPCODE_UNPACK, UNPACK);
 // ============================================================================
 struct LVL_V128 : Sequence<LVL_V128, I<OPCODE_LVL, V128Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    // Inline LVL using TBL.  The bswap-within-lanes base pattern plus the
+    // address offset gives a TBL control vector.  Indices >= 16 naturally
+    // produce zero from TBL, which is the correct LVL behaviour.
     auto addr = ComputeMemoryAddress(e, i.src1);
     int d = i.dest.reg().getIdx();
-    // x1 = host address = membase + guest_addr
-    e.add(e.x1, e.GetMembaseReg(), addr);
-    // x2 = result pointer (scratch area)
-    e.add(e.x2, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
-    e.CallNativeSafe(reinterpret_cast<void*>(EmulateLVL));
-    e.ldr(QReg(d),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+
+    // x0 = host address
+    e.add(e.x0, e.GetMembaseReg(), addr);
+    // w17 = offset within 16-byte block
+    e.and_(e.w17, e.w0, 0xF);
+    // Align address down to 16-byte boundary and load.
+    e.and_(e.x0, e.x0, ~0xFull);
+    e.ldr(QReg(0), ptr(e.x0));
+
+    // Build bswap-within-lanes base pattern in v1:
+    //   {3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12}
+    e.mov(e.x0, 0x0405060700010203ull);
+    e.fmov(DReg(1), e.x0);
+    e.mov(e.x0, 0x0C0D0E0F08090A0Bull);
+    e.ins(VReg(1).d2[1], e.x0);
+
+    // ctrl = base + offset; TBL gives 0 for ctrl >= 16.
+    e.dup(VReg(2).b16, e.w17);
+    e.add(VReg(1).b16, VReg(1).b16, VReg(2).b16);
+
+    // Single-register TBL: dest[i] = mem[ctrl[i]] or 0.
+    e.tbl(VReg(d).b16, VReg(0).b16, 1, VReg(1).b16);
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_LVL, LVL_V128);
@@ -1842,13 +1860,35 @@ EMITTER_OPCODE_TABLE(OPCODE_LVL, LVL_V128);
 // ============================================================================
 struct LVR_V128 : Sequence<LVR_V128, I<OPCODE_LVR, V128Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    // Inline LVR using a 2-register TBL.  Table = {zeros, mem}.
+    // Indices 0-15 read zeros (from v0), 16-31 read mem (from v1).
+    // base + offset produces indices > 15 exactly where LVR should output
+    // the memory bytes, and <= 15 where it should output zero.
+    // When offset == 0, all indices are 0-15 → all zeros, which is correct.
     auto addr = ComputeMemoryAddress(e, i.src1);
     int d = i.dest.reg().getIdx();
-    e.add(e.x1, e.GetMembaseReg(), addr);
-    e.add(e.x2, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
-    e.CallNativeSafe(reinterpret_cast<void*>(EmulateLVR));
-    e.ldr(QReg(d),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+
+    // x0 = host address
+    e.add(e.x0, e.GetMembaseReg(), addr);
+    // w17 = offset
+    e.and_(e.w17, e.w0, 0xF);
+    // Align and load.  v0=zeros (table reg 0), v1=mem (table reg 1).
+    e.movi(VReg(0).d2, 0);
+    e.and_(e.x0, e.x0, ~0xFull);
+    e.ldr(QReg(1), ptr(e.x0));
+
+    // Build base pattern in v2.
+    e.mov(e.x0, 0x0405060700010203ull);
+    e.fmov(DReg(2), e.x0);
+    e.mov(e.x0, 0x0C0D0E0F08090A0Bull);
+    e.ins(VReg(2).d2[1], e.x0);
+
+    // ctrl = base + offset.
+    e.dup(VReg(3).b16, e.w17);
+    e.add(VReg(2).b16, VReg(2).b16, VReg(3).b16);
+
+    // 2-register TBL over {v0, v1}.
+    e.tbl(VReg(d).b16, VReg(0).b16, 2, VReg(2).b16);
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_LVR, LVR_V128);

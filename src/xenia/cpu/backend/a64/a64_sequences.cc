@@ -4434,20 +4434,19 @@ struct SET_ROUNDING_MODE
   static void Emit(A64Emitter& e, const EmitArgType& i) {
     // Input is PPC FPSCR bits (already masked to 0-7 by the frontend).
     // We set FPCR RMode + FZ bits and cache the value in the backend context.
-    // x17 = backend context base pointer.
-    e.sub(e.x17, e.GetContextReg(),
-          static_cast<uint32_t>(sizeof(A64BackendContext)));
+    auto bctx = e.GetBackendCtxReg();
 
     if (i.src1.is_constant) {
       uint32_t fpcr_val = fpcr_table[i.src1.constant() & 7];
       e.mov(e.x0, static_cast<uint64_t>(fpcr_val));
       e.msr(3, 3, 4, 4, 0, e.x0);  // msr FPCR, x0
       // Cache in backend context.
-      e.str(e.w0, ptr(e.x17, static_cast<uint32_t>(
-                                 offsetof(A64BackendContext, fpcr_fpu))));
+      e.str(e.w0, ptr(bctx, static_cast<uint32_t>(
+                                offsetof(A64BackendContext, fpcr_fpu))));
       // Update NonIEEE flag.
-      e.ldr(e.w0, ptr(e.x17, static_cast<uint32_t>(
-                                 offsetof(A64BackendContext, flags))));
+      e.ldr(
+          e.w0,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
       if (i.src1.constant() & 4) {
         e.orr(e.w0, e.w0, 1u << kA64BackendNonIEEEMode);
       } else {
@@ -4455,8 +4454,9 @@ struct SET_ROUNDING_MODE
         e.mov(e.w1, 1u << kA64BackendNonIEEEMode);
         e.bic(e.w0, e.w0, e.w1);
       }
-      e.str(e.w0, ptr(e.x17, static_cast<uint32_t>(
-                                 offsetof(A64BackendContext, flags))));
+      e.str(
+          e.w0,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
     } else {
       // Dynamic: look up FPCR value from table.
       e.mov(e.x0, reinterpret_cast<uint64_t>(fpcr_table));
@@ -4465,11 +4465,12 @@ struct SET_ROUNDING_MODE
       // Write FPCR.
       e.msr(3, 3, 4, 4, 0, e.x0);
       // Cache in backend context.
-      e.str(e.w0, ptr(e.x17, static_cast<uint32_t>(
-                                 offsetof(A64BackendContext, fpcr_fpu))));
+      e.str(e.w0, ptr(bctx, static_cast<uint32_t>(
+                                offsetof(A64BackendContext, fpcr_fpu))));
       // Update NonIEEE flag based on bit 2 of input.
-      e.ldr(e.w0, ptr(e.x17, static_cast<uint32_t>(
-                                 offsetof(A64BackendContext, flags))));
+      e.ldr(
+          e.w0,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
       // Clear bit kA64BackendNonIEEEMode using BIC (avoids bitmask encoding).
       e.mov(e.w1, 1u << kA64BackendNonIEEEMode);
       e.bic(e.w0, e.w0, e.w1);
@@ -4477,8 +4478,9 @@ struct SET_ROUNDING_MODE
       e.tst(i.src1, 4);
       e.csel(e.w1, e.w1, e.wzr, Xbyak_aarch64::Cond::NE);
       e.orr(e.w0, e.w0, e.w1);
-      e.str(e.w0, ptr(e.x17, static_cast<uint32_t>(
-                                 offsetof(A64BackendContext, flags))));
+      e.str(
+          e.w0,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
     }
     e.ChangeFpcrMode(FPCRMode::Fpu, /*already_set=*/true);
   }

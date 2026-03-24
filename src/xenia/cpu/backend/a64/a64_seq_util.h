@@ -35,10 +35,9 @@ inline void EmitWithVmxFpcr(A64Emitter& e, Fn&& emit_op) {
   // and restore around each VMX op so vector code doesn't leak FPCR changes
   // into later scalar instructions.
   e.mrs(e.x13, 3, 3, 4, 4, 0);
-  e.sub(e.x14, e.GetContextReg(),
-        static_cast<uint32_t>(sizeof(A64BackendContext)));
-  e.ldr(e.w15, Xbyak_aarch64::ptr(e.x14, static_cast<uint32_t>(offsetof(
-                                             A64BackendContext, fpcr_vmx))));
+  e.ldr(e.w15, Xbyak_aarch64::ptr(e.GetBackendCtxReg(),
+                                  static_cast<uint32_t>(
+                                      offsetof(A64BackendContext, fpcr_vmx))));
   e.msr(3, 3, 4, 4, 0, e.x15);
   emit_op();
   e.msr(3, 3, 4, 4, 0, e.x13);

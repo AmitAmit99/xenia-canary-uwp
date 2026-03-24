@@ -1087,10 +1087,11 @@ EMITTER_OPCODE_TABLE(OPCODE_STORE_MMIO, STORE_MMIO_I32);
 // ============================================================================
 // OPCODE_RESERVED_LOAD / OPCODE_RESERVED_STORE
 // ============================================================================
-// Helper: get pointer to A64BackendContext in x17.
-static void LoadBackendCtxPtr(A64Emitter& e) {
-  e.sub(e.x17, e.GetContextReg(),
-        static_cast<uint32_t>(sizeof(A64BackendContext)));
+// Helper: get pointer to A64BackendContext.
+// x19 is the dedicated backend context register, so this is a no-op
+// accessor for readability. The returned register is x19.
+static const Xbyak_aarch64::XReg& LoadBackendCtxPtr(A64Emitter& e) {
+  return e.GetBackendCtxReg();
 }
 
 struct RESERVED_LOAD_I32
@@ -1102,20 +1103,20 @@ struct RESERVED_LOAD_I32
     // Load the value (may clobber addr if dest == addr).
     e.ldr(i.dest, ptr(e.GetMembaseReg(), addr));
     // Save reservation: address and value in backend context.
-    LoadBackendCtxPtr(e);
+    auto bctx = LoadBackendCtxPtr(e);
     // Store the guest address (already saved in x0).
-    e.str(e.x0, ptr(e.x17, static_cast<uint32_t>(offsetof(
-                               A64BackendContext, cached_reserve_offset))));
+    e.str(e.x0, ptr(bctx, static_cast<uint32_t>(offsetof(
+                              A64BackendContext, cached_reserve_offset))));
     // Store the loaded value (zero-extended to 64-bit).
     e.mov(e.w1, i.dest);
-    e.str(e.x1, ptr(e.x17, static_cast<uint32_t>(offsetof(
-                               A64BackendContext, cached_reserve_value_))));
+    e.str(e.x1, ptr(bctx, static_cast<uint32_t>(offsetof(
+                              A64BackendContext, cached_reserve_value_))));
     // Set the "has reserve" flag (bit 1).
-    e.ldr(e.w1, ptr(e.x17,
-                    static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+    e.ldr(e.w1,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
     e.orr(e.w1, e.w1, static_cast<uint32_t>(1u << kA64BackendHasReserveBit));
-    e.str(e.w1, ptr(e.x17,
-                    static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+    e.str(e.w1,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
   }
 };
 struct RESERVED_LOAD_I64
@@ -1127,16 +1128,16 @@ struct RESERVED_LOAD_I64
     // Load the value (may clobber addr if dest == addr).
     e.ldr(i.dest, ptr(e.GetMembaseReg(), addr));
     // Save reservation in backend context.
-    LoadBackendCtxPtr(e);
-    e.str(e.x0, ptr(e.x17, static_cast<uint32_t>(offsetof(
-                               A64BackendContext, cached_reserve_offset))));
-    e.str(i.dest, ptr(e.x17, static_cast<uint32_t>(offsetof(
-                                 A64BackendContext, cached_reserve_value_))));
-    e.ldr(e.w1, ptr(e.x17,
-                    static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+    auto bctx = LoadBackendCtxPtr(e);
+    e.str(e.x0, ptr(bctx, static_cast<uint32_t>(offsetof(
+                              A64BackendContext, cached_reserve_offset))));
+    e.str(i.dest, ptr(bctx, static_cast<uint32_t>(offsetof(
+                                A64BackendContext, cached_reserve_value_))));
+    e.ldr(e.w1,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
     e.orr(e.w1, e.w1, static_cast<uint32_t>(1u << kA64BackendHasReserveBit));
-    e.str(e.w1, ptr(e.x17,
-                    static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+    e.str(e.w1,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_RESERVED_LOAD, RESERVED_LOAD_I32,
@@ -1150,25 +1151,25 @@ struct RESERVED_STORE_I32
     auto& no_reserve = e.NewCachedLabel();
     auto& done = e.NewCachedLabel();
     // Check if we have a reservation.
-    LoadBackendCtxPtr(e);
-    e.ldr(e.w4, ptr(e.x17,
-                    static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+    auto bctx = LoadBackendCtxPtr(e);
+    e.ldr(e.w4,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
     e.tbz(e.w4, kA64BackendHasReserveBit, no_reserve);
     // Clear the reserve flag.
     e.and_(e.w4, e.w4,
            static_cast<uint32_t>(~(1u << kA64BackendHasReserveBit)));
-    e.str(e.w4, ptr(e.x17,
-                    static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+    e.str(e.w4,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
     // Check if address matches.
-    e.ldr(e.x4, ptr(e.x17, static_cast<uint32_t>(offsetof(
-                               A64BackendContext, cached_reserve_offset))));
+    e.ldr(e.x4, ptr(bctx, static_cast<uint32_t>(offsetof(
+                              A64BackendContext, cached_reserve_offset))));
     e.mov(e.w5, WReg(addr.getIdx()));
     e.cmp(e.x4, e.x5);
     e.b(Xbyak_aarch64::NE, no_reserve);
     // Address matches. Do atomic compare-exchange.
     // Expected value from cached_reserve_value_.
-    e.ldr(e.w5, ptr(e.x17, static_cast<uint32_t>(offsetof(
-                               A64BackendContext, cached_reserve_value_))));
+    e.ldr(e.w5, ptr(bctx, static_cast<uint32_t>(offsetof(
+                              A64BackendContext, cached_reserve_value_))));
     // Desired value.
     if (i.src2.is_constant) {
       e.mov(e.w6,
@@ -1204,22 +1205,22 @@ struct RESERVED_STORE_I64
     auto addr = ComputeMemoryAddress(e, i.src1);
     auto& no_reserve = e.NewCachedLabel();
     auto& done = e.NewCachedLabel();
-    LoadBackendCtxPtr(e);
-    e.ldr(e.w4, ptr(e.x17,
-                    static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+    auto bctx = LoadBackendCtxPtr(e);
+    e.ldr(e.w4,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
     e.tbz(e.w4, kA64BackendHasReserveBit, no_reserve);
     e.and_(e.w4, e.w4,
            static_cast<uint32_t>(~(1u << kA64BackendHasReserveBit)));
-    e.str(e.w4, ptr(e.x17,
-                    static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
-    e.ldr(e.x4, ptr(e.x17, static_cast<uint32_t>(offsetof(
-                               A64BackendContext, cached_reserve_offset))));
+    e.str(e.w4,
+          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+    e.ldr(e.x4, ptr(bctx, static_cast<uint32_t>(offsetof(
+                              A64BackendContext, cached_reserve_offset))));
     e.mov(e.w5, WReg(addr.getIdx()));
     e.cmp(e.x4, e.x5);
     e.b(Xbyak_aarch64::NE, no_reserve);
     // 64-bit compare-exchange.
-    e.ldr(e.x5, ptr(e.x17, static_cast<uint32_t>(offsetof(
-                               A64BackendContext, cached_reserve_value_))));
+    e.ldr(e.x5, ptr(bctx, static_cast<uint32_t>(offsetof(
+                              A64BackendContext, cached_reserve_value_))));
     if (i.src2.is_constant) {
       e.mov(e.x6, static_cast<uint64_t>(i.src2.constant()));
     } else {

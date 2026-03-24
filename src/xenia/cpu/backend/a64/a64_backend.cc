@@ -123,14 +123,15 @@ HostToGuestThunk A64HelperEmitter::EmitHostToGuestThunk() {
   // Set up guest execution state.
   // x20 = context (PPCContext*)
   mov(x20, x1);
+  // x19 = backend context (immediately before PPCContext in memory)
+  sub(x19, x20, static_cast<uint32_t>(sizeof(A64BackendContext)));
   // x21 = virtual_membase (loaded from context)
   ldr(x21, ptr(x20, static_cast<int32_t>(
                         offsetof(ppc::PPCContext, virtual_membase))));
   // Restore the guest scalar FPCR on every host->guest entry so host-side
   // work done before the call can't leak a stale rounding / non-IEEE mode.
-  sub(x10, x20, static_cast<uint32_t>(sizeof(A64BackendContext)));
   ldr(w11,
-      ptr(x10, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
+      ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
   msr(3, 3, 4, 4, 0, x11);
   // x0 still holds target, x2 holds return address.
   // The guest function's prolog stores x0 to GUEST_RET_ADDR on its stack
@@ -247,9 +248,9 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
 
   // Host callbacks may change FPCR. Restore the guest scalar FPCR before
   // resuming the JIT so later guest ops observe the cached PPC mode.
-  sub(x10, x20, static_cast<uint32_t>(sizeof(A64BackendContext)));
+  // x19 (backend context) is callee-saved, so it survives the host call.
   ldr(w11,
-      ptr(x10, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
+      ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
   msr(3, 3, 4, 4, 0, x11);
 
   code_offsets.epilog = getSize();
@@ -365,8 +366,8 @@ ResolveFunctionThunk A64HelperEmitter::EmitResolveFunctionThunk() {
 // On entry (set by the tail-emitted sync check in the guest function):
 //   x8  = return address (where to jump after fixup)
 //   x9  = caller's stack size (to subtract from restored SP)
+//   x19 = A64BackendContext*
 //   x20 = PPCContext*
-//   The backend context is at (x20 - sizeof(A64BackendContext)).
 void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
   using namespace Xbyak_aarch64;
   struct {
@@ -381,15 +382,13 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
   code_offsets.prolog_stack_alloc = getSize();
   code_offsets.body = getSize();
 
-  // Load backend context pointer: x17 = x20 - sizeof(A64BackendContext)
-  mov(x17, static_cast<uint64_t>(sizeof(A64BackendContext)));
-  sub(x17, x20, x17);
+  // x19 = backend context pointer (already set up by HostToGuestThunk)
 
   // x10 = stackpoints array pointer
-  ldr(x10, ptr(x17, static_cast<uint32_t>(
+  ldr(x10, ptr(x19, static_cast<uint32_t>(
                         offsetof(A64BackendContext, stackpoints))));
   // w11 = current_stackpoint_depth
-  ldr(w11, ptr(x17, static_cast<uint32_t>(offsetof(A64BackendContext,
+  ldr(w11, ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext,
                                                    current_stackpoint_depth))));
 
   // w12 = current guest r1
@@ -438,7 +437,7 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
   // Update current_stackpoint_depth = index + 1
   // (the entry we restored to has been consumed)
   add(w13, w13, 1);
-  str(w13, ptr(x17, static_cast<uint32_t>(offsetof(A64BackendContext,
+  str(w13, ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext,
                                                    current_stackpoint_depth))));
 
   // Jump back to the caller.
@@ -587,7 +586,7 @@ bool A64Backend::Initialize(Processor* processor) {
 
   // Set up machine info for the register allocator.
   machine_info_.supports_extended_load_store = true;
-  // GPR set: x19, x22-x28 (8 registers, excluding x20=context, x21=membase)
+  // GPR set: x22-x28 (7 registers; x19=backend ctx, x20=context, x21=membase)
   auto& gpr_set = machine_info_.register_sets[0];
   gpr_set.id = 0;
   std::strcpy(gpr_set.name, "gpr");

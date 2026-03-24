@@ -71,10 +71,10 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
             std::vector<SourceMapEntry>* out_source_map);
 
  public:
-  // Reserved: sp, x20 (context), x21 (membase)
+  // Reserved: sp, x19 (backend context), x20 (context), x21 (membase)
   // Scratch: x0-x18 (caller-saved), v0-v3
-  // Available GPRs for register allocator: x19, x22-x28
-  static constexpr int GPR_COUNT = 8;
+  // Available GPRs for register allocator: x22-x28
+  static constexpr int GPR_COUNT = 7;
   // Available VEC regs: v4-v7, v16-v31
   static constexpr int VEC_COUNT = 20;
   static constexpr size_t kStashOffset = 32;
@@ -122,6 +122,9 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   void CallNativeSafe(void* fn);
   void SetReturnAddress(uint64_t value);
 
+  // Backend context register = x19.
+  // Points to A64BackendContext (immediately before PPCContext in memory).
+  const Xbyak_aarch64::XReg& GetBackendCtxReg() const { return x19; }
   // Context register = x20.
   const Xbyak_aarch64::XReg& GetContextReg() const { return x20; }
   // Memory base register = x21.

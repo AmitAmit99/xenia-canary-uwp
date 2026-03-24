@@ -20,35 +20,24 @@ namespace a64 {
 class StackLayout {
  public:
   /**
-   * ARM64 Thunk Stack Layout
+   * ARM64 Thunk Stack Layout (HostToGuest)
    * NOTE: stack must always be 16-byte aligned.
    *
-   * Thunk (HostToGuest/GuestToHost):
    *  +------------------+
-   *  | x19              | sp + 0x000
-   *  | x20 (context)    | sp + 0x008
-   *  | x21 (membase)    | sp + 0x010
-   *  | x22              | sp + 0x018
-   *  | x23              | sp + 0x020
-   *  | x24              | sp + 0x028
-   *  | x25              | sp + 0x030
-   *  | x26              | sp + 0x038
-   *  | x27              | sp + 0x040
-   *  | x28              | sp + 0x048
-   *  | x29 (fp)         | sp + 0x050
-   *  | x30 (lr)         | sp + 0x058
-   *  | d8               | sp + 0x060
-   *  | d9               | sp + 0x068
-   *  | d10              | sp + 0x070
-   *  | d11              | sp + 0x078
-   *  | d12              | sp + 0x080
-   *  | d13              | sp + 0x088
-   *  | d14              | sp + 0x090
-   *  | d15              | sp + 0x098
+   *  | x19, x20         | sp + 0x000
+   *  | x21, x22         | sp + 0x010
+   *  | x23, x24         | sp + 0x020
+   *  | x25, x26         | sp + 0x030
+   *  | x27, x28         | sp + 0x040
+   *  | x29 (fp), x30    | sp + 0x050
+   *  | q8, q9           | sp + 0x060  (full 128-bit, used by JIT)
+   *  | q10, q11         | sp + 0x080
+   *  | q12, q13         | sp + 0x0A0
+   *  | q14, q15         | sp + 0x0C0
    *  +------------------+
-   *  Total: 0xA0 = 160 bytes (already 16-byte aligned)
+   *  Total: 0xE0 = 224 bytes (16-byte aligned)
    */
-  static constexpr size_t THUNK_STACK_SIZE = 160;
+  static constexpr size_t THUNK_STACK_SIZE = 224;
 
   /**
    * ARM64 Guest Stack Layout

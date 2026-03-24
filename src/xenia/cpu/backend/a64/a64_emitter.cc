@@ -63,10 +63,11 @@ const uint32_t A64Emitter::gpr_reg_map_[GPR_COUNT] = {
     22, 23, 24, 25, 26, 27, 28,
 };
 
-// VEC allocatable registers: v4-v7, v16-v31
+// VEC allocatable registers: v4-v15, v16-v31
 // (v0-v3 are scratch)
 const uint32_t A64Emitter::vec_reg_map_[VEC_COUNT] = {
-    4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+    4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17,
+    18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
 };
 
 A64Emitter::A64Emitter(A64Backend* backend, XbyakA64Allocator* allocator)

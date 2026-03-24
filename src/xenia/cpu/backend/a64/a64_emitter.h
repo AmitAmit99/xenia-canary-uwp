@@ -75,8 +75,8 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   // Scratch: x0-x18 (caller-saved), v0-v3
   // Available GPRs for register allocator: x22-x28
   static constexpr int GPR_COUNT = 7;
-  // Available VEC regs: v4-v7, v16-v31
-  static constexpr int VEC_COUNT = 20;
+  // Available VEC regs: v4-v15, v16-v31
+  static constexpr int VEC_COUNT = 28;
   static constexpr size_t kStashOffset = 32;
 
   static void SetupReg(const hir::Value* v, Xbyak_aarch64::WReg& r) {

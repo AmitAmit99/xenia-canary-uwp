@@ -163,9 +163,7 @@ inline XReg ComputeMemoryAddress(A64Emitter& e, const I64Op& guest) {
       e.cmp(e.w0, e.w17);
       auto& skip = e.NewCachedLabel();
       e.b(LO, skip);
-      // 0x1000 doesn't fit in a 12-bit immediate; use mov+add.
-      e.mov(e.w17, 0x1000u);
-      e.add(e.w0, e.w0, e.w17);
+      e.add(e.w0, e.w0, 1, 12);  // add 0x1000 via LSL #12
       e.L(skip);
     }
     return e.x0;

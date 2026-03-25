@@ -26,18 +26,19 @@ A64Function::~A64Function() {
 }
 
 void A64Function::Setup(uint8_t* machine_code, size_t machine_code_length) {
-  machine_code_ = machine_code;
-  machine_code_length_ = machine_code_length;
+  machine_code_length_.store(machine_code_length, std::memory_order_relaxed);
+  machine_code_.store(machine_code, std::memory_order_release);
 }
 
 bool A64Function::CallImpl(ThreadState* thread_state, uint32_t return_address) {
   auto backend =
       reinterpret_cast<A64Backend*>(thread_state->processor()->backend());
   auto thunk = backend->host_to_guest_thunk();
-  if (!thunk || !machine_code_) {
+  auto* code = machine_code_.load(std::memory_order_acquire);
+  if (!thunk || !code) {
     return false;
   }
-  thunk(machine_code_, thread_state->context(),
+  thunk(code, thread_state->context(),
         reinterpret_cast<void*>(uintptr_t(return_address)));
   return true;
 }

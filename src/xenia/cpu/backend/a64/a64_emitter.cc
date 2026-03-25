@@ -136,6 +136,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   // ARM64 ABI: SP must always be 16-byte aligned.
   assert_true(stack_size % 16 == 0);
   func_info.stack_size = stack_size;
+  func_info.lr_save_offset = StackLayout::HOST_RET_ADDR;
   stack_size_ = stack_size;
 
   struct {

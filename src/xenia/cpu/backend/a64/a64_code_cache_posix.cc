@@ -275,29 +275,65 @@ void PosixA64CodeCache::InitializeUnwindEntry(
     *p++ = kDW_CFA_def_cfa_offset;
     p += WriteULEB128(p, func_info.stack_size);
 
-    // For thunk functions, encode callee-saved register save locations.
     if (func_info.stack_size == StackLayout::THUNK_STACK_SIZE) {
-      size_t cfa = func_info.stack_size;
+      // Thunk: encode all callee-saved register save locations.
+      // See a64_stack_layout.h for the layout.
+      size_t cfa = func_info.stack_size;  // 224
 
-      // x19 at sp+0x000
+      // GPRs: x19-x28 saved as stp pairs at sp+0x00..0x48
       *p++ = 0x80 | kDwarfRegX19;
       p += WriteULEB128(p, (cfa - 0x000) / 8);
-
-      // x20 at sp+0x008
       *p++ = 0x80 | kDwarfRegX20;
       p += WriteULEB128(p, (cfa - 0x008) / 8);
-
-      // x21 at sp+0x010
       *p++ = 0x80 | kDwarfRegX21;
       p += WriteULEB128(p, (cfa - 0x010) / 8);
-
-      // x29 at sp+0x050
+      *p++ = 0x80 | kDwarfRegX22;
+      p += WriteULEB128(p, (cfa - 0x018) / 8);
+      *p++ = 0x80 | kDwarfRegX23;
+      p += WriteULEB128(p, (cfa - 0x020) / 8);
+      *p++ = 0x80 | kDwarfRegX24;
+      p += WriteULEB128(p, (cfa - 0x028) / 8);
+      *p++ = 0x80 | kDwarfRegX25;
+      p += WriteULEB128(p, (cfa - 0x030) / 8);
+      *p++ = 0x80 | kDwarfRegX26;
+      p += WriteULEB128(p, (cfa - 0x038) / 8);
+      *p++ = 0x80 | kDwarfRegX27;
+      p += WriteULEB128(p, (cfa - 0x040) / 8);
+      *p++ = 0x80 | kDwarfRegX28;
+      p += WriteULEB128(p, (cfa - 0x048) / 8);
+      // x29 (FP) and x30 (LR) at sp+0x050, sp+0x058
       *p++ = 0x80 | kDwarfRegFP;
       p += WriteULEB128(p, (cfa - 0x050) / 8);
-
-      // x30 at sp+0x058
       *p++ = 0x80 | kDwarfRegLR;
       p += WriteULEB128(p, (cfa - 0x058) / 8);
+      // NEON: d8-d15 saved as full q8-q15 via stp pairs at sp+0x060..0xDF.
+      // Each Q is 16 bytes; d8-d15 are the low 64 bits of q8-q15.
+      // stp q8,q9 at sp+0x060: d8=sp+0x060, d9=sp+0x070
+      // stp q10,q11 at sp+0x080: d10=sp+0x080, d11=sp+0x090
+      // stp q12,q13 at sp+0x0A0: d12=sp+0x0A0, d13=sp+0x0B0
+      // stp q14,q15 at sp+0x0C0: d14=sp+0x0C0, d15=sp+0x0D0
+      *p++ = 0x80 | kDwarfRegD8;
+      p += WriteULEB128(p, (cfa - 0x060) / 8);
+      *p++ = 0x80 | kDwarfRegD9;
+      p += WriteULEB128(p, (cfa - 0x070) / 8);
+      *p++ = 0x80 | kDwarfRegD10;
+      p += WriteULEB128(p, (cfa - 0x080) / 8);
+      *p++ = 0x80 | kDwarfRegD11;
+      p += WriteULEB128(p, (cfa - 0x090) / 8);
+      *p++ = 0x80 | kDwarfRegD12;
+      p += WriteULEB128(p, (cfa - 0x0A0) / 8);
+      *p++ = 0x80 | kDwarfRegD13;
+      p += WriteULEB128(p, (cfa - 0x0B0) / 8);
+      *p++ = 0x80 | kDwarfRegD14;
+      p += WriteULEB128(p, (cfa - 0x0C0) / 8);
+      *p++ = 0x80 | kDwarfRegD15;
+      p += WriteULEB128(p, (cfa - 0x0D0) / 8);
+    } else if (func_info.lr_save_offset > 0) {
+      // Record where x30 (LR / return address) is saved.
+      // Without this, the unwinder cannot find the return address.
+      *p++ = 0x80 | kDwarfRegLR;
+      p += WriteULEB128(p,
+                        (func_info.stack_size - func_info.lr_save_offset) / 8);
     }
   }
 

@@ -175,6 +175,7 @@ HostToGuestThunk A64HelperEmitter::EmitHostToGuestThunk() {
   func_info.prolog_stack_alloc_offset =
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
   func_info.stack_size = thunk_stack;
+  func_info.lr_save_offset = 0x058;  // stp x29, x30, [sp, #0x50]
 
   void* fn = Emplace(func_info);
   return reinterpret_cast<HostToGuestThunk>(fn);
@@ -295,6 +296,7 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
   func_info.prolog_stack_alloc_offset =
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
   func_info.stack_size = g2h_stack;
+  func_info.lr_save_offset = 0x1C8;  // stp x29, x30, [sp, #0x1C0]
 
   void* fn = Emplace(func_info);
   return reinterpret_cast<GuestToHostThunk>(fn);
@@ -364,6 +366,7 @@ ResolveFunctionThunk A64HelperEmitter::EmitResolveFunctionThunk() {
   func_info.prolog_stack_alloc_offset =
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
   func_info.stack_size = thunk_stack;
+  func_info.lr_save_offset = 0x058;  // stp x29, x30, [sp, #0x50]
 
   void* fn = Emplace(func_info);
   return reinterpret_cast<ResolveFunctionThunk>(fn);

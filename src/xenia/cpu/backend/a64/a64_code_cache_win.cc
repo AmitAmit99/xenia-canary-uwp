@@ -36,18 +36,18 @@ namespace a64 {
 // Codes are stored as a byte array (big-endian for multi-byte codes), listed
 // in reverse prolog order (last prolog instruction's code first).
 //
-// For the thunk prolog:
-//   sub sp, sp, #0xA0        (alloc_s or alloc_m)
-//   stp x19,x20, [sp, #0x00] (save_regp)
-//   stp x21,x22, [sp, #0x10] (save_regp)
-//   stp x23,x24, [sp, #0x20] (save_regp)
-//   stp x25,x26, [sp, #0x30] (save_regp)
-//   stp x27,x28, [sp, #0x40] (save_regp)
-//   stp x29,x30, [sp, #0x50] (save_fplr)
-//   stp d8, d9,  [sp, #0x60] (save_fregp)
-//   stp d10,d11, [sp, #0x70] (save_fregp)
-//   stp d12,d13, [sp, #0x80] (save_fregp)
-//   stp d14,d15, [sp, #0x90] (save_fregp)
+// For the thunk prolog (224 bytes):
+//   sub sp, sp, #0xE0         (alloc_s)
+//   stp x19,x20, [sp, #0x00]  (save_regp)
+//   stp x21,x22, [sp, #0x10]  (save_regp)
+//   stp x23,x24, [sp, #0x20]  (save_regp)
+//   stp x25,x26, [sp, #0x30]  (save_regp)
+//   stp x27,x28, [sp, #0x40]  (save_regp)
+//   stp x29,x30, [sp, #0x50]  (save_fplr)
+//   stp q8, q9,  [sp, #0x60]  (save_freg x2, 16 bytes apart)
+//   stp q10,q11, [sp, #0x80]  (save_freg x2)
+//   stp q12,q13, [sp, #0xA0]  (save_freg x2)
+//   stp q14,q15, [sp, #0xC0]  (save_freg x2)
 
 // ARM64 unwind code builders.
 // alloc_s: 000XXXXX, allocate X*16 bytes (0..496).
@@ -97,6 +97,17 @@ static void EmitSaveFregp(uint8_t* buf, size_t& off, uint32_t reg_offset,
   buf[off++] = static_cast<uint8_t>(((reg_offset & 0x03) << 6) | (z & 0x3F));
 }
 
+// save_freg: 1101110X XXzzzzzz
+// Save individual d(8+X) at [sp + Z*8].
+static void EmitSaveFreg(uint8_t* buf, size_t& off, uint32_t reg_offset,
+                         uint32_t sp_offset) {
+  assert_true(reg_offset <= 7);
+  assert_true((sp_offset % 8) == 0 && sp_offset / 8 <= 63);
+  uint32_t z = sp_offset / 8;
+  buf[off++] = static_cast<uint8_t>(0xDC | ((reg_offset >> 2) & 0x01));
+  buf[off++] = static_cast<uint8_t>(((reg_offset & 0x03) << 6) | (z & 0x3F));
+}
+
 // end: 0xE4
 static void EmitEnd(uint8_t* buf, size_t& off) { buf[off++] = 0xE4; }
 
@@ -106,14 +117,21 @@ static void EmitEnd(uint8_t* buf, size_t& off) { buf[off++] = 0xE4; }
 static size_t BuildThunkUnwindCodes(uint8_t* buf) {
   size_t off = 0;
   // Codes listed in reverse prolog order (last prolog instruction first).
-  // stp d14, d15, [sp, #0x90]  — d14 = d(8+6)
-  EmitSaveFregp(buf, off, 6, 0x90);
-  // stp d12, d13, [sp, #0x80]  — d12 = d(8+4)
-  EmitSaveFregp(buf, off, 4, 0x80);
-  // stp d10, d11, [sp, #0x70]  — d10 = d(8+2)
-  EmitSaveFregp(buf, off, 2, 0x70);
-  // stp d8,  d9,  [sp, #0x60]  — d8 = d(8+0)
-  EmitSaveFregp(buf, off, 0, 0x60);
+  // Q8-Q15 saved via stp Qn, Qn+1 — each Q is 16 bytes, so d registers
+  // are 16 bytes apart (not 8 as save_fregp assumes).  Use individual
+  // save_freg codes pointing to the low 64 bits of each Q register.
+  // stp q14, q15, [sp, #0xC0]: d15 at sp+0xD0, d14 at sp+0xC0
+  EmitSaveFreg(buf, off, 7, 0xD0);  // d15
+  EmitSaveFreg(buf, off, 6, 0xC0);  // d14
+  // stp q12, q13, [sp, #0xA0]: d13 at sp+0xB0, d12 at sp+0xA0
+  EmitSaveFreg(buf, off, 5, 0xB0);  // d13
+  EmitSaveFreg(buf, off, 4, 0xA0);  // d12
+  // stp q10, q11, [sp, #0x80]: d11 at sp+0x90, d10 at sp+0x80
+  EmitSaveFreg(buf, off, 3, 0x90);  // d11
+  EmitSaveFreg(buf, off, 2, 0x80);  // d10
+  // stp q8, q9, [sp, #0x60]: d9 at sp+0x70, d8 at sp+0x60
+  EmitSaveFreg(buf, off, 1, 0x70);  // d9
+  EmitSaveFreg(buf, off, 0, 0x60);  // d8
   // stp x29, x30, [sp, #0x50]
   EmitSaveFplr(buf, off, 0x50);
   // stp x27, x28, [sp, #0x40]  — x27 = x(19+8)
@@ -126,7 +144,7 @@ static size_t BuildThunkUnwindCodes(uint8_t* buf) {
   EmitSaveRegp(buf, off, 2, 0x10);
   // stp x19, x20, [sp, #0x00]  — x19 = x(19+0)
   EmitSaveRegp(buf, off, 0, 0x00);
-  // sub sp, sp, #0xA0 (160 bytes)
+  // sub sp, sp, #0xE0 (224 bytes)
   EmitAllocS(buf, off, StackLayout::THUNK_STACK_SIZE);
   EmitEnd(buf, off);
   return off;
@@ -154,10 +172,10 @@ static size_t BuildGuestUnwindCodes(uint8_t* buf, uint32_t stack_size) {
 }
 
 // Size of .xdata record for a thunk (header + codes + padding).
-// Thunk codes: 5x save_regp(2B) + 1x save_fplr(1B) + 4x save_fregp(2B) +
-//              1x alloc_s(1B) + end(1B) = 21 bytes -> 24 bytes padded -> 6
-//              code words. Header is 1 word. Total: 7 words = 28 bytes.
-static constexpr uint32_t kThunkXdataSize = 28;
+// Thunk codes: 5x save_regp(2B) + 1x save_fplr(1B) + 8x save_freg(2B) +
+//              1x alloc_s(1B) + end(1B) = 29 bytes -> 32 bytes padded -> 8
+//              code words. Header is 1 word. Total: 9 words = 36 bytes.
+static constexpr uint32_t kThunkXdataSize = 36;
 
 // Size of .xdata record for a guest function (header + codes + padding).
 // Guest codes: alloc_s(1B) or alloc_m(2B) + end(1B) = 2-3 bytes -> 4 bytes

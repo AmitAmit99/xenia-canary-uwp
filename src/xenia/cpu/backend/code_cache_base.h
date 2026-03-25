@@ -45,6 +45,16 @@ struct EmitFunctionInfo {
   } code_size;
   size_t prolog_stack_alloc_offset;
   size_t stack_size;
+#if XE_ARCH_ARM64
+  // Offset from SP where x30 (LR) is saved.  ARM64 callees save LR
+  // explicitly at varying offsets; the unwind info generator needs this
+  // to tell the unwinder where to find the return address.
+  // Currently only used by the POSIX DWARF .eh_frame generator; the
+  // Windows .xdata format encodes LR saves differently.  Adds 8 bytes
+  // to the struct on ARM64 Windows builds where it is unused, to avoid
+  // #if clutter in the backend/emitter code that sets it.
+  size_t lr_save_offset;
+#endif
 };
 
 // CRTP base class for JIT code caches. Contains all platform-independent

@@ -184,8 +184,9 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   // ========================================================================
   code_offsets.body = getSize();
 
-  // Allocate the epilog label.
+  // Allocate the epilog label (owned by label_cache_ for cleanup).
   auto epilog_label_ptr = new Label();
+  label_cache_.push_back(epilog_label_ptr);
   epilog_label_ = epilog_label_ptr;
 
   // Walk HIR blocks and emit ARM64 instructions.

@@ -487,3 +487,154 @@ TEST_CASE("ATOMIC_COMPARE_EXCHANGE_I32", "[atomic]") {
 
   test.memory->SystemHeapFree(guest_addr);
 }
+
+// ============================================================================
+// AND_NOT — bitwise AND with complement of second operand
+// ============================================================================
+TEST_CASE("AND_NOT_I32", "[bitwise]") {
+  TestFunction test([](HIRBuilder& b) {
+    StoreGPR(b, 3,
+             b.ZeroExtend(b.AndNot(b.Truncate(LoadGPR(b, 4), INT32_TYPE),
+                                   b.Truncate(LoadGPR(b, 5), INT32_TYPE)),
+                          INT64_TYPE));
+    b.Return();
+  });
+  // result = src1 & ~src2
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->r[4] = 0xFF00FF00;
+        ctx->r[5] = 0x0F0F0F0F;
+      },
+      [](PPCContext* ctx) {
+        REQUIRE(static_cast<uint32_t>(ctx->r[3]) == 0xF000F000);
+      });
+  // All bits masked out.
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->r[4] = 0xAAAAAAAA;
+        ctx->r[5] = 0xFFFFFFFF;
+      },
+      [](PPCContext* ctx) {
+        REQUIRE(static_cast<uint32_t>(ctx->r[3]) == 0x00000000);
+      });
+  // No bits masked out.
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->r[4] = 0x12345678;
+        ctx->r[5] = 0x00000000;
+      },
+      [](PPCContext* ctx) {
+        REQUIRE(static_cast<uint32_t>(ctx->r[3]) == 0x12345678);
+      });
+}
+
+// ============================================================================
+// TRUNCATE — integer narrowing
+// ============================================================================
+TEST_CASE("TRUNCATE_I64_TO_I32", "[alu]") {
+  TestFunction test([](HIRBuilder& b) {
+    StoreGPR(b, 3,
+             b.ZeroExtend(b.Truncate(LoadGPR(b, 4), INT32_TYPE), INT64_TYPE));
+    b.Return();
+  });
+  test.Run([](PPCContext* ctx) { ctx->r[4] = 0x123456789ABCDEF0ull; },
+           [](PPCContext* ctx) {
+             REQUIRE(static_cast<uint32_t>(ctx->r[3]) == 0x9ABCDEF0);
+           });
+  test.Run([](PPCContext* ctx) { ctx->r[4] = 0x00000000FFFFFFFFull; },
+           [](PPCContext* ctx) {
+             REQUIRE(static_cast<uint32_t>(ctx->r[3]) == 0xFFFFFFFF);
+           });
+}
+
+TEST_CASE("TRUNCATE_I32_TO_I16", "[alu]") {
+  TestFunction test([](HIRBuilder& b) {
+    auto val = b.Truncate(LoadGPR(b, 4), INT32_TYPE);
+    auto narrow = b.Truncate(val, INT16_TYPE);
+    StoreGPR(b, 3, b.ZeroExtend(narrow, INT64_TYPE));
+    b.Return();
+  });
+  test.Run([](PPCContext* ctx) { ctx->r[4] = 0xDEADBEEF; },
+           [](PPCContext* ctx) {
+             REQUIRE(static_cast<uint32_t>(ctx->r[3]) == 0xBEEF);
+           });
+}
+
+TEST_CASE("TRUNCATE_I32_TO_I8", "[alu]") {
+  TestFunction test([](HIRBuilder& b) {
+    auto val = b.Truncate(LoadGPR(b, 4), INT32_TYPE);
+    auto narrow = b.Truncate(val, INT8_TYPE);
+    StoreGPR(b, 3, b.ZeroExtend(narrow, INT64_TYPE));
+    b.Return();
+  });
+  test.Run([](PPCContext* ctx) { ctx->r[4] = 0xDEADBEEF; },
+           [](PPCContext* ctx) {
+             REQUIRE(static_cast<uint32_t>(ctx->r[3]) == 0xEF);
+           });
+}
+
+// ============================================================================
+// VECTOR_COMPARE_SGE — signed greater-than-or-equal per lane
+// ============================================================================
+TEST_CASE("VECTOR_COMPARE_SGE_I32", "[vector]") {
+  TestFunction test([](HIRBuilder& b) {
+    StoreVR(b, 3, b.VectorCompareSGE(LoadVR(b, 4), LoadVR(b, 5), INT32_TYPE));
+    b.Return();
+  });
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->v[4] = vec128i(1, 0xFFFFFFFF, 0x80000000, 0);
+        ctx->v[5] = vec128i(0, 0, 0, 0x80000000);
+      },
+      [](PPCContext* ctx) {
+        REQUIRE(ctx->v[3].u32[0] == 0xFFFFFFFF);  // 1 >= 0
+        REQUIRE(ctx->v[3].u32[1] == 0x00000000);  // -1 >= 0 = false
+        REQUIRE(ctx->v[3].u32[2] == 0x00000000);  // INT_MIN >= 0 = false
+        REQUIRE(ctx->v[3].u32[3] == 0xFFFFFFFF);  // 0 >= INT_MIN = true
+      });
+  // Equal values.
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->v[4] = vec128i(42, 0, 0x80000000, 0x7FFFFFFF);
+        ctx->v[5] = vec128i(42, 0, 0x80000000, 0x7FFFFFFF);
+      },
+      [](PPCContext* ctx) {
+        REQUIRE(ctx->v[3].u32[0] == 0xFFFFFFFF);  // 42 >= 42
+        REQUIRE(ctx->v[3].u32[1] == 0xFFFFFFFF);  // 0 >= 0
+        REQUIRE(ctx->v[3].u32[2] == 0xFFFFFFFF);  // INT_MIN >= INT_MIN
+        REQUIRE(ctx->v[3].u32[3] == 0xFFFFFFFF);  // INT_MAX >= INT_MAX
+      });
+}
+
+// ============================================================================
+// VECTOR_COMPARE_UGE — unsigned greater-than-or-equal per lane
+// ============================================================================
+TEST_CASE("VECTOR_COMPARE_UGE_I32", "[vector]") {
+  TestFunction test([](HIRBuilder& b) {
+    StoreVR(b, 3, b.VectorCompareUGE(LoadVR(b, 4), LoadVR(b, 5), INT32_TYPE));
+    b.Return();
+  });
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->v[4] = vec128i(1, 0xFFFFFFFF, 0, 0x80000000);
+        ctx->v[5] = vec128i(0, 0x80000000, 1, 0x80000000);
+      },
+      [](PPCContext* ctx) {
+        REQUIRE(ctx->v[3].u32[0] == 0xFFFFFFFF);  // 1 >= 0
+        REQUIRE(ctx->v[3].u32[1] == 0xFFFFFFFF);  // 0xFFFFFFFF >= 0x80000000
+        REQUIRE(ctx->v[3].u32[2] == 0x00000000);  // 0 >= 1 = false
+        REQUIRE(ctx->v[3].u32[3] == 0xFFFFFFFF);  // 0x80000000 >= 0x80000000
+      });
+  // All equal.
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->v[4] = vec128i(0, 1, 0x80000000, 0xFFFFFFFF);
+        ctx->v[5] = vec128i(0, 1, 0x80000000, 0xFFFFFFFF);
+      },
+      [](PPCContext* ctx) {
+        REQUIRE(ctx->v[3].u32[0] == 0xFFFFFFFF);
+        REQUIRE(ctx->v[3].u32[1] == 0xFFFFFFFF);
+        REQUIRE(ctx->v[3].u32[2] == 0xFFFFFFFF);
+        REQUIRE(ctx->v[3].u32[3] == 0xFFFFFFFF);
+      });
+}

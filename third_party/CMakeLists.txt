@@ -303,34 +303,36 @@ else()
   target_compile_definitions(zlib-ng PRIVATE
     X86_FEATURES
     X86_HAVE_XSAVE_INTRIN
+    X86_SSE2
     X86_SSSE3
     X86_SSE42
+    X86_AVX2
+    X86_AVX512
+    X86_AVX512VNNI
     WITH_GZFILEOP
   )
-  if(WIN32)
-    target_compile_definitions(zlib-ng PRIVATE
-      X86_SSE2
-      X86_AVX2
-      X86_AVX512
-      X86_AVX512VNNI
-      X86_PCLMULQDQ_CRC
-      X86_VPCLMULQDQ_CRC
+  if(NOT MSVC)
+    # GCC/Clang have native __builtin_ctz/__builtin_ctzll (MSVC gets these
+    # from fallback_builtins.h). Defining these enables optimized compare256
+    # and longest_match codepaths.
+    target_compile_definitions(zlib-ng PRIVATE HAVE_BUILTIN_CTZ HAVE_BUILTIN_CTZLL)
+    # GCC/Clang need per-file ISA flags; MSVC handles this via runtime dispatch
+    set_source_files_properties(
+      zlib-ng/arch/x86/adler32_avx2.c
+      zlib-ng/arch/x86/chunkset_avx2.c
+      zlib-ng/arch/x86/compare256_avx2.c
+      zlib-ng/arch/x86/slide_hash_avx2.c
+      PROPERTIES COMPILE_OPTIONS "-mavx2;-mbmi2"
     )
-  else()
-    # Remove AVX2/AVX512 files on non-Windows
-    set(_zlibng_exclude_patterns
-      "adler32_avx2" "adler32_avx512" "adler32_avx512_vnni"
-      "chunkset_avx2" "compare256_avx2"
-      "crc32_pclmulqdq" "crc32_vpclmulqdq"
-      "slide_hash_avx2"
+    set_source_files_properties(
+      zlib-ng/arch/x86/adler32_avx512.c
+      zlib-ng/arch/x86/chunkset_avx512.c
+      PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512dq;-mavx512vl;-mavx512bw;-mbmi2"
     )
-    foreach(_pat ${_zlibng_exclude_patterns})
-      list(FILTER _zlibng_x86 EXCLUDE REGEX "${_pat}")
-    endforeach()
-    # Re-set sources without excluded files
-    get_target_property(_zlibng_srcs zlib-ng SOURCES)
-    set_target_properties(zlib-ng PROPERTIES SOURCES "")
-    target_sources(zlib-ng PRIVATE ${_zlibng_c} ${_zlibng_x86} ${_zlibng_generic})
+    set_source_files_properties(
+      zlib-ng/arch/x86/adler32_avx512_vnni.c
+      PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512dq;-mavx512vl;-mavx512bw;-mavx512vnni;-mbmi2"
+    )
   endif()
 endif()
 target_include_directories(zlib-ng PUBLIC zlib-ng)

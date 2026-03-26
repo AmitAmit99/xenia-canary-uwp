@@ -86,7 +86,7 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
 X_STATUS XSocket::Close() {
 #if XE_PLATFORM_WIN32
   int ret = closesocket(native_handle_);
-#elif XE_PLATFORM_LINUX
+#else
   int ret = close(native_handle_);
 #endif
 
@@ -166,7 +166,7 @@ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
     return X_STATUS_UNSUCCESSFUL;
   }
   return X_STATUS_SUCCESS;
-#elif XE_PLATFORM_LINUX
+#else
   int native_cmd = cmd;
 
   assert_false(!supported_controls.contains(cmd));

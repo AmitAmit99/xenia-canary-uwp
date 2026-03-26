@@ -213,36 +213,42 @@ else()
     $<$<COMPILE_LANGUAGE:C>:-Wno-implicit-function-declaration>
   )
 
-  # GTK3 via pkg-config
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(GTK3 REQUIRED gtk+-x11-3.0)
-  include_directories(${GTK3_INCLUDE_DIRS})
-  link_directories(${GTK3_LIBRARY_DIRS})
-  add_compile_options(${GTK3_CFLAGS_OTHER})
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # GTK3 via pkg-config
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GTK3 REQUIRED gtk+-x11-3.0)
+    include_directories(${GTK3_INCLUDE_DIRS})
+    link_directories(${GTK3_LIBRARY_DIRS})
+    add_compile_options(${GTK3_CFLAGS_OTHER})
 
-  # Global Linux libraries
-  link_libraries(stdc++fs dl lz4 pthread rt)
+    # Global Linux libraries
+    link_libraries(stdc++fs dl lz4 pthread rt)
 
-  # Link groups for executables (resolves circular deps)
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--start-group")
-  set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} -Wl,--end-group")
+    # Link groups for executables (resolves circular deps)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--start-group")
+    set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} -Wl,--end-group")
+  endif()
 
-  # --- Per-configuration Linux flags ---
+  # --- Per-configuration flags ---
   # Checked
   string(APPEND CMAKE_C_FLAGS_CHECKED " -fsanitize=address")
   string(APPEND CMAKE_CXX_FLAGS_CHECKED " -fsanitize=address")
   string(APPEND CMAKE_EXE_LINKER_FLAGS_CHECKED " -fsanitize=address")
   add_compile_definitions(
     $<$<CONFIG:Checked>:DEBUG>
-    $<$<CONFIG:Checked>:_GLIBCXX_DEBUG>
   )
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_compile_definitions($<$<CONFIG:Checked>:_GLIBCXX_DEBUG>)
+  endif()
 
   # Debug
   add_compile_definitions(
     $<$<CONFIG:Debug>:DEBUG>
     $<$<CONFIG:Debug>:_NO_DEBUG_HEAP=1>
-    $<$<CONFIG:Debug>:_GLIBCXX_DEBUG>
   )
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_compile_definitions($<$<CONFIG:Debug>:_GLIBCXX_DEBUG>)
+  endif()
 
   # Release
   add_compile_definitions(

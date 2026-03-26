@@ -431,7 +431,7 @@ if(WIN32)
   )
   target_include_directories(SDL2 PUBLIC SDL2/include)
   target_link_libraries(SDL2 PRIVATE setupapi winmm imm32 version)
-else()
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # Use system SDL2 on Linux
   add_library(SDL2 INTERFACE)
   find_package(PkgConfig REQUIRED)

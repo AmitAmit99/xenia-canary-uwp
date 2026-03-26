@@ -241,7 +241,10 @@ target_compile_definitions(zstd PRIVATE
   XXH_NAMESPACE=ZSTD_
   ZSTD_LEGACY_SUPPORT=0
 )
-if(NOT MSVC)
+if(XE_TARGET_X86_64 AND NOT MSVC)
+  enable_language(ASM)
+  target_sources(zstd PRIVATE zstd/lib/decompress/huf_decompress_amd64.S)
+else()
   target_compile_definitions(zstd PRIVATE ZSTD_DISABLE_ASM)
 endif()
 

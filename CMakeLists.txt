@@ -78,6 +78,9 @@ include_directories(
   ${PROJECT_SOURCE_DIR}
   ${PROJECT_SOURCE_DIR}/src
   ${CMAKE_BINARY_DIR}
+)
+# Third-party headers as SYSTEM to suppress warnings under -Werror
+include_directories(SYSTEM
   ${PROJECT_SOURCE_DIR}/third_party
 )
 

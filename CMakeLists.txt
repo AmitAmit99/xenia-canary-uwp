@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-project(xenia LANGUAGES C CXX)
+if(APPLE)
+  project(xenia LANGUAGES C CXX OBJCXX)
+  set(CMAKE_OBJCXX_STANDARD 20)
+  set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+else()
+  project(xenia LANGUAGES C CXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -52,6 +58,8 @@ set(CMAKE_STATIC_LINKER_FLAGS_CHECKED "${CMAKE_STATIC_LINKER_FLAGS_DEBUG}" CACHE
 # Platform name for output paths
 if(WIN32)
   set(XE_PLATFORM_NAME "Windows")
+elseif(APPLE)
+  set(XE_PLATFORM_NAME "macOS")
 else()
   set(XE_PLATFORM_NAME "Linux")
 endif()
@@ -178,7 +186,7 @@ else()
   )
 
   # Clang-specific C++ warnings
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(
       $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-register>
       $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-volatile>
@@ -216,7 +224,23 @@ else()
     $<$<COMPILE_LANGUAGE:C>:-Wno-implicit-function-declaration>
   )
 
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  if(APPLE)
+    # macOS-specific settings
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum macOS version")
+    add_compile_options(
+      $<$<COMPILE_LANGUAGE:CXX>:-Wno-shorten-64-to-32>
+      -Wno-deprecated-declarations
+      -Wno-character-conversion
+    )
+    add_link_options(-Wl,-no_warn_duplicate_libraries)
+    link_libraries(
+      "-framework CoreFoundation"
+      "-framework Foundation"
+      "-framework IOKit"
+      dl
+      pthread
+    )
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # GTK3 via pkg-config
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GTK3 REQUIRED gtk+-x11-3.0)

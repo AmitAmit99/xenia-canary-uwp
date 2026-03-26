@@ -121,6 +121,12 @@ if(WIN32)
     discord-rpc/src/connection_win.cpp
     discord-rpc/src/discord_register_win.cpp
   )
+elseif(APPLE)
+  target_sources(discord-rpc PRIVATE
+    discord-rpc/src/connection_unix.cpp
+    discord-rpc/src/discord_register_osx.m
+  )
+  target_link_libraries(discord-rpc PRIVATE "-framework AppKit")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_sources(discord-rpc PRIVATE
     discord-rpc/src/connection_unix.cpp

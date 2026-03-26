@@ -23,6 +23,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#if XE_PLATFORM_MAC
+#include <limits.h>
+#include <mach-o/dyld.h>
+#endif
 
 namespace xe {
 
@@ -43,10 +47,26 @@ std::filesystem::path to_path(const std::u16string_view source) {
 namespace filesystem {
 
 std::filesystem::path GetExecutablePath() {
+#if XE_PLATFORM_MAC
+  char path[PATH_MAX];
+  uint32_t size = sizeof(path);
+  if (_NSGetExecutablePath(path, &size) == 0) {
+    char real_path[PATH_MAX];
+    if (realpath(path, real_path)) {
+      return std::string(real_path);
+    }
+    return std::string(path);
+  }
+  return std::string();
+#else
   char buff[FILENAME_MAX] = "";
-  readlink("/proc/self/exe", buff, FILENAME_MAX);
-  std::string s(buff);
-  return s;
+  ssize_t len = readlink("/proc/self/exe", buff, sizeof(buff) - 1);
+  if (len != -1) {
+    buff[len] = '\0';
+    return std::string(buff);
+  }
+  return std::string();
+#endif
 }
 
 std::filesystem::path GetExecutableFolder() {

@@ -144,19 +144,21 @@ add_library(fmt STATIC
 target_include_directories(fmt PUBLIC fmt/include)
 
 # ==============================================================================
-# glslang-spirv
+# glslang-spirv (not needed on macOS — no Vulkan/SPIR-V backend)
 # ==============================================================================
-file(GLOB _glslang_spirv_cpp "glslang/SPIRV/*.cpp")
-file(GLOB _glslang_spirv_h "glslang/SPIRV/*.h")
-file(GLOB _glslang_spirv_hpp "glslang/SPIRV/*.hpp11")
-list(FILTER _glslang_spirv_cpp EXCLUDE REGEX "GlslangToSpv\\.cpp$")
-add_library(glslang-spirv STATIC
-  ${_glslang_spirv_cpp}
-  ${_glslang_spirv_h}
-  ${_glslang_spirv_hpp}
-  glslang/glslang/Include/visibility.h
-)
-target_include_directories(glslang-spirv PUBLIC glslang)
+if(NOT APPLE)
+  file(GLOB _glslang_spirv_cpp "glslang/SPIRV/*.cpp")
+  file(GLOB _glslang_spirv_h "glslang/SPIRV/*.h")
+  file(GLOB _glslang_spirv_hpp "glslang/SPIRV/*.hpp11")
+  list(FILTER _glslang_spirv_cpp EXCLUDE REGEX "GlslangToSpv\\.cpp$")
+  add_library(glslang-spirv STATIC
+    ${_glslang_spirv_cpp}
+    ${_glslang_spirv_h}
+    ${_glslang_spirv_hpp}
+    glslang/glslang/Include/visibility.h
+  )
+  target_include_directories(glslang-spirv PUBLIC glslang)
+endif()
 
 # ==============================================================================
 # imgui
@@ -234,6 +236,7 @@ target_include_directories(xxhash PUBLIC xxhash)
 # zstd
 # ==============================================================================
 file(GLOB_RECURSE _zstd_common "zstd/lib/common/*.c" "zstd/lib/common/*.h")
+list(FILTER _zstd_common EXCLUDE REGEX "threading\\.c$")
 file(GLOB_RECURSE _zstd_compress "zstd/lib/compress/*.c" "zstd/lib/compress/*.h")
 file(GLOB_RECURSE _zstd_decompress "zstd/lib/decompress/*.c" "zstd/lib/decompress/*.h")
 add_library(zstd STATIC
@@ -294,13 +297,21 @@ file(GLOB _zlibng_c "zlib-ng/*.c")
 file(GLOB _zlibng_generic "zlib-ng/arch/generic/*.c")
 if(XE_TARGET_AARCH64)
   file(GLOB _zlibng_arch "zlib-ng/arch/arm/*.c")
+  list(FILTER _zlibng_arch EXCLUDE REGEX "armv6")
   add_library(zlib-ng STATIC
     ${_zlibng_c}
     ${_zlibng_arch}
     ${_zlibng_generic}
   )
   target_compile_definitions(zlib-ng PRIVATE
+    ARM_FEATURES
+    ARM_NEON
+    ARM_NEON_HASLD4
+    ARM_ACLE
+    HAVE_ARM_ACLE_H
     WITH_GZFILEOP
+    HAVE_BUILTIN_CTZ
+    HAVE_BUILTIN_CTZLL
   )
 else()
   file(GLOB _zlibng_x86 "zlib-ng/arch/x86/*.c")
@@ -766,7 +777,6 @@ if(XE_TARGET_AARCH64)
     xe_add_gas_sources(libavcodec
       FFmpeg/libavcodec/aarch64/idctdsp_neon.S
       FFmpeg/libavcodec/aarch64/mpegaudiodsp_neon.S
-      FFmpeg/libavcodec/aarch64/neon.S
       FFmpeg/libavcodec/aarch64/simple_idct_neon.S
     )
   endif()
@@ -789,7 +799,6 @@ add_library(libavformat STATIC
   FFmpeg/libavformat/metadata.c
   FFmpeg/libavformat/mux.c
   FFmpeg/libavformat/options.c
-  FFmpeg/libavformat/os_support.c
   FFmpeg/libavformat/protocols.c
   FFmpeg/libavformat/riff.c
   FFmpeg/libavformat/sdp.c

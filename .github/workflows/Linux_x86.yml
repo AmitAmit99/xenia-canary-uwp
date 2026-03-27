@@ -35,11 +35,18 @@ jobs:
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
           sudo apt-add-repository "deb http://apt.llvm.org/${{ env.UBUNTU_BASE }}/ llvm-toolchain-${{ env.UBUNTU_BASE }}-${{ env.LLVM_VERSION }} main"
           sudo apt-get -y update
-          sudo apt-get -y install mesa-vulkan-drivers valgrind libc++-dev libc++abi-dev libgtk-3-dev libsdl2-dev libvulkan-dev libx11-xcb-dev clang-${{ env.LLVM_VERSION }} lld-${{ env.LLVM_VERSION }} ninja-build cmake spirv-tools
+          sudo apt-get -y install mesa-vulkan-drivers valgrind libc++-dev libc++abi-dev libgtk-3-dev libsdl2-dev libvulkan-dev libx11-xcb-dev clang-${{ env.LLVM_VERSION }} lld-${{ env.LLVM_VERSION }} ninja-build cmake spirv-tools libfuse2
 
-          # Pin clang to the correct version
-          sudo update-alternatives --install /usr/bin/clang   clang   /usr/bin/clang-${{ env.LLVM_VERSION }}   200
-          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-${{ env.LLVM_VERSION }} 200
+          # Pin LLVM tools to the correct version so system ar/ranlib/lld
+          # don't use the older LLVM 17 gold plugin with clang-20 LTO bitcode
+          sudo update-alternatives --install /usr/bin/clang      clang      /usr/bin/clang-${{ env.LLVM_VERSION }}      200
+          sudo update-alternatives --install /usr/bin/clang++    clang++    /usr/bin/clang++-${{ env.LLVM_VERSION }}    200
+          sudo update-alternatives --install /usr/bin/lld        lld        /usr/bin/lld-${{ env.LLVM_VERSION }}        200
+          sudo update-alternatives --install /usr/bin/ld.lld     ld.lld     /usr/bin/ld.lld-${{ env.LLVM_VERSION }}     200
+          sudo update-alternatives --install /usr/bin/llvm-ar    llvm-ar    /usr/bin/llvm-ar-${{ env.LLVM_VERSION }}    200
+          sudo update-alternatives --install /usr/bin/llvm-ranlib llvm-ranlib /usr/bin/llvm-ranlib-${{ env.LLVM_VERSION }} 200
+          sudo update-alternatives --install /usr/bin/llvm-nm    llvm-nm    /usr/bin/llvm-nm-${{ env.LLVM_VERSION }}    200
+
       - name: Install Vulkan SDK
         run: |
           # Install Vulkan SDK

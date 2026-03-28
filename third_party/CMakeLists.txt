@@ -310,9 +310,10 @@ if(XE_TARGET_AARCH64)
     ARM_ACLE
     HAVE_ARM_ACLE_H
     WITH_GZFILEOP
-    HAVE_BUILTIN_CTZ
-    HAVE_BUILTIN_CTZLL
   )
+  if(NOT MSVC)
+    target_compile_definitions(zlib-ng PRIVATE HAVE_BUILTIN_CTZ HAVE_BUILTIN_CTZLL)
+  endif()
 else()
   file(GLOB _zlibng_x86 "zlib-ng/arch/x86/*.c")
   add_library(zlib-ng STATIC

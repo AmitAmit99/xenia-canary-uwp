@@ -527,9 +527,15 @@ uint32_t Memory::HostToGuestVirtualThunk(const void* context,
 
 uint32_t Memory::GetPhysicalAddress(uint32_t address) const {
   const BaseHeap* heap = LookupHeap(address);
-  if (!heap || heap->heap_type() != HeapType::kGuestPhysical) {
+  if (!heap) {
     return UINT32_MAX;
   }
+
+  // Assumption that we already received physical address, so just return it.
+  if (heap->heap_type() != HeapType::kGuestPhysical && address < 0x1FFFFFFF) {
+    return address;
+  }
+
   return static_cast<const PhysicalHeap*>(heap)->GetPhysicalAddress(address);
 }
 

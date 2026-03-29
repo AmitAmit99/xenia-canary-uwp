@@ -959,37 +959,8 @@ struct ATOMIC_EXCHANGE_I32
     e.mov(i.dest, e.w1);
   }
 };
-struct ATOMIC_EXCHANGE_I64
-    : Sequence<ATOMIC_EXCHANGE_I64,
-               I<OPCODE_ATOMIC_EXCHANGE, I64Op, I64Op, I64Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    if (i.src1.is_constant) {
-      e.mov(e.x4, i.src1.constant());
-    } else {
-      e.mov(e.x4, i.src1);
-    }
-    if (i.src2.is_constant) {
-      e.mov(e.x0, static_cast<uint64_t>(i.src2.constant()));
-    } else {
-      e.mov(e.x0, i.src2);
-    }
-
-    if (e.IsFeatureEnabled(kA64EmitLSE)) {
-      e.swpal(i.dest, e.x0, ptr(e.x4));
-      return;
-    }
-
-    auto& retry = e.NewCachedLabel();
-    e.L(retry);
-    e.ldaxr(e.x1, ptr(e.x4));
-    e.stlxr(e.w2, e.x0, ptr(e.x4));
-    e.cbnz(e.w2, retry);
-    e.mov(i.dest, e.x1);
-  }
-};
 EMITTER_OPCODE_TABLE(OPCODE_ATOMIC_EXCHANGE, ATOMIC_EXCHANGE_I8,
-                     ATOMIC_EXCHANGE_I16, ATOMIC_EXCHANGE_I32,
-                     ATOMIC_EXCHANGE_I64);
+                     ATOMIC_EXCHANGE_I16, ATOMIC_EXCHANGE_I32);
 
 // ============================================================================
 // OPCODE_ATOMIC_COMPARE_EXCHANGE

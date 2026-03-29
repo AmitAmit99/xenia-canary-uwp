@@ -3429,29 +3429,6 @@ struct CONVERT_F32_I32
     }
   }
 };
-struct CONVERT_F32_I64
-    : Sequence<CONVERT_F32_I64, I<OPCODE_CONVERT, F32Op, I64Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    if (i.src1.is_constant) {
-      e.mov(e.x0, static_cast<uint64_t>(i.src1.constant()));
-      e.scvtf(i.dest, e.x0);
-    } else {
-      e.scvtf(i.dest, i.src1);
-    }
-  }
-};
-struct CONVERT_F64_I32
-    : Sequence<CONVERT_F64_I32, I<OPCODE_CONVERT, F64Op, I32Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    if (i.src1.is_constant) {
-      e.mov(e.w0,
-            static_cast<uint64_t>(static_cast<uint32_t>(i.src1.constant())));
-      e.scvtf(i.dest, e.w0);
-    } else {
-      e.scvtf(i.dest, i.src1);
-    }
-  }
-};
 struct CONVERT_F64_I64
     : Sequence<CONVERT_F64_I64, I<OPCODE_CONVERT, F64Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
@@ -3498,9 +3475,8 @@ struct CONVERT_F64_F32
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_CONVERT, CONVERT_I32_F32, CONVERT_I32_F64,
-                     CONVERT_I64_F64, CONVERT_F32_I32, CONVERT_F32_I64,
-                     CONVERT_F64_I32, CONVERT_F64_I64, CONVERT_F32_F64,
-                     CONVERT_F64_F32);
+                     CONVERT_I64_F64, CONVERT_F32_I32, CONVERT_F64_I64,
+                     CONVERT_F32_F64, CONVERT_F64_F32);
 
 // ============================================================================
 // OPCODE_ROUND
@@ -4090,44 +4066,6 @@ EMITTER_OPCODE_TABLE(OPCODE_MUL_ADD, MUL_ADD_F32, MUL_ADD_F64, MUL_ADD_V128);
 // ============================================================================
 // OPCODE_MUL_SUB (fused multiply-subtract)
 // ============================================================================
-struct MUL_SUB_F32
-    : Sequence<MUL_SUB_F32, I<OPCODE_MUL_SUB, F32Op, F32Op, F32Op, F32Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    // dest = src1 * src2 - src3
-    // ARM64 fnmsub(d,n,m,a) = -a + n*m = n*m - a
-    SReg s1 = i.src1.is_constant ? e.s0 : SReg(i.src1.reg().getIdx());
-    SReg s2 = i.src2.is_constant ? e.s1 : SReg(i.src2.reg().getIdx());
-    SReg s3 = i.src3.is_constant ? e.s2 : SReg(i.src3.reg().getIdx());
-    if (i.src1.is_constant) {
-      union {
-        float f;
-        uint32_t u;
-      } c;
-      c.f = i.src1.constant();
-      e.mov(e.w0, static_cast<uint64_t>(c.u));
-      e.fmov(e.s0, e.w0);
-    }
-    if (i.src2.is_constant) {
-      union {
-        float f;
-        uint32_t u;
-      } c;
-      c.f = i.src2.constant();
-      e.mov(e.w0, static_cast<uint64_t>(c.u));
-      e.fmov(e.s1, e.w0);
-    }
-    if (i.src3.is_constant) {
-      union {
-        float f;
-        uint32_t u;
-      } c;
-      c.f = i.src3.constant();
-      e.mov(e.w0, static_cast<uint64_t>(c.u));
-      e.fmov(e.s2, e.w0);
-    }
-    EmitFmaWithPpcNan_F32(e, i.dest, s1, s2, s3, /*is_sub=*/true);
-  }
-};
 struct MUL_SUB_F64
     : Sequence<MUL_SUB_F64, I<OPCODE_MUL_SUB, F64Op, F64Op, F64Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
@@ -4208,7 +4146,7 @@ struct MUL_SUB_V128
     });
   }
 };
-EMITTER_OPCODE_TABLE(OPCODE_MUL_SUB, MUL_SUB_F32, MUL_SUB_F64, MUL_SUB_V128);
+EMITTER_OPCODE_TABLE(OPCODE_MUL_SUB, MUL_SUB_F64, MUL_SUB_V128);
 
 // ============================================================================
 // POW2 / LOG2 / DOT_PRODUCT C helper functions (called via CallNativeSafe)

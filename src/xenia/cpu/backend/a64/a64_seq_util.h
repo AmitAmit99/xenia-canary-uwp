@@ -363,8 +363,11 @@ inline void PrepareVmxFpSources(A64Emitter& e, const T1& op1, const T2& op2,
   // Copy to scratch v0/v1 so we don't modify live allocated registers.
   if (s1 != 0) e.mov(VReg(0).b16, VReg(s1).b16);
   if (s2 != 1) e.mov(VReg(1).b16, VReg(s2).b16);
-  FlushDenormals_V128(e, 0);
-  FlushDenormals_V128(e, 1);
+  // Flush denormal inputs in software only if FPCR.FZ doesn't handle it.
+  if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
+    FlushDenormals_V128(e, 0);
+    FlushDenormals_V128(e, 1);
+  }
   out_s1 = 0;
   out_s2 = 1;
 }
@@ -547,8 +550,12 @@ inline void EmitVmxFpBinOp_V128(A64Emitter& e, int dest_idx, const T1& src1,
     // PPC NaN propagation fixup (fast-path skip when no NaN).
     FixupVmxNan_V128(e);
 
-    // Flush output denormals.
-    FlushDenormals_V128(e, 2, 0, 1);
+    // Flush output denormals. FPCR.FZ guarantees output flushing per the
+    // ARM spec, so skip when FZ is known to also handle inputs (implying
+    // the core fully supports FZ denormal handling).
+    if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
+      FlushDenormals_V128(e, 2, 0, 1);
+    }
 
     // Move to dest.
     e.mov(VReg(dest_idx).b16, VReg(2).b16);

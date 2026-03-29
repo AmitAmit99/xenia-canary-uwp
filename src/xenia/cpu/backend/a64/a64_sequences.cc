@@ -3162,7 +3162,9 @@ struct MAX_V128 : Sequence<MAX_V128, I<OPCODE_MAX, V128Op, V128Op, V128Op>> {
       e.fmax(VReg(2).s4, VReg(s1).s4, VReg(s2).s4);
       // PPC vmaxfp: if either input is NaN, result = src1 (vA).
       FixupVmxMaxMinNan(e);
-      FlushDenormals_V128(e, 2, 0, 1);
+      if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
+        FlushDenormals_V128(e, 2, 0, 1);
+      }
       e.mov(VReg(i.dest.reg().getIdx()).b16, VReg(2).b16);
     });
   }
@@ -3299,7 +3301,9 @@ struct MIN_V128 : Sequence<MIN_V128, I<OPCODE_MIN, V128Op, V128Op, V128Op>> {
       e.fmin(VReg(2).s4, VReg(s1).s4, VReg(s2).s4);
       // PPC vminfp: if either input is NaN, result = src1 (vA).
       FixupVmxMaxMinNan(e);
-      FlushDenormals_V128(e, 2, 0, 1);
+      if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
+        FlushDenormals_V128(e, 2, 0, 1);
+      }
       e.mov(VReg(i.dest.reg().getIdx()).b16, VReg(2).b16);
     });
   }
@@ -3993,7 +3997,9 @@ struct MUL_ADD_V128
       // Flush s3 → v3, save to stack slot 2.
       int s3 = SrcVReg(e, i.src3, 3);
       if (s3 != 3) e.mov(VReg(3).b16, VReg(s3).b16);
-      FlushDenormals_V128(e, 3, 0, 1);
+      if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
+        FlushDenormals_V128(e, 3, 0, 1);
+      }
       e.str(QReg(3),
             Xbyak_aarch64::ptr(
                 e.sp, static_cast<int32_t>(StackLayout::GUEST_SCRATCH) + 32));
@@ -4017,7 +4023,9 @@ struct MUL_ADD_V128
       FixupVmxNan_V128_Fma(e);
 
       // Flush output denormals.
-      FlushDenormals_V128(e, 2, 0, 1);
+      if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
+        FlushDenormals_V128(e, 2, 0, 1);
+      }
       e.mov(VReg(d).b16, VReg(2).b16);
     });
   }
@@ -4077,7 +4085,9 @@ struct MUL_SUB_V128
       // Flush s3 → v3, save un-negated for NaN fixup.
       int s3 = SrcVReg(e, i.src3, 3);
       if (s3 != 3) e.mov(VReg(3).b16, VReg(s3).b16);
-      FlushDenormals_V128(e, 3, 0, 1);
+      if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
+        FlushDenormals_V128(e, 3, 0, 1);
+      }
       e.str(QReg(3),
             Xbyak_aarch64::ptr(
                 e.sp, static_cast<int32_t>(StackLayout::GUEST_SCRATCH) + 32));
@@ -4102,7 +4112,9 @@ struct MUL_SUB_V128
       FixupVmxNan_V128_Fma(e);
 
       // Flush output denormals.
-      FlushDenormals_V128(e, 2, 0, 1);
+      if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
+        FlushDenormals_V128(e, 2, 0, 1);
+      }
       e.mov(VReg(d).b16, VReg(2).b16);
     });
   }
@@ -4643,13 +4655,17 @@ struct RECIP_V128 : Sequence<RECIP_V128, I<OPCODE_RECIP, V128Op, V128Op>> {
         e.mov(VReg(1).b16, VReg(i.src1.reg().getIdx()).b16);
       }
       // Flush input denormals.
-      FlushDenormals_V128(e, 1);  // scratch v2, v3
+      if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
+        FlushDenormals_V128(e, 1);  // scratch v2, v3
+      }
       auto d = VReg(i.dest.reg().getIdx()).s4;
       // Load 1.0f vector.
       e.fmov(VReg(0).s4, 1.0f);
       e.fdiv(d, VReg(0).s4, VReg(1).s4);
       // Flush output denormals.
-      FlushDenormals_V128(e, i.dest.reg().getIdx(), 0, 1);
+      if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
+        FlushDenormals_V128(e, i.dest.reg().getIdx(), 0, 1);
+      }
     });
   }
 };

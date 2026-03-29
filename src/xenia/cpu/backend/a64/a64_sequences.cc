@@ -1486,11 +1486,9 @@ struct AND_I8 : Sequence<AND_I8, I<OPCODE_AND, I8Op, I8Op, I8Op>> {
       e.mov(i.dest, static_cast<uint64_t>(
                         (i.src1.constant() & i.src2.constant()) & 0xFF));
     } else if (i.src2.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src2.constant() & 0xFF));
-      e.and_(i.dest, i.src1, e.w0);
+      e.and_imm(i.dest, i.src1, i.src2.constant() & 0xFF, e.w0);
     } else if (i.src1.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src1.constant() & 0xFF));
-      e.and_(i.dest, i.src2, e.w0);
+      e.and_imm(i.dest, i.src2, i.src1.constant() & 0xFF, e.w0);
     } else {
       e.and_(i.dest, i.src1, i.src2);
     }
@@ -1502,11 +1500,9 @@ struct AND_I16 : Sequence<AND_I16, I<OPCODE_AND, I16Op, I16Op, I16Op>> {
       e.mov(i.dest, static_cast<uint64_t>(
                         (i.src1.constant() & i.src2.constant()) & 0xFFFF));
     } else if (i.src2.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src2.constant() & 0xFFFF));
-      e.and_(i.dest, i.src1, e.w0);
+      e.and_imm(i.dest, i.src1, i.src2.constant() & 0xFFFF, e.w0);
     } else if (i.src1.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src1.constant() & 0xFFFF));
-      e.and_(i.dest, i.src2, e.w0);
+      e.and_imm(i.dest, i.src2, i.src1.constant() & 0xFFFF, e.w0);
     } else {
       e.and_(i.dest, i.src1, i.src2);
     }
@@ -1518,13 +1514,9 @@ struct AND_I32 : Sequence<AND_I32, I<OPCODE_AND, I32Op, I32Op, I32Op>> {
       e.mov(i.dest, static_cast<uint64_t>(static_cast<uint32_t>(
                         i.src1.constant() & i.src2.constant())));
     } else if (i.src2.is_constant) {
-      e.mov(e.w0,
-            static_cast<uint64_t>(static_cast<uint32_t>(i.src2.constant())));
-      e.and_(i.dest, i.src1, e.w0);
+      e.and_imm(i.dest, i.src1, static_cast<uint32_t>(i.src2.constant()), e.w0);
     } else if (i.src1.is_constant) {
-      e.mov(e.w0,
-            static_cast<uint64_t>(static_cast<uint32_t>(i.src1.constant())));
-      e.and_(i.dest, i.src2, e.w0);
+      e.and_imm(i.dest, i.src2, static_cast<uint32_t>(i.src1.constant()), e.w0);
     } else {
       e.and_(i.dest, i.src1, i.src2);
     }
@@ -1649,11 +1641,9 @@ struct OR_I8 : Sequence<OR_I8, I<OPCODE_OR, I8Op, I8Op, I8Op>> {
       e.mov(i.dest, static_cast<uint64_t>(
                         (i.src1.constant() | i.src2.constant()) & 0xFF));
     } else if (i.src2.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src2.constant() & 0xFF));
-      e.orr(i.dest, i.src1, e.w0);
+      e.orr_imm(i.dest, i.src1, i.src2.constant() & 0xFF, e.w0);
     } else if (i.src1.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src1.constant() & 0xFF));
-      e.orr(i.dest, i.src2, e.w0);
+      e.orr_imm(i.dest, i.src2, i.src1.constant() & 0xFF, e.w0);
     } else {
       e.orr(i.dest, i.src1, i.src2);
     }
@@ -1665,11 +1655,9 @@ struct OR_I16 : Sequence<OR_I16, I<OPCODE_OR, I16Op, I16Op, I16Op>> {
       e.mov(i.dest, static_cast<uint64_t>(
                         (i.src1.constant() | i.src2.constant()) & 0xFFFF));
     } else if (i.src2.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src2.constant() & 0xFFFF));
-      e.orr(i.dest, i.src1, e.w0);
+      e.orr_imm(i.dest, i.src1, i.src2.constant() & 0xFFFF, e.w0);
     } else if (i.src1.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src1.constant() & 0xFFFF));
-      e.orr(i.dest, i.src2, e.w0);
+      e.orr_imm(i.dest, i.src2, i.src1.constant() & 0xFFFF, e.w0);
     } else {
       e.orr(i.dest, i.src1, i.src2);
     }
@@ -1681,13 +1669,9 @@ struct OR_I32 : Sequence<OR_I32, I<OPCODE_OR, I32Op, I32Op, I32Op>> {
       e.mov(i.dest, static_cast<uint64_t>(static_cast<uint32_t>(
                         i.src1.constant() | i.src2.constant())));
     } else if (i.src2.is_constant) {
-      e.mov(e.w0,
-            static_cast<uint64_t>(static_cast<uint32_t>(i.src2.constant())));
-      e.orr(i.dest, i.src1, e.w0);
+      e.orr_imm(i.dest, i.src1, static_cast<uint32_t>(i.src2.constant()), e.w0);
     } else if (i.src1.is_constant) {
-      e.mov(e.w0,
-            static_cast<uint64_t>(static_cast<uint32_t>(i.src1.constant())));
-      e.orr(i.dest, i.src2, e.w0);
+      e.orr_imm(i.dest, i.src2, static_cast<uint32_t>(i.src1.constant()), e.w0);
     } else {
       e.orr(i.dest, i.src1, i.src2);
     }
@@ -1727,11 +1711,9 @@ struct XOR_I8 : Sequence<XOR_I8, I<OPCODE_XOR, I8Op, I8Op, I8Op>> {
       e.mov(i.dest, static_cast<uint64_t>(
                         (i.src1.constant() ^ i.src2.constant()) & 0xFF));
     } else if (i.src2.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src2.constant() & 0xFF));
-      e.eor(i.dest, i.src1, e.w0);
+      e.eor_imm(i.dest, i.src1, i.src2.constant() & 0xFF, e.w0);
     } else if (i.src1.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src1.constant() & 0xFF));
-      e.eor(i.dest, i.src2, e.w0);
+      e.eor_imm(i.dest, i.src2, i.src1.constant() & 0xFF, e.w0);
     } else {
       e.eor(i.dest, i.src1, i.src2);
     }
@@ -1743,11 +1725,9 @@ struct XOR_I16 : Sequence<XOR_I16, I<OPCODE_XOR, I16Op, I16Op, I16Op>> {
       e.mov(i.dest, static_cast<uint64_t>(
                         (i.src1.constant() ^ i.src2.constant()) & 0xFFFF));
     } else if (i.src2.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src2.constant() & 0xFFFF));
-      e.eor(i.dest, i.src1, e.w0);
+      e.eor_imm(i.dest, i.src1, i.src2.constant() & 0xFFFF, e.w0);
     } else if (i.src1.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src1.constant() & 0xFFFF));
-      e.eor(i.dest, i.src2, e.w0);
+      e.eor_imm(i.dest, i.src2, i.src1.constant() & 0xFFFF, e.w0);
     } else {
       e.eor(i.dest, i.src1, i.src2);
     }
@@ -1759,13 +1739,9 @@ struct XOR_I32 : Sequence<XOR_I32, I<OPCODE_XOR, I32Op, I32Op, I32Op>> {
       e.mov(i.dest, static_cast<uint64_t>(static_cast<uint32_t>(
                         i.src1.constant() ^ i.src2.constant())));
     } else if (i.src2.is_constant) {
-      e.mov(e.w0,
-            static_cast<uint64_t>(static_cast<uint32_t>(i.src2.constant())));
-      e.eor(i.dest, i.src1, e.w0);
+      e.eor_imm(i.dest, i.src1, static_cast<uint32_t>(i.src2.constant()), e.w0);
     } else if (i.src1.is_constant) {
-      e.mov(e.w0,
-            static_cast<uint64_t>(static_cast<uint32_t>(i.src1.constant())));
-      e.eor(i.dest, i.src2, e.w0);
+      e.eor_imm(i.dest, i.src2, static_cast<uint32_t>(i.src1.constant()), e.w0);
     } else {
       e.eor(i.dest, i.src1, i.src2);
     }

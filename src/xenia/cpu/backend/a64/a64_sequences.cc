@@ -1234,30 +1234,18 @@ EMITTER_OPCODE_TABLE(OPCODE_MUL, MUL_I32, MUL_I64, MUL_F32, MUL_F64, MUL_V128);
 struct MUL_HI_I64
     : Sequence<MUL_HI_I64, I<OPCODE_MUL_HI, I64Op, I64Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    XReg s1 = i.src1.is_constant ? e.x0 : XReg(i.src1.reg().getIdx());
+    XReg s2 = i.src2.is_constant ? e.x1 : XReg(i.src2.reg().getIdx());
+    if (i.src1.is_constant) {
+      e.mov(e.x0, static_cast<uint64_t>(i.src1.constant()));
+    }
+    if (i.src2.is_constant) {
+      e.mov(e.x1, static_cast<uint64_t>(i.src2.constant()));
+    }
     if (i.instr->flags & ARITHMETIC_UNSIGNED) {
-      if (i.src1.is_constant) {
-        e.mov(e.x0, static_cast<uint64_t>(i.src1.constant()));
-      } else {
-        e.mov(e.x0, i.src1);
-      }
-      if (i.src2.is_constant) {
-        e.mov(e.x1, static_cast<uint64_t>(i.src2.constant()));
-        e.umulh(i.dest, e.x0, e.x1);
-      } else {
-        e.umulh(i.dest, e.x0, i.src2);
-      }
+      e.umulh(i.dest, s1, s2);
     } else {
-      if (i.src1.is_constant) {
-        e.mov(e.x0, static_cast<uint64_t>(i.src1.constant()));
-      } else {
-        e.mov(e.x0, i.src1);
-      }
-      if (i.src2.is_constant) {
-        e.mov(e.x1, static_cast<uint64_t>(i.src2.constant()));
-        e.smulh(i.dest, e.x0, e.x1);
-      } else {
-        e.smulh(i.dest, e.x0, i.src2);
-      }
+      e.smulh(i.dest, s1, s2);
     }
   }
 };
@@ -1269,41 +1257,37 @@ EMITTER_OPCODE_TABLE(OPCODE_MUL_HI, MUL_HI_I64);
 struct DIV_I32 : Sequence<DIV_I32, I<OPCODE_DIV, I32Op, I32Op, I32Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
     // ARM64 sdiv/udiv returns 0 on divide by zero (no exception).
+    WReg s1 = i.src1.is_constant ? e.w0 : WReg(i.src1.reg().getIdx());
+    WReg s2 = i.src2.is_constant ? e.w1 : WReg(i.src2.reg().getIdx());
     if (i.src1.is_constant) {
       e.mov(e.w0,
             static_cast<uint64_t>(static_cast<uint32_t>(i.src1.constant())));
-    } else {
-      e.mov(e.w0, i.src1);
     }
     if (i.src2.is_constant) {
       e.mov(e.w1,
             static_cast<uint64_t>(static_cast<uint32_t>(i.src2.constant())));
-    } else {
-      e.mov(e.w1, i.src2);
     }
     if (i.instr->flags & ARITHMETIC_UNSIGNED) {
-      e.udiv(i.dest, e.w0, e.w1);
+      e.udiv(i.dest, s1, s2);
     } else {
-      e.sdiv(i.dest, e.w0, e.w1);
+      e.sdiv(i.dest, s1, s2);
     }
   }
 };
 struct DIV_I64 : Sequence<DIV_I64, I<OPCODE_DIV, I64Op, I64Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    XReg s1 = i.src1.is_constant ? e.x0 : XReg(i.src1.reg().getIdx());
+    XReg s2 = i.src2.is_constant ? e.x1 : XReg(i.src2.reg().getIdx());
     if (i.src1.is_constant) {
       e.mov(e.x0, static_cast<uint64_t>(i.src1.constant()));
-    } else {
-      e.mov(e.x0, i.src1);
     }
     if (i.src2.is_constant) {
       e.mov(e.x1, static_cast<uint64_t>(i.src2.constant()));
-    } else {
-      e.mov(e.x1, i.src2);
     }
     if (i.instr->flags & ARITHMETIC_UNSIGNED) {
-      e.udiv(i.dest, e.x0, e.x1);
+      e.udiv(i.dest, s1, s2);
     } else {
-      e.sdiv(i.dest, e.x0, e.x1);
+      e.sdiv(i.dest, s1, s2);
     }
   }
 };

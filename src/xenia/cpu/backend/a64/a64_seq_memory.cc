@@ -824,77 +824,43 @@ static const uint64_t zva_length = (4ULL << (xe_cpu_mrs(DCZID_EL0) & 0b0'1111));
 struct MEMSET_I64
     : Sequence<MEMSET_I64, I<OPCODE_MEMSET, VoidOp, I64Op, I8Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    // memset(membase + guest_addr, value, length)
+    assert_true(i.src2.is_constant);
+    assert_true(i.src3.is_constant);
+    assert_true(i.src2.constant() == 0);
+    // memset(membase + guest_addr, 0, length)
+    // Only used by dcbz/dcbz128: constant zero value, constant aligned size.
     auto addr = ComputeMemoryAddress(e, i.src1);
     e.add(e.x0, e.GetMembaseReg(), addr);
-    // Optimize the common case: zeroing a constant-length block (dcbz/dcbz128).
-    if (i.src2.is_constant && i.src2.constant() == 0 && i.src3.is_constant) {
-      const uint64_t len = i.src3.constant();
-      uint64_t off = 0;
+    const uint64_t len = i.src3.constant();
+    uint64_t off = 0;
 
-      // Use `dc zva` if it writes more bytes at time than STP
-      if (zva_enable && len >= zva_length && zva_length > 16) {
-        for (; off + zva_length <= len; off += zva_length) {
-          // dc zva, x0
-          e.sys(0b011, 0b0111, 0b0100, 0b001, e.x0);
-          if (off + zva_length < len) {
-            e.add(e.x0, e.x0, zva_length);
-          }
+    // Use `dc zva` if it writes more bytes at a time than STP
+    if (zva_enable && len >= zva_length && zva_length > 16) {
+      for (; off + zva_length <= len; off += zva_length) {
+        // dc zva, x0
+        e.sys(0b011, 0b0111, 0b0100, 0b001, e.x0);
+        if (off + zva_length < len) {
+          e.add(e.x0, e.x0, zva_length);
         }
       }
+    }
 
-      // Inline with STP xzr, xzr pairs (16 bytes each)
-      for (; off + 16 <= len; off += 16) {
-        e.stp(e.xzr, e.xzr, AdrPostImm(e.x0, 16));
-      }
-      // Handle remaining bytes (0-15)
-      if (off + 8 <= len) {
-        e.str(e.xzr, AdrPostImm(e.x0, 8));
-        off += 8;
-      }
-      if (off + 4 <= len) {
-        e.str(e.wzr, AdrPostImm(e.x0, 4));
-        off += 4;
-      }
-      // Byte loop for any remaining 0-3 bytes
-      for (; off + 1 <= len; off += 1) {
-        e.strb(e.wzr, AdrPostImm(e.x0, 1));
-      }
-    } else {
-      // General case: splat byte to NEON register, then 16-byte bulk loop
-      // with a byte loop for the 0-15 byte tail.
-      if (i.src2.is_constant) {
-        e.mov(e.w1, static_cast<uint64_t>(i.src2.constant() & 0xFF));
-      } else {
-        e.mov(e.w1, WReg(i.src2.reg().getIdx()));
-      }
-      if (i.src3.is_constant) {
-        e.mov(e.x2, static_cast<uint64_t>(i.src3.constant()));
-      } else {
-        e.mov(e.x2, i.src3.reg());
-      }
-      auto& done = e.NewCachedLabel();
-      e.cbz(e.x2, done);
-      // Splat fill byte across v0 for 16-byte stores.
-      e.dup(VReg(0).b16, e.w1);
-      // 16-byte bulk loop.
-      auto& loop16 = e.NewCachedLabel();
-      auto& tail = e.NewCachedLabel();
-      e.L(loop16);
-      e.cmp(e.x2, 16);
-      e.b(LO, tail);
-      e.str(QReg(0), AdrPostImm(e.x0, 16));
-      e.sub(e.x2, e.x2, 16);
-      e.b(loop16);
-      // Byte loop for remaining 0-15 bytes.
-      e.L(tail);
-      e.cbz(e.x2, done);
-      auto& byte_loop = e.NewCachedLabel();
-      e.L(byte_loop);
-      e.strb(e.w1, AdrPostImm(e.x0, 1));
-      e.subs(e.x2, e.x2, 1);
-      e.b(Xbyak_aarch64::NE, byte_loop);
-      e.L(done);
+    // Inline with STP xzr, xzr pairs (16 bytes each)
+    for (; off + 16 <= len; off += 16) {
+      e.stp(e.xzr, e.xzr, AdrPostImm(e.x0, 16));
+    }
+    // Handle remaining bytes (0-15)
+    if (off + 8 <= len) {
+      e.str(e.xzr, AdrPostImm(e.x0, 8));
+      off += 8;
+    }
+    if (off + 4 <= len) {
+      e.str(e.wzr, AdrPostImm(e.x0, 4));
+      off += 4;
+    }
+    // Byte loop for any remaining 0-3 bytes
+    for (; off + 1 <= len; off += 1) {
+      e.strb(e.wzr, AdrPostImm(e.x0, 1));
     }
   }
 };

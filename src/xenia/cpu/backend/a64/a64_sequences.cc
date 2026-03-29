@@ -4393,10 +4393,7 @@ EMITTER_OPCODE_TABLE(OPCODE_SET_ROUNDING_MODE, SET_ROUNDING_MODE);
 
 // PPC frsqrte lookup table implementation (PowerISA Table E-5).
 // Matches the x64 backend's EmitFrsqrteHelper.
-static uint64_t PpcFrsqrte(void* raw_context) {
-  auto* ctx = reinterpret_cast<ppc::PPCContext*>(raw_context);
-  uint64_t bits = ctx->scratch;
-
+static uint64_t PpcFrsqrte(uint64_t bits) {
   uint32_t sign = (uint32_t)(bits >> 63);
   uint32_t exp = (uint32_t)((bits >> 52) & 0x7FF);
   uint64_t mantissa = bits & 0x000FFFFFFFFFFFFFULL;
@@ -4473,7 +4470,7 @@ struct RSQRT_F32 : Sequence<RSQRT_F32, I<OPCODE_RSQRT, F32Op, F32Op>> {
 struct RSQRT_F64 : Sequence<RSQRT_F64, I<OPCODE_RSQRT, F64Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
     // PPC frsqrte uses a specific lookup table, not a high-precision estimate.
-    // Store source bits to PPCContext::scratch, call helper, load result.
+    // Call PpcFrsqrte directly (pure integer math, no FPCR impact).
     DReg src = i.src1.is_constant ? e.d0 : DReg(i.src1.reg().getIdx());
     if (i.src1.is_constant) {
       union {
@@ -4485,10 +4482,8 @@ struct RSQRT_F64 : Sequence<RSQRT_F64, I<OPCODE_RSQRT, F64Op, F64Op>> {
       e.fmov(e.d0, e.x0);
     }
     e.fmov(e.x0, src);
-    e.str(e.x0, Xbyak_aarch64::ptr(
-                    e.GetContextReg(),
-                    static_cast<int32_t>(offsetof(ppc::PPCContext, scratch))));
-    e.CallNative(reinterpret_cast<void*>(PpcFrsqrte));
+    e.mov(e.x9, reinterpret_cast<uint64_t>(PpcFrsqrte));
+    e.blr(e.x9);
     e.fmov(i.dest, e.x0);
   }
 };
@@ -4577,34 +4572,27 @@ static uint32_t PpcVrsqrtefpLane(uint32_t bits) {
   return result;
 }
 
-static uint64_t PpcVrsqrtefpHelper(void* raw_context) {
-  auto* ctx = reinterpret_cast<ppc::PPCContext*>(raw_context);
-  return (uint64_t)PpcVrsqrtefpLane((uint32_t)ctx->scratch);
-}
-
 struct RSQRT_V128 : Sequence<RSQRT_V128, I<OPCODE_RSQRT, V128Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    // No hardware FP emitted — the C++ helper does all math.
-    // GuestToHostThunk restores FPCR after the native call.
-    // Save source to stack scratch (survives CallNative).
+    // Call PpcVrsqrtefpLane directly per lane (pure integer math).
+    // Save source to stack scratch, accumulate results there, load at end.
     int src_idx = SrcVReg(e, i.src1, 0);
     e.str(QReg(src_idx),
           Xbyak_aarch64::ptr(e.sp,
                              static_cast<int32_t>(StackLayout::GUEST_SCRATCH)));
-    int dest_idx = i.dest.reg().getIdx();
     for (int lane = 0; lane < 4; lane++) {
-      // Load float32 bits from saved source.
       e.ldr(e.w0, Xbyak_aarch64::ptr(
                       e.sp, static_cast<int32_t>(StackLayout::GUEST_SCRATCH) +
                                 lane * 4));
-      // Store to PPCContext::scratch for helper.
-      e.str(e.x0, Xbyak_aarch64::ptr(e.GetContextReg(),
-                                     static_cast<int32_t>(
-                                         offsetof(ppc::PPCContext, scratch))));
-      e.CallNative(reinterpret_cast<void*>(PpcVrsqrtefpHelper));
-      // Insert result lane into dest (allocated reg, survives CallNative).
-      e.ins(VReg(dest_idx).s4[lane], e.w0);
+      e.mov(e.x9, reinterpret_cast<uint64_t>(PpcVrsqrtefpLane));
+      e.blr(e.x9);
+      e.str(e.w0, Xbyak_aarch64::ptr(
+                      e.sp, static_cast<int32_t>(StackLayout::GUEST_SCRATCH) +
+                                lane * 4));
     }
+    e.ldr(QReg(i.dest.reg().getIdx()),
+          Xbyak_aarch64::ptr(e.sp,
+                             static_cast<int32_t>(StackLayout::GUEST_SCRATCH)));
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_RSQRT, RSQRT_F32, RSQRT_F64, RSQRT_V128);

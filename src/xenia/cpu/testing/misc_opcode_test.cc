@@ -291,6 +291,90 @@ TEST_CASE("RSQRT_F32", "[arithmetic]") {
 }
 
 // ============================================================================
+// RSQRT F64 — PPC frsqrte (lookup table estimate)
+// ============================================================================
+TEST_CASE("RSQRT_F64", "[arithmetic]") {
+  TestFunction test([](HIRBuilder& b) {
+    auto rsqrt = b.RSqrt(LoadFPR(b, 4));
+    StoreFPR(b, 3, rsqrt);
+    b.Return();
+  });
+  // rsqrt(1.0) — table gives an estimate near 1.0
+  test.Run([](PPCContext* ctx) { ctx->f[4] = 1.0; },
+           [](PPCContext* ctx) {
+             // PPC frsqrte returns a table-based estimate, not exact 1.0.
+             // Verify it's in the right ballpark (within ~3% of 1.0).
+             REQUIRE(ctx->f[3] > 0.96);
+             REQUIRE(ctx->f[3] < 1.04);
+           });
+  // rsqrt(4.0) — estimate near 0.5
+  test.Run([](PPCContext* ctx) { ctx->f[4] = 4.0; },
+           [](PPCContext* ctx) {
+             REQUIRE(ctx->f[3] > 0.48);
+             REQUIRE(ctx->f[3] < 0.52);
+           });
+  // rsqrt(+0.0) → +Inf
+  test.Run([](PPCContext* ctx) { ctx->f[4] = 0.0; },
+           [](PPCContext* ctx) {
+             REQUIRE(std::isinf(ctx->f[3]));
+             REQUIRE(ctx->f[3] > 0);
+           });
+  // rsqrt(negative) → QNaN
+  test.Run([](PPCContext* ctx) { ctx->f[4] = -1.0; },
+           [](PPCContext* ctx) { REQUIRE(std::isnan(ctx->f[3])); });
+}
+
+// ============================================================================
+// RSQRT V128 — PPC vrsqrtefp (per-lane lookup table estimate)
+// ============================================================================
+TEST_CASE("RSQRT_V128", "[vector]") {
+  TestFunction test([](HIRBuilder& b) {
+    StoreVR(b, 3, b.RSqrt(LoadVR(b, 4)));
+    b.Return();
+  });
+  // Normal positive values: estimates should be in the right ballpark.
+  test.Run(
+      [](PPCContext* ctx) { ctx->v[4] = vec128f(1.0f, 4.0f, 16.0f, 100.0f); },
+      [](PPCContext* ctx) {
+        auto r = ctx->v[3];
+        float r0, r1, r2, r3;
+        std::memcpy(&r0, &r.u32[0], 4);
+        std::memcpy(&r1, &r.u32[1], 4);
+        std::memcpy(&r2, &r.u32[2], 4);
+        std::memcpy(&r3, &r.u32[3], 4);
+        // rsqrt(1) ≈ 1.0, rsqrt(4) ≈ 0.5, rsqrt(16) ≈ 0.25, rsqrt(100) ≈ 0.1
+        REQUIRE(r0 > 0.9f);
+        REQUIRE(r0 < 1.1f);
+        REQUIRE(r1 > 0.45f);
+        REQUIRE(r1 < 0.55f);
+        REQUIRE(r2 > 0.22f);
+        REQUIRE(r2 < 0.28f);
+        REQUIRE(r3 > 0.08f);
+        REQUIRE(r3 < 0.12f);
+      });
+  // +0 → +Inf
+  test.Run([](PPCContext* ctx) { ctx->v[4] = vec128f(0.0f, 0.0f, 0.0f, 0.0f); },
+           [](PPCContext* ctx) {
+             auto r = ctx->v[3];
+             float r0;
+             std::memcpy(&r0, &r.u32[0], 4);
+             REQUIRE(std::isinf(r0));
+             REQUIRE(r0 > 0);
+           });
+  // Negative → QNaN
+  test.Run(
+      [](PPCContext* ctx) {
+        ctx->v[4] = vec128f(-1.0f, -4.0f, -16.0f, -100.0f);
+      },
+      [](PPCContext* ctx) {
+        auto r = ctx->v[3];
+        float r0;
+        std::memcpy(&r0, &r.u32[0], 4);
+        REQUIRE(std::isnan(r0));
+      });
+}
+
+// ============================================================================
 // VECTOR_AVERAGE I8 — rounding halving add: (a+b+1)>>1
 // ============================================================================
 TEST_CASE("VECTOR_AVERAGE_UNSIGNED_I8", "[vector]") {

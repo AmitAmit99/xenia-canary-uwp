@@ -42,16 +42,13 @@ using Xbyak_aarch64::XReg;
 
 template <typename Fn>
 inline void EmitWithVmxFpcr(A64Emitter& e, Fn&& emit_op) {
-  // VMX vector FP uses its own cached FPCR state in the backend context. Save
-  // and restore around each VMX op so vector code doesn't leak FPCR changes
-  // into later scalar instructions.
-  e.mrs(e.x13, 3, 3, 4, 4, 0);
-  e.ldr(e.w15, Xbyak_aarch64::ptr(e.GetBackendCtxReg(),
-                                  static_cast<uint32_t>(
-                                      offsetof(A64BackendContext, fpcr_vmx))));
-  e.msr(3, 3, 4, 4, 0, e.x15);
+  // Enter VMX FPCR mode using tracked lazy switching.  If the emitter
+  // is already in VMX mode (e.g. consecutive VMX ops in the same basic
+  // block) this is a no-op — no system register access at all.
+  // FPU mode is restored at block boundaries and calls via ForgetFpcrMode,
+  // or on demand by scalar FP sequences via ChangeFpcrMode(Fpu).
+  e.ChangeFpcrMode(FPCRMode::Vmx);
   emit_op();
-  e.msr(3, 3, 4, 4, 0, e.x13);
 }
 
 // Try to see if the provided 64-bit value can be compressed into an 8-bit

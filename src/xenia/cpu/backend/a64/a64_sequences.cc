@@ -488,6 +488,8 @@ enum class FpBinOp { Add, Sub, Mul, Div };
 
 static void EmitFpBinOpWithPpcNan_F32(A64Emitter& e, SReg dest, SReg s1,
                                       SReg s2, FpBinOp op) {
+  // Ensure FPU FPCR (no flush-to-zero) for scalar operations.
+  e.ChangeFpcrMode(FPCRMode::Fpu);
   auto& nan_path = e.NewCachedLabel();
   auto& done = e.NewCachedLabel();
 
@@ -537,6 +539,7 @@ static void EmitFpBinOpWithPpcNan_F32(A64Emitter& e, SReg dest, SReg s1,
 
 static void EmitFpBinOpWithPpcNan_F64(A64Emitter& e, DReg dest, DReg s1,
                                       DReg s2, FpBinOp op) {
+  e.ChangeFpcrMode(FPCRMode::Fpu);
   auto& nan_path = e.NewCachedLabel();
   auto& done = e.NewCachedLabel();
 
@@ -592,6 +595,7 @@ static void EmitFpBinOpWithPpcNan_F64(A64Emitter& e, DReg dest, DReg s1,
 // rule, so NaN inputs are handled entirely in software.
 static void EmitFmaWithPpcNan_F64(A64Emitter& e, DReg dest, DReg s1, DReg s2,
                                   DReg s3, bool is_sub) {
+  e.ChangeFpcrMode(FPCRMode::Fpu);
   auto& nan_path = e.NewCachedLabel();
   auto& done = e.NewCachedLabel();
 
@@ -643,6 +647,7 @@ static void EmitFmaWithPpcNan_F64(A64Emitter& e, DReg dest, DReg s1, DReg s2,
 
 static void EmitFmaWithPpcNan_F32(A64Emitter& e, SReg dest, SReg s1, SReg s2,
                                   SReg s3, bool is_sub) {
+  e.ChangeFpcrMode(FPCRMode::Fpu);
   auto& nan_path = e.NewCachedLabel();
   auto& done = e.NewCachedLabel();
 
@@ -3443,6 +3448,7 @@ struct CONVERT_F64_I64
 struct CONVERT_F32_F64
     : Sequence<CONVERT_F32_F64, I<OPCODE_CONVERT, F32Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    e.ChangeFpcrMode(FPCRMode::Fpu);
     if (i.src1.is_constant) {
       union {
         double d;
@@ -3460,6 +3466,7 @@ struct CONVERT_F32_F64
 struct CONVERT_F64_F32
     : Sequence<CONVERT_F64_F32, I<OPCODE_CONVERT, F64Op, F32Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    e.ChangeFpcrMode(FPCRMode::Fpu);
     if (i.src1.is_constant) {
       union {
         float f;
@@ -3579,6 +3586,7 @@ EMITTER_OPCODE_TABLE(OPCODE_ROUND, ROUND_F32, ROUND_F64, ROUND_V128);
 // ============================================================================
 struct SQRT_F32 : Sequence<SQRT_F32, I<OPCODE_SQRT, F32Op, F32Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    e.ChangeFpcrMode(FPCRMode::Fpu);
     if (i.src1.is_constant) {
       union {
         float f;
@@ -3595,6 +3603,7 @@ struct SQRT_F32 : Sequence<SQRT_F32, I<OPCODE_SQRT, F32Op, F32Op>> {
 };
 struct SQRT_F64 : Sequence<SQRT_F64, I<OPCODE_SQRT, F64Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    e.ChangeFpcrMode(FPCRMode::Fpu);
     if (i.src1.is_constant) {
       union {
         double d;
@@ -4492,6 +4501,7 @@ static uint64_t PpcFrsqrte(void* raw_context) {
 // ============================================================================
 struct RSQRT_F32 : Sequence<RSQRT_F32, I<OPCODE_RSQRT, F32Op, F32Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    e.ChangeFpcrMode(FPCRMode::Fpu);
     SReg src = i.src1.is_constant ? e.s0 : SReg(i.src1.reg().getIdx());
     if (i.src1.is_constant) {
       union {
@@ -4652,6 +4662,7 @@ EMITTER_OPCODE_TABLE(OPCODE_RSQRT, RSQRT_F32, RSQRT_F64, RSQRT_V128);
 // ============================================================================
 struct RECIP_F32 : Sequence<RECIP_F32, I<OPCODE_RECIP, F32Op, F32Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    e.ChangeFpcrMode(FPCRMode::Fpu);
     SReg src = i.src1.is_constant ? e.s0 : SReg(i.src1.reg().getIdx());
     if (i.src1.is_constant) {
       union {
@@ -4668,6 +4679,7 @@ struct RECIP_F32 : Sequence<RECIP_F32, I<OPCODE_RECIP, F32Op, F32Op>> {
 };
 struct RECIP_F64 : Sequence<RECIP_F64, I<OPCODE_RECIP, F64Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    e.ChangeFpcrMode(FPCRMode::Fpu);
     DReg src = i.src1.is_constant ? e.d0 : DReg(i.src1.reg().getIdx());
     if (i.src1.is_constant) {
       union {
@@ -4708,6 +4720,7 @@ EMITTER_OPCODE_TABLE(OPCODE_RECIP, RECIP_F32, RECIP_F64, RECIP_V128);
 // ============================================================================
 struct TOSINGLE : Sequence<TOSINGLE, I<OPCODE_TO_SINGLE, F64Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    e.ChangeFpcrMode(FPCRMode::Fpu);
     DReg src = i.src1.is_constant ? e.d0 : DReg(i.src1.reg().getIdx());
     if (i.src1.is_constant) {
       union {

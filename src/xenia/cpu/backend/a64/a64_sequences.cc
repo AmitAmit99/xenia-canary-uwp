@@ -1934,52 +1934,36 @@ struct SHL_I64 : Sequence<SHL_I64, I<OPCODE_SHL, I64Op, I64Op, I8Op>> {
     }
   }
 };
-// SHL_V128 C helper: shift entire 128-bit vector left by N BITS (0-7).
-// Args: x0=PPCContext* (unused), x1=pointer to scratch area
-//       [0..15] = src vec128, [16] = shift amount in bits (0-7).
-// Result stored in [0..15].
-static void EmulateShlV128(void* /*ctx*/, void* vdata) {
-  auto* bytes = reinterpret_cast<uint8_t*>(vdata);
-  uint8_t shamt = bytes[16] & 0x7;
-  if (shamt == 0) return;
-  // PPC left shift: bits move from PPC byte 15 (LSB) toward PPC byte 0 (MSB).
-  // PPC byte i maps to LE memory byte i^3 (byte-swap within 32-bit words).
-  for (int i = 0; i < 15; ++i) {
-    bytes[i ^ 0x3] =
-        (bytes[i ^ 0x3] << shamt) | (bytes[(i + 1) ^ 0x3] >> (8 - shamt));
-  }
-  bytes[15 ^ 0x3] = bytes[15 ^ 0x3] << shamt;
-}
-
 struct SHL_V128 : Sequence<SHL_V128, I<OPCODE_SHL, V128Op, V128Op, I8Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    // PPC 128-bit SHL by N bits (0-7). The value is stored as 4 word-swapped
+    // 32-bit lanes. Carries flow from higher NEON lanes to lower:
+    //   lane[i] = (lane[i] << N) | (lane[i+1] >> (32-N))
     int s = SrcVReg(e, i.src1, 0);
     int d = i.dest.reg().getIdx();
-    // PPC 128-bit SHL operates on PPC byte order which is word-reversed
-    // relative to NEON bit significance. Always use the C helper which
-    // correctly handles the byte-swap within 32-bit words (like x64 does).
     if (i.src2.is_constant) {
       uint8_t sh = i.src2.constant() & 0x7;
       if (sh == 0) {
-        if (d != s) e.orr(VReg(d).b16, VReg(s).b16, VReg(s).b16);
+        if (d != s) e.mov(VReg(d).b16, VReg(s).b16);
         return;
       }
-      e.str(QReg(s),
-            ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-      e.mov(e.w0, static_cast<uint32_t>(sh));
-      e.strb(e.w0,
-             ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH + 16)));
+      // Read carry before writing result (handles dest==src aliasing).
+      e.ushr(VReg(0).s4, VReg(s).s4, 32 - sh);
+      e.shl(VReg(d).s4, VReg(s).s4, sh);
     } else {
-      e.str(QReg(s),
-            ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-      e.mov(e.w0, WReg(i.src2.reg().getIdx()));
-      e.strb(e.w0,
-             ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH + 16)));
+      // Variable shift: mask to 0-7, splat, use ushl.
+      e.and_(e.w0, WReg(i.src2.reg().getIdx()), 7);
+      e.dup(VReg(1).s4, e.w0);
+      e.movi(VReg(2).s4, 32);
+      e.sub(VReg(2).s4, VReg(2).s4, VReg(1).s4);   // 32-N
+      e.neg(VReg(2).s4, VReg(2).s4);               // -(32-N) for right shift
+      e.ushl(VReg(0).s4, VReg(s).s4, VReg(2).s4);  // carry: lane >> (32-N)
+      e.ushl(VReg(d).s4, VReg(s).s4, VReg(1).s4);  // result: lane << N
     }
-    e.add(e.x1, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
-    e.CallNativeSafe(reinterpret_cast<void*>(EmulateShlV128));
-    e.ldr(QReg(d),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+    // Shift carries from lane i+1 to lane i; lane 3 gets zero.
+    e.movi(VReg(1).s4, 0);
+    e.ext(VReg(0).b16, VReg(0).b16, VReg(1).b16, 4);
+    e.orr(VReg(d).b16, VReg(d).b16, VReg(0).b16);
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_SHL, SHL_I8, SHL_I16, SHL_I32, SHL_I64, SHL_V128);
@@ -2075,52 +2059,36 @@ struct SHR_I64 : Sequence<SHR_I64, I<OPCODE_SHR, I64Op, I64Op, I8Op>> {
     }
   }
 };
-// SHR_V128 C helper: shift entire 128-bit vector right by N BITS (0-7).
-// Args: x0=PPCContext* (unused), x1=pointer to scratch area
-//       [0..15] = src vec128, [16] = shift amount in bits (0-7).
-// Result stored in [0..15].
-static void EmulateShrV128(void* /*ctx*/, void* vdata) {
-  auto* bytes = reinterpret_cast<uint8_t*>(vdata);
-  uint8_t shamt = bytes[16] & 0x7;
-  if (shamt == 0) return;
-  // PPC right shift: bits move from PPC byte 0 (MSB) toward PPC byte 15 (LSB).
-  // PPC byte i maps to LE memory byte i^3 (byte-swap within 32-bit words).
-  for (int i = 15; i > 0; --i) {
-    bytes[i ^ 0x3] =
-        (bytes[i ^ 0x3] >> shamt) | (bytes[(i - 1) ^ 0x3] << (8 - shamt));
-  }
-  bytes[0 ^ 0x3] = bytes[0 ^ 0x3] >> shamt;
-}
-
 struct SHR_V128 : Sequence<SHR_V128, I<OPCODE_SHR, V128Op, V128Op, I8Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    // PPC 128-bit SHR by N bits (0-7). Carries flow from lower NEON lanes
+    // to higher:
+    //   lane[i] = (lane[i] >> N) | (lane[i-1] << (32-N))
     int s = SrcVReg(e, i.src1, 0);
     int d = i.dest.reg().getIdx();
-    // PPC 128-bit SHR operates on PPC byte order which is word-reversed
-    // relative to NEON bit significance. Always use the C helper which
-    // correctly handles the byte-swap within 32-bit words (like x64 does).
     if (i.src2.is_constant) {
       uint8_t sh = i.src2.constant() & 0x7;
       if (sh == 0) {
-        if (d != s) e.orr(VReg(d).b16, VReg(s).b16, VReg(s).b16);
+        if (d != s) e.mov(VReg(d).b16, VReg(s).b16);
         return;
       }
-      e.str(QReg(s),
-            ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-      e.mov(e.w0, static_cast<uint32_t>(sh));
-      e.strb(e.w0,
-             ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH + 16)));
+      // Read carry before writing result (handles dest==src aliasing).
+      e.shl(VReg(0).s4, VReg(s).s4, 32 - sh);
+      e.ushr(VReg(d).s4, VReg(s).s4, sh);
     } else {
-      e.str(QReg(s),
-            ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
-      e.mov(e.w0, WReg(i.src2.reg().getIdx()));
-      e.strb(e.w0,
-             ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH + 16)));
+      // Variable shift: mask to 0-7, splat, use ushl.
+      e.and_(e.w0, WReg(i.src2.reg().getIdx()), 7);
+      e.dup(VReg(1).s4, e.w0);
+      e.movi(VReg(2).s4, 32);
+      e.sub(VReg(2).s4, VReg(2).s4, VReg(1).s4);   // 32-N
+      e.ushl(VReg(0).s4, VReg(s).s4, VReg(2).s4);  // carry: lane << (32-N)
+      e.neg(VReg(1).s4, VReg(1).s4);               // -N for right shift
+      e.ushl(VReg(d).s4, VReg(s).s4, VReg(1).s4);  // result: lane >> N
     }
-    e.add(e.x1, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
-    e.CallNativeSafe(reinterpret_cast<void*>(EmulateShrV128));
-    e.ldr(QReg(d),
-          ptr(e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH)));
+    // Shift carries from lane i-1 to lane i; lane 0 gets zero.
+    e.movi(VReg(1).s4, 0);
+    e.ext(VReg(0).b16, VReg(1).b16, VReg(0).b16, 12);
+    e.orr(VReg(d).b16, VReg(d).b16, VReg(0).b16);
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_SHR, SHR_I8, SHR_I16, SHR_I32, SHR_I64, SHR_V128);

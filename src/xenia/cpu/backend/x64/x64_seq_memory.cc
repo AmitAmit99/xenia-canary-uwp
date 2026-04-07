@@ -295,68 +295,6 @@ RegExp ComputeMemoryAddressOffset(X64Emitter& e, const T& guest,
   }
 }
 
-// ============================================================================
-// OPCODE_ATOMIC_EXCHANGE
-// ============================================================================
-// Note that the address we use here is a real, host address!
-// This is weird, and should be fixed.
-template <typename SEQ, typename REG, typename ARGS>
-void EmitAtomicExchangeXX(X64Emitter& e, const ARGS& i) {
-  if (i.dest == i.src1) {
-    e.mov(e.rax, i.src1);
-    if (i.dest != i.src2) {
-      if (i.src2.is_constant) {
-        e.mov(i.dest, i.src2.constant());
-      } else {
-        e.mov(i.dest, i.src2);
-      }
-    }
-    e.lock();
-    e.xchg(e.dword[e.rax], i.dest);
-  } else {
-    if (i.dest != i.src2) {
-      if (i.src2.is_constant) {
-        e.mov(i.dest, i.src2.constant());
-      } else {
-        e.mov(i.dest, i.src2);
-      }
-    }
-    e.lock();
-    e.xchg(e.dword[i.src1.reg()], i.dest);
-  }
-}
-struct ATOMIC_EXCHANGE_I8
-    : Sequence<ATOMIC_EXCHANGE_I8,
-               I<OPCODE_ATOMIC_EXCHANGE, I8Op, I64Op, I8Op>> {
-  static void Emit(X64Emitter& e, const EmitArgType& i) {
-    EmitAtomicExchangeXX<ATOMIC_EXCHANGE_I8, Reg8>(e, i);
-  }
-};
-struct ATOMIC_EXCHANGE_I16
-    : Sequence<ATOMIC_EXCHANGE_I16,
-               I<OPCODE_ATOMIC_EXCHANGE, I16Op, I64Op, I16Op>> {
-  static void Emit(X64Emitter& e, const EmitArgType& i) {
-    EmitAtomicExchangeXX<ATOMIC_EXCHANGE_I16, Reg16>(e, i);
-  }
-};
-struct ATOMIC_EXCHANGE_I32
-    : Sequence<ATOMIC_EXCHANGE_I32,
-               I<OPCODE_ATOMIC_EXCHANGE, I32Op, I64Op, I32Op>> {
-  static void Emit(X64Emitter& e, const EmitArgType& i) {
-    EmitAtomicExchangeXX<ATOMIC_EXCHANGE_I32, Reg32>(e, i);
-  }
-};
-struct ATOMIC_EXCHANGE_I64
-    : Sequence<ATOMIC_EXCHANGE_I64,
-               I<OPCODE_ATOMIC_EXCHANGE, I64Op, I64Op, I64Op>> {
-  static void Emit(X64Emitter& e, const EmitArgType& i) {
-    EmitAtomicExchangeXX<ATOMIC_EXCHANGE_I64, Reg64>(e, i);
-  }
-};
-EMITTER_OPCODE_TABLE(OPCODE_ATOMIC_EXCHANGE, ATOMIC_EXCHANGE_I8,
-                     ATOMIC_EXCHANGE_I16, ATOMIC_EXCHANGE_I32,
-                     ATOMIC_EXCHANGE_I64);
-
 struct LVL_V128 : Sequence<LVL_V128, I<OPCODE_LVL, V128Op, I64Op>> {
   static void Emit(X64Emitter& e, const EmitArgType& i) {
     e.mov(e.edx, 0xf);

@@ -203,13 +203,21 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode,
 
   auto result =
       xe::threading::Wait(wait_handle, alertable ? true : false, timeout_ms);
+
   switch (result) {
     case xe::threading::WaitResult::kSuccess:
-      WaitCallback();
-      return X_STATUS_SUCCESS;
-    case xe::threading::WaitResult::kUserCallback:
-      // Or X_STATUS_ALERTED?
+    case xe::threading::WaitResult::kUserCallback: {
+      // Thread actually blocked and woke — reset priority to base.
+      auto current_thread = XThread::GetCurrentThread();
+      if (current_thread) {
+        current_thread->ResetQuantum();
+      }
+      if (result == xe::threading::WaitResult::kSuccess) {
+        WaitCallback();
+        return X_STATUS_SUCCESS;
+      }
       return X_STATUS_USER_APC;
+    }
     case xe::threading::WaitResult::kTimeout:
       xe::threading::MaybeYield();
       return X_STATUS_TIMEOUT;
@@ -231,13 +239,20 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object,
   auto result = xe::threading::SignalAndWait(
       signal_object->GetWaitHandle(), wait_object->GetWaitHandle(),
       alertable ? true : false, timeout_ms);
+
   switch (result) {
     case xe::threading::WaitResult::kSuccess:
-      wait_object->WaitCallback();
-      return X_STATUS_SUCCESS;
-    case xe::threading::WaitResult::kUserCallback:
-      // Or X_STATUS_ALERTED?
+    case xe::threading::WaitResult::kUserCallback: {
+      auto current_thread = XThread::GetCurrentThread();
+      if (current_thread) {
+        current_thread->ResetQuantum();
+      }
+      if (result == xe::threading::WaitResult::kSuccess) {
+        wait_object->WaitCallback();
+        return X_STATUS_SUCCESS;
+      }
       return X_STATUS_USER_APC;
+    }
     case xe::threading::WaitResult::kTimeout:
       xe::threading::MaybeYield();
       return X_STATUS_TIMEOUT;
@@ -264,25 +279,29 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects,
                         TimeoutTicksToMs(*opt_timeout)))
                   : std::chrono::milliseconds::max();
 
+  X_STATUS status;
   if (wait_type) {
     auto result = xe::threading::WaitAny(wait_handles, count,
                                          alertable ? true : false, timeout_ms);
     switch (result.first) {
       case xe::threading::WaitResult::kSuccess:
         objects[result.second]->WaitCallback();
-
-        return X_STATUS(result.second);
+        status = X_STATUS(result.second);
+        break;
       case xe::threading::WaitResult::kUserCallback:
-        // Or X_STATUS_ALERTED?
-        return X_STATUS_USER_APC;
+        status = X_STATUS_USER_APC;
+        break;
       case xe::threading::WaitResult::kTimeout:
         xe::threading::MaybeYield();
-        return X_STATUS_TIMEOUT;
-      default:
+        status = X_STATUS_TIMEOUT;
+        break;
       case xe::threading::WaitResult::kAbandoned:
-        return X_STATUS(X_STATUS_ABANDONED_WAIT_0 + result.second);
+        status = X_STATUS(X_STATUS_ABANDONED_WAIT_0 + result.second);
+        break;
+      default:
       case xe::threading::WaitResult::kFailed:
-        return X_STATUS_UNSUCCESSFUL;
+        status = X_STATUS_UNSUCCESSFUL;
+        break;
     }
   } else {
     auto result = xe::threading::WaitAll(wait_handles, count,
@@ -292,20 +311,32 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects,
         for (uint32_t i = 0; i < count; i++) {
           objects[i]->WaitCallback();
         }
-
-        return X_STATUS_SUCCESS;
+        status = X_STATUS_SUCCESS;
+        break;
       case xe::threading::WaitResult::kUserCallback:
-        // Or X_STATUS_ALERTED?
-        return X_STATUS_USER_APC;
+        status = X_STATUS_USER_APC;
+        break;
       case xe::threading::WaitResult::kTimeout:
         xe::threading::MaybeYield();
-        return X_STATUS_TIMEOUT;
+        status = X_STATUS_TIMEOUT;
+        break;
       default:
       case xe::threading::WaitResult::kAbandoned:
       case xe::threading::WaitResult::kFailed:
-        return X_STATUS_ABANDONED_WAIT_0;
+        status = X_STATUS_ABANDONED_WAIT_0;
+        break;
     }
   }
+
+  // Only reset quantum if the thread actually blocked (not on timeout/failure).
+  if (status != X_STATUS_TIMEOUT && status != X_STATUS_UNSUCCESSFUL &&
+      status != X_STATUS_ABANDONED_WAIT_0) {
+    auto current_thread = XThread::GetCurrentThread();
+    if (current_thread) {
+      current_thread->ResetQuantum();
+    }
+  }
+  return status;
 }
 
 uint8_t* XObject::CreateNative(uint32_t size) {

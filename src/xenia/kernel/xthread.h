@@ -422,6 +422,17 @@ class XThread : public XObject, public cpu::Thread {
   int32_t QueryPriority();
   void SetPriority(int32_t increment);
 
+  // Called periodically (~20ms) by KernelState's timestamp timer to simulate
+  // the Xenon scheduler's quantum-based priority decay for non-real-time
+  // threads (priority < 18).  Threads that run for longer than one quantum
+  // (~20ms) have their effective priority decayed toward the base, which
+  // causes them to drop into lower host priority buckets and prevents
+  // starvation.
+  void CheckQuantumAndDecay();
+  // Resets effective priority back to base and restarts the quantum timer.
+  // Called when a thread wakes from a kernel wait.
+  void ResetQuantum();
+
   // Xbox thread IDs:
   // 0 - core 0, thread 0 - user
   // 1 - core 0, thread 1 - user
@@ -491,7 +502,9 @@ class XThread : public XObject, public cpu::Thread {
   bool main_thread_ = false;  // Entry-point thread
   bool running_ = false;
 
-  int32_t priority_ = 0;
+  int32_t priority_ = 0;       // current effective priority (may be decayed)
+  int32_t base_priority_ = 0;  // priority floor — decay never goes below this
+  uint64_t quantum_start_ms_ = 0;  // host uptime (ms) when quantum last reset
 
 #if !XE_PLATFORM_WIN32
   // Condition variable for thread self-suspension.

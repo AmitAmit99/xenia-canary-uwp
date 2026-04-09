@@ -384,6 +384,7 @@ class KernelState {
   BitMap tls_bitmap_;
   uint32_t ke_timestamp_bundle_ptr_ = 0;
   std::unique_ptr<xe::threading::HighResolutionTimer> timestamp_timer_;
+  uint32_t quantum_timer_counter_ = 0;
   cpu::backend::GuestTrampolineGroup kernel_trampoline_group_;
   // fixed address referenced by dashboards. Data is currently unknown
   uint32_t strange_hardcoded_page_ = 0x8E038634 & (~0xFFFF);

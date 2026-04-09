@@ -1151,6 +1151,18 @@ void KernelState::UpdateKeTimestampBundle() {
   xe::store_and_swap<uint64_t>(&lpKeTimeStampBundle->system_time,
                                Clock::QueryGuestSystemTime());
   xe::store_and_swap<uint32_t>(&lpKeTimeStampBundle->tick_count, uptime_ms);
+
+  // Every 20 ticks (~20ms), decay priority on running guest threads.
+  // This simulates the Xenon decrementer-driven quantum expiration.
+  if (++quantum_timer_counter_ >= 20) {
+    quantum_timer_counter_ = 0;
+    auto global_lock = global_critical_region_.Acquire();
+    for (auto& [id, thread] : threads_by_id_) {
+      if (thread->is_running()) {
+        thread->CheckQuantumAndDecay();
+      }
+    }
+  }
 }
 
 uint32_t KernelState::GetKeTimestampBundle() {

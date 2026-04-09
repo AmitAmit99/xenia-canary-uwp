@@ -1583,8 +1583,6 @@ DECLARE_XBOXKRNL_EXPORT2(KeInitializeDpc, kThreading, kImplemented, kSketchy);
 
 dword_result_t KeInsertQueueDpc_entry(pointer_t<XDPC> dpc, dword_t arg1,
                                       dword_t arg2) {
-  assert_always("DPC does not dispatch yet; going to hang!");
-
   uint32_t list_entry_ptr = dpc.guest_address() + 4;
 
   // Lock dispatcher.
@@ -1602,9 +1600,43 @@ dword_result_t KeInsertQueueDpc_entry(pointer_t<XDPC> dpc, dword_t arg1,
 
   dpc_list->Insert(list_entry_ptr);
 
+  // Dispatch the DPC inline on the calling thread.  On real hardware DPCs
+  // are deferred to DISPATCH_IRQL on the target processor, but DPC routines
+  // access per-CPU state via r13 (KPCR) so they must run on a thread whose
+  // KPCR is valid for the target CPU.  The calling thread's KPCR satisfies
+  // this for the common case (desired_cpu_number == 0, meaning current CPU).
+  // Inline dispatch also avoids latency issues with shared work queues.
+  uint32_t routine = dpc->routine;
+  if (routine) {
+    auto thread = XThread::GetCurrentThread();
+    if (thread) {
+      auto thread_state = thread->thread_state();
+      auto ppc_context = thread_state->context();
+      auto kpcr = ppc_context->TranslateVirtualGPR<X_KPCR*>(ppc_context->r[13]);
+
+      // If we're already inside a DPC (reentrant KeInsertQueueDpc from a DPC
+      // routine), skip the impersonation — we're already at DISPATCH_IRQL.
+      bool already_in_dpc = kpcr->prcb_data.dpc_active != 0;
+
+      DPCImpersonationScope dpc_scope{};
+      if (!already_in_dpc) {
+        kernel_state()->BeginDPCImpersonation(ppc_context, dpc_scope);
+      }
+
+      uint64_t args[] = {dpc.guest_address(), (uint64_t)dpc->context,
+                         (uint64_t)arg1, (uint64_t)arg2};
+      kernel_state()->processor()->Execute(thread_state, routine, args,
+                                           xe::countof(args));
+
+      if (!already_in_dpc) {
+        kernel_state()->EndDPCImpersonation(ppc_context, dpc_scope);
+      }
+    }
+  }
+
   return 1;
 }
-DECLARE_XBOXKRNL_EXPORT2(KeInsertQueueDpc, kThreading, kStub, kSketchy);
+DECLARE_XBOXKRNL_EXPORT2(KeInsertQueueDpc, kThreading, kImplemented, kSketchy);
 
 dword_result_t KeRemoveQueueDpc_entry(pointer_t<XDPC> dpc) {
   bool result = false;

@@ -155,13 +155,17 @@ static uint8_t next_cpu = 0;
 static uint8_t GetFakeCpuNumber(uint8_t proc_mask) {
   // NOTE: proc_mask is logical processors, not physical processors or cores.
   if (!proc_mask) {
-    next_cpu = (next_cpu + 1) % 6;
-    return next_cpu;  // is this reasonable?
-    // TODO(Triang3l): Does the following apply here?
+    // On Xbox 360, threads without an explicit processor assignment stay on
+    // the same hardware thread as the parent.  Preserve this so that the
+    // guest CPU assignment reflects the game's intent — parent-child thread
+    // pairs that share a HW thread may rely on implicit serialization.
     // https://docs.microsoft.com/en-us/windows/win32/dxtecharts/coding-for-multiple-cores
-    // "On Xbox 360, you must explicitly assign software threads to a particular
-    //  hardware thread by using XSetThreadProcessor. Otherwise, all child
-    //  threads will stay on the same hardware thread as the parent."
+    XThread* parent = current_xthread_tls_;
+    if (parent) {
+      return parent->active_cpu();
+    }
+    next_cpu = (next_cpu + 1) % 6;
+    return next_cpu;
   }
   assert_false(proc_mask & 0xC0);
 

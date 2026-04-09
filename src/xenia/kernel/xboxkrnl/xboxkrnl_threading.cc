@@ -1138,11 +1138,34 @@ uint32_t xeKeKfAcquireSpinLock(PPCContext* ctx, X_KSPINLOCK* lock,
 
   PrefetchForCAS(lock);
   assert_true(lock->prcb_of_owner != static_cast<uint32_t>(ctx->r[13]));
+
+  uint32_t our_pcr = static_cast<uint32_t>(ctx->r[13]);
+  uint8_t our_cpu =
+      ctx->TranslateVirtualGPR<X_KPCR*>(our_pcr)->prcb_data.current_cpu;
+
   // Lock.
-  while (!xe::atomic_cas(0, xe::byte_swap(static_cast<uint32_t>(ctx->r[13])),
-                         &lock->prcb_of_owner.value)) {
-    // Spin!
-    // TODO(benvanik): error on deadlock?
+  while (
+      !xe::atomic_cas(0, xe::byte_swap(our_pcr), &lock->prcb_of_owner.value)) {
+    // On real hardware, threads sharing a Xenon HW thread are serialized by
+    // the kernel scheduler — the spinner would be preempted within one
+    // timeslice (~1ms) so the holder can make progress.  In the naive
+    // host-thread model both threads run truly in parallel, so the spinner
+    // can burn its entire host quantum without giving the holder a chance.
+    //
+    // Check whether the lock holder is assigned to the same guest CPU as us.
+    // If so, yield the host thread aggressively (Sleep(0)) to force a host
+    // context switch and give the holder a chance to run and release.
+    // The relationship is stable — affinity doesn't change while a thread
+    // holds a spinlock — so one check per contention episode is sufficient.
+    uint32_t owner_pcr_be = lock->prcb_of_owner.value;
+    if (owner_pcr_be) {
+      uint32_t owner_pcr = xe::byte_swap(owner_pcr_be);
+      auto* owner_kpcr = ctx->TranslateVirtual<X_KPCR*>(owner_pcr);
+      if (owner_kpcr->prcb_data.current_cpu == our_cpu) {
+        xe::threading::Sleep(std::chrono::milliseconds(0));
+        continue;
+      }
+    }
     xe::threading::MaybeYield();
   }
 

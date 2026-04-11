@@ -707,8 +707,7 @@ uint32_t xeKeReleaseSemaphore(X_KSEMAPHORE* semaphore_ptr, uint32_t increment,
     return 0;
   }
 
-  // TODO(benvanik): increment thread priority?
-  // TODO(benvanik): wait?
+  sem->set_priority_increment(increment);
 
   int32_t previous_count = 0;
   [[maybe_unused]] bool success =

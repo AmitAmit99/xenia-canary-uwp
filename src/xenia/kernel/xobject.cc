@@ -207,10 +207,9 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode,
   switch (result) {
     case xe::threading::WaitResult::kSuccess:
     case xe::threading::WaitResult::kUserCallback: {
-      // Thread actually blocked and woke — reset priority to base.
       auto current_thread = XThread::GetCurrentThread();
       if (current_thread) {
-        current_thread->ResetQuantum();
+        current_thread->BoostOnWake(priority_increment());
       }
       if (result == xe::threading::WaitResult::kSuccess) {
         WaitCallback();
@@ -245,7 +244,7 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object,
     case xe::threading::WaitResult::kUserCallback: {
       auto current_thread = XThread::GetCurrentThread();
       if (current_thread) {
-        current_thread->ResetQuantum();
+        current_thread->BoostOnWake(wait_object->priority_increment());
       }
       if (result == xe::threading::WaitResult::kSuccess) {
         wait_object->WaitCallback();
@@ -280,12 +279,14 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects,
                   : std::chrono::milliseconds::max();
 
   X_STATUS status;
+  uint32_t boost_increment = 0;
   if (wait_type) {
     auto result = xe::threading::WaitAny(wait_handles, count,
                                          alertable ? true : false, timeout_ms);
     switch (result.first) {
       case xe::threading::WaitResult::kSuccess:
         objects[result.second]->WaitCallback();
+        boost_increment = objects[result.second]->priority_increment();
         status = X_STATUS(result.second);
         break;
       case xe::threading::WaitResult::kUserCallback:
@@ -310,6 +311,10 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects,
       case xe::threading::WaitResult::kSuccess:
         for (uint32_t i = 0; i < count; i++) {
           objects[i]->WaitCallback();
+          // Use the largest increment among the signaled objects.
+          if (objects[i]->priority_increment() > boost_increment) {
+            boost_increment = objects[i]->priority_increment();
+          }
         }
         status = X_STATUS_SUCCESS;
         break;
@@ -328,12 +333,13 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects,
     }
   }
 
-  // Only reset quantum if the thread actually blocked (not on timeout/failure).
+  // Apply priority boost if the thread actually blocked (not on
+  // timeout/failure).
   if (status != X_STATUS_TIMEOUT && status != X_STATUS_UNSUCCESSFUL &&
       status != X_STATUS_ABANDONED_WAIT_0) {
     auto current_thread = XThread::GetCurrentThread();
     if (current_thread) {
-      current_thread->ResetQuantum();
+      current_thread->BoostOnWake(boost_increment);
     }
   }
   return status;

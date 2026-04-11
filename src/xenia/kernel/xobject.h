@@ -226,6 +226,12 @@ class XObject {
                                        void* native_ptr, int32_t as_type = -1,
                                        bool already_locked = false);
 
+  // Priority increment stored by the most recent signal operation
+  // (KeSetEvent, KeReleaseSemaphore, etc.).  Read by the waiter on wake
+  // to apply a priority boost matching real Xenon scheduler behavior.
+  uint32_t priority_increment() const { return priority_increment_; }
+  void set_priority_increment(uint32_t inc) { priority_increment_ = inc; }
+
  protected:
   bool SaveObject(ByteStream* stream);
   bool RestoreObject(ByteStream* stream);
@@ -252,6 +258,8 @@ class XObject {
   static uint32_t TimeoutTicksToMs(int64_t timeout_ticks);
 
   KernelState* kernel_state_;
+
+  uint32_t priority_increment_ = 0;
 
   // Host objects are persisted through resets/etc.
   bool host_object_ = false;

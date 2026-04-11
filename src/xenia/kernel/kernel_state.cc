@@ -1312,15 +1312,16 @@ void KernelState::EmulateCPInterruptDPC(uint32_t interrupt_callback,
 }
 
 void KernelState::InitializeProcess(X_KPROCESS* process, uint32_t type,
-                                    char unk_18, char unk_19, char unk_1A) {
+                                    char priority_class, char default_priority,
+                                    char max_dynamic_priority) {
   uint32_t guest_kprocess = memory()->HostToGuestVirtual(process);
 
   uint32_t thread_list_guest_ptr =
       guest_kprocess + offsetof(X_KPROCESS, thread_list);
 
-  process->unk_18 = unk_18;
-  process->unk_19 = unk_19;
-  process->unk_1A = unk_1A;
+  process->process_priority_class = priority_class;
+  process->default_thread_priority = default_priority;
+  process->max_dynamic_priority = max_dynamic_priority;
   util::XeInitializeListHead(&process->thread_list, thread_list_guest_ptr);
   process->quantum = 60;
   // doubt any guest code uses this ptr, which i think probably has something to
@@ -1328,7 +1329,7 @@ void KernelState::InitializeProcess(X_KPROCESS* process, uint32_t type,
   process->clrdataa_masked_ptr = 0;
   // clrdataa_ & ~(1U << 31);
   process->thread_count = 0;
-  process->unk_1B = 0x06;
+  process->disable_quantum_decay = 0x06;
   process->kernel_stack_size = 16 * 1024;
   process->tls_slot_size = 0x80;
 

@@ -298,9 +298,9 @@ struct X_KTHREAD {
   uint8_t unk_A5[0xB];                            // 0xA5
   int32_t apc_disable_count;                      // 0xB0
   xe::be<int32_t> quantum;                        // 0xB4
-  uint8_t unk_B8;                                 // 0xB8
-  uint8_t unk_B9;                                 // 0xB9
-  uint8_t unk_BA;                                 // 0xBA
+  uint8_t saturation_increment;                   // 0xB8
+  uint8_t base_priority;                          // 0xB9
+  uint8_t priority_decrement;                     // 0xBA
   uint8_t boost_disabled;                         // 0xBB
   uint8_t suspend_count;                          // 0xBC
   uint8_t was_preempted;                          // 0xBD
@@ -310,9 +310,9 @@ struct X_KTHREAD {
   // all
   TypedGuestPointer<X_KPRCB> a_prcb_ptr;        // 0xC0
   TypedGuestPointer<X_KPRCB> another_prcb_ptr;  // 0xC4
-  uint8_t unk_C8;                               // 0xC8
-  uint8_t unk_C9;                               // 0xC9
-  uint8_t unk_CA;                               // 0xCA
+  uint8_t process_priority_class;               // 0xC8
+  uint8_t base_priority_copy;                   // 0xC9
+  uint8_t max_dynamic_priority;                 // 0xCA
   uint8_t unk_CB;                               // 0xCB
   X_KSPINLOCK timer_list_lock;                  // 0xCC
   xe::be<uint32_t> stack_alloc_base;            // 0xD0
@@ -424,14 +424,19 @@ class XThread : public XObject, public cpu::Thread {
 
   // Called periodically (~20ms) by KernelState's timestamp timer to simulate
   // the Xenon scheduler's quantum-based priority decay for non-real-time
-  // threads (priority < 18).  Threads that run for longer than one quantum
-  // (~20ms) have their effective priority decayed toward the base, which
-  // causes them to drop into lower host priority buckets and prevents
-  // starvation.
+  // threads (base_priority < 18).  Threads that run for longer than one
+  // quantum (~20ms) have their effective priority decayed toward the base,
+  // which causes them to drop into lower host priority buckets and prevents
+  // starvation.  On the first decay step the accumulated priority boost is
+  // also drained.
   void CheckQuantumAndDecay();
-  // Resets effective priority back to base and restarts the quantum timer.
-  // Called when a thread wakes from a kernel wait.
-  void ResetQuantum();
+  // Called when a thread wakes from a kernel wait.  Applies a priority
+  // boost of |increment| above base_priority (matching the Xenon kernel's
+  // unwait-boost behavior) and restarts the quantum timer.  The boost is
+  // drained on the next quantum expiry via CheckQuantumAndDecay().
+  // If increment is 0 or the thread has boost disabled, the priority is
+  // simply restored to base_priority.
+  void BoostOnWake(int32_t increment);
 
   // Xbox thread IDs:
   // 0 - core 0, thread 0 - user
@@ -504,6 +509,7 @@ class XThread : public XObject, public cpu::Thread {
 
   int32_t priority_ = 0;       // current effective priority (may be decayed)
   int32_t base_priority_ = 0;  // priority floor — decay never goes below this
+  int32_t boost_amount_ = 0;   // accumulated priority boost above base
   uint64_t quantum_start_ms_ = 0;  // host uptime (ms) when quantum last reset
 
 #if !XE_PLATFORM_WIN32

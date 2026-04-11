@@ -214,6 +214,19 @@ void XThread::InitializeGuestObject() {
   guest_thread->apc_lists[0].Initialize(memory());
   guest_thread->apc_lists[1].Initialize(memory());
 
+  guest_thread->process_priority_class = process->process_priority_class;
+  auto base_prio = process->default_thread_priority;
+  guest_thread->base_priority_copy = base_prio;
+  guest_thread->base_priority = base_prio;
+  guest_thread->priority = base_prio;
+  guest_thread->max_dynamic_priority = process->max_dynamic_priority;
+  guest_thread->quantum = process->quantum;
+
+  // Sync the host-side priority tracking to match the guest defaults.
+  // Games may later override these via KeSetPriorityThread.
+  priority_ = base_prio;
+  base_priority_ = base_prio;
+
   guest_thread->a_prcb_ptr = kpcrb;
   guest_thread->another_prcb_ptr = kpcrb;
 
@@ -706,7 +719,7 @@ void XThread::SetPriority(int32_t increment) {
 
 void XThread::CheckQuantumAndDecay() {
   if (cvars::ignore_thread_priorities) return;
-  // Real-time threads (priority >= 18) don't decay on Xenon.
+  // Real-time threads (current priority >= 0x12) don't decay on Xenon.
   if (priority_ >= 18) return;
 
   uint64_t now = Clock::QueryHostUptimeMillis();
@@ -719,14 +732,15 @@ void XThread::CheckQuantumAndDecay() {
   constexpr uint64_t kQuantumPeriodMs = 20;
   if (elapsed < kQuantumPeriodMs) return;
 
-  // TODO(has207): The real kernel also subtracts the accumulated priority
-  // boost (boost_accumulator in X_KTHREAD) during decay:
-  //   new_prio = priority - boost_accumulator - 1
-  // We don't implement priority boosting on wait completion yet, so
-  // the boost accumulator is always effectively 0.  When boost-on-wake
-  // is added, the accumulator needs to be drained here as well.
   int32_t decay_steps = static_cast<int32_t>(elapsed / kQuantumPeriodMs);
-  int32_t new_priority = priority_ - decay_steps;
+  // On the first decay step, drain the accumulated priority boost as well.
+  // The real kernel computes: new_prio = priority - boost_accumulator - 1
+  // then zeroes the accumulator.  Additional decay steps (if the timer
+  // callback was late) each subtract 1 more.
+  int32_t total_decay = boost_amount_ + decay_steps;
+  boost_amount_ = 0;
+
+  int32_t new_priority = priority_ - total_decay;
   if (new_priority < base_priority_) {
     new_priority = base_priority_;
   }
@@ -740,16 +754,57 @@ void XThread::CheckQuantumAndDecay() {
   quantum_start_ms_ = now;
 }
 
-void XThread::ResetQuantum() {
+void XThread::BoostOnWake(int32_t increment) {
   if (cvars::ignore_thread_priorities) return;
-  if (priority_ != base_priority_) {
-    priority_ = base_priority_;
-    if (is_guest_thread()) {
-      guest_object<X_KTHREAD>()->priority =
-          static_cast<uint8_t>(base_priority_);
-    }
-    thread_->set_priority(GuestPriorityToHost(base_priority_));
+
+  // Real-time threads (priority >= 0x12) just get their quantum reset.
+  if (priority_ >= 18) {
+    boost_amount_ = 0;
+    quantum_start_ms_ = Clock::QueryHostUptimeMillis();
+    return;
   }
+
+  // Match the real kernel (xeEnqueueThreadPostWait):
+  //   - Only apply boost if there is no pending decay (priority_decrement == 0)
+  //     AND boost is not disabled on this thread.
+  //   - Boosted priority = base + increment, clamped to max_priority_cap.
+  //   - Only boost UP — never lower priority below its current value.
+  bool apply_boost = false;
+  if (increment > 0 && is_guest_thread()) {
+    auto* kthread = guest_object<X_KTHREAD>();
+    if (kthread->priority_decrement == 0 && !kthread->boost_disabled) {
+      apply_boost = true;
+    }
+  } else if (increment > 0) {
+    // Host threads (non-guest): apply boost unconditionally.
+    apply_boost = true;
+  }
+
+  if (apply_boost) {
+    int32_t boosted = base_priority_ + increment;
+    // Clamp to the per-thread max dynamic priority cap.
+    // For title threads this is 17 (just below real-time threshold).
+    int32_t max_cap = 17;
+    if (is_guest_thread()) {
+      uint8_t guest_cap = guest_object<X_KTHREAD>()->max_dynamic_priority;
+      if (guest_cap > 0) {
+        max_cap = guest_cap;
+      }
+    }
+    if (boosted > max_cap) {
+      boosted = max_cap;
+    }
+    // Only boost UP, never lower.
+    if (boosted > priority_) {
+      priority_ = boosted;
+      boost_amount_ = priority_ - base_priority_;
+      if (is_guest_thread()) {
+        guest_object<X_KTHREAD>()->priority = static_cast<uint8_t>(priority_);
+      }
+      thread_->set_priority(GuestPriorityToHost(priority_));
+    }
+  }
+
   quantum_start_ms_ = Clock::QueryHostUptimeMillis();
 }
 

@@ -61,6 +61,9 @@ void NoProfileDialog::OnDraw(ImGuiIO& io) {
   const auto content_files = xe::filesystem::ListDirectories(
       emulator_window_->emulator()->content_root());
 
+  if (ImGui::IsWindowAppearing()) {
+    ImGui::SetKeyboardFocusHere();
+  }
   if (content_files.empty()) {
     if (ImGui::Button("Create Profile")) {
       new kernel::xam::ui::CreateProfileUI(emulator_window_->imgui_drawer(),

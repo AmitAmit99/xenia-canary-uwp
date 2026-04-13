@@ -1182,8 +1182,7 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address,
   alignment = xe::round_up(alignment, page_size_);
   uint32_t page_count = get_page_count(size, page_size_);
   low_address = std::max(heap_base_, xe::align(low_address, alignment));
-  high_address = std::min(heap_base_ + (heap_size_ - 1),
-                          xe::align(high_address, alignment));
+  high_address = std::min(heap_base_ + (heap_size_ - 1), high_address);
 
   uint32_t low_page_number = (low_address - heap_base_) >> page_size_shift_;
   uint32_t high_page_number = (high_address - heap_base_) >> page_size_shift_;

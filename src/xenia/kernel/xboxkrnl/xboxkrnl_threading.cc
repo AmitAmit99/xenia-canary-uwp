@@ -331,12 +331,17 @@ dword_result_t KeSetAffinityThread_entry(lpvoid_t thread_ptr, dword_t affinity,
     return X_STATUS_INVALID_PARAMETER;
   }
   auto thread = XObject::GetNativeObject<XThread>(kernel_state(), thread_ptr);
-  if (thread) {
-    if (previous_affinity_ptr) {
-      *previous_affinity_ptr = uint32_t(1) << thread->active_cpu();
-    }
-    thread->SetAffinity(affinity);
+  if (!thread) {
+    XELOGW(
+        "KeSetAffinityThread: guest thread pointer {:08X} did not resolve to "
+        "an XThread; returning STATUS_INVALID_HANDLE",
+        thread_ptr.guest_address());
+    return X_STATUS_INVALID_HANDLE;
   }
+  if (previous_affinity_ptr) {
+    *previous_affinity_ptr = uint32_t(1) << thread->active_cpu();
+  }
+  thread->SetAffinity(affinity);
   return X_STATUS_SUCCESS;
 }
 DECLARE_XBOXKRNL_EXPORT1(KeSetAffinityThread, kThreading, kImplemented);

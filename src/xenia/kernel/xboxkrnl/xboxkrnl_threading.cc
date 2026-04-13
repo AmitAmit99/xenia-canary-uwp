@@ -775,13 +775,11 @@ dword_result_t NtReleaseSemaphore_entry(dword_t sem_handle,
     bool success =
         sem->ReleaseSemaphore((int32_t)release_count, &previous_count);
     if (!success) {
-      // Releasing would exceed the semaphore's maximum count
-      // Windows returns STATUS_SEMAPHORE_LIMIT_EXCEEDED (0x0000012B)
       XELOGW(
           "NtReleaseSemaphore: release_count={} would exceed maximum (current "
           "count={})",
           uint32_t(release_count), previous_count);
-      result = 0x0000012B;
+      result = X_STATUS_SEMAPHORE_LIMIT_EXCEEDED;
     }
   } else {
     result = X_STATUS_INVALID_HANDLE;

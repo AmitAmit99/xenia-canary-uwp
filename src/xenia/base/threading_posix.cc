@@ -18,6 +18,7 @@
 #include <sched.h>
 #include <semaphore.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <array>
@@ -611,6 +612,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
   /// Thread::GetCurrentThread() on the main thread
   explicit PosixCondition(pthread_t thread)
       : thread_(thread),
+        tid_(static_cast<pid_t>(syscall(SYS_gettid))),
         signaled_(false),
         exit_code_(0),
         state_(State::kRunning),
@@ -742,31 +744,48 @@ class PosixCondition<Thread> final : public PosixConditionBase {
 
   int priority() const {
     WaitStarted();
-    int policy;
-    sched_param param{};
-    int ret = pthread_getschedparam(thread_, &policy, &param);
-    if (ret != 0) {
-      return -1;
+    if (!fifo_failed_) {
+      int policy;
+      sched_param param{};
+      int ret = pthread_getschedparam(thread_, &policy, &param);
+      if (ret != 0) {
+        return -1;
+      }
+      return param.sched_priority;
     }
-
-    return param.sched_priority;
+    // When using nice values, map back to the SCHED_FIFO range (1-32)
+    // so callers see a consistent priority space.
+    int nice_val = getpriority(PRIO_PROCESS, tid_);
+    // nice -19..19 → fifo 32..1
+    return 16 - nice_val;
   }
 
   void set_priority(int new_priority) const {
     WaitStarted();
-    sched_param param{};
-    param.sched_priority = new_priority;
-    int res = pthread_setschedparam(thread_, SCHED_FIFO, &param);
-    if (res != 0) {
-      switch (res) {
-        case EPERM:
-          XELOGW("Permission denied while setting priority");
-          break;
-        case EINVAL:
-          assert_always();
-        default:
-          XELOGW("Unknown error while setting priority");
+    if (!fifo_failed_) {
+      // Try real-time SCHED_FIFO for best priority control.
+      sched_param param{};
+      param.sched_priority = new_priority;
+      int res = pthread_setschedparam(thread_, SCHED_FIFO, &param);
+      if (res == 0) {
+        return;
       }
+      if (res == EPERM) {
+        fifo_failed_ = true;
+      } else {
+        XELOGW("Unexpected error {} while setting SCHED_FIFO priority", res);
+        fifo_failed_ = true;
+      }
+    }
+    // Fall back to nice values under SCHED_OTHER.
+    // Map SCHED_FIFO range (1-32) to nice range (19 to -19).
+    // Center: fifo 16 → nice 0.
+    int nice_val = 16 - new_priority;
+    // Clamp to valid nice range.
+    if (nice_val < -20) nice_val = -20;
+    if (nice_val > 19) nice_val = 19;
+    if (tid_ > 0) {
+      setpriority(PRIO_PROCESS, tid_, nice_val);
     }
   }
 
@@ -930,6 +949,8 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     sem_destroy(&suspend_sem_);
   }
   pthread_t thread_;
+  pid_t tid_ = 0;                     // Kernel TID for setpriority() fallback
+  mutable bool fifo_failed_ = false;  // True after SCHED_FIFO was rejected
   bool signaled_;
   int exit_code_;
   State state_;             // Protected by state_mutex_
@@ -1243,6 +1264,7 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   delete start_data;
 
   current_thread_ = thread;
+  thread->handle_.tid_ = static_cast<pid_t>(syscall(SYS_gettid));
   {
     std::unique_lock lock(thread->handle_.state_mutex_);
     thread->handle_.state_ =

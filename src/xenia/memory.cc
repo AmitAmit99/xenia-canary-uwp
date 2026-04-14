@@ -1177,7 +1177,8 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address,
   alignment = xe::round_up(alignment, page_size_);
   uint32_t page_count = get_page_count(size, page_size_);
   low_address = std::max(heap_base_, xe::align(low_address, alignment));
-  high_address = std::min(heap_base_ + (heap_size_ - 1), high_address);
+  high_address = std::min(heap_base_ + (heap_size_ - 1),
+                          xe::align(high_address, alignment));
 
   uint32_t low_page_number = (low_address - heap_base_) >> page_size_shift_;
   uint32_t high_page_number = (high_address - heap_base_) >> page_size_shift_;
@@ -1219,7 +1220,11 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address,
       }
 
       // Compute the highest aligned start within this block and range.
-      uint32_t usable_end = std::min(block_end, high_page_number + 1);
+      // high_page_number is exclusive and rounded down to the stride, so
+      // the top stride of pages is never returned.
+      uint32_t high_aligned =
+          high_page_number - QuickMod(high_page_number, page_scan_stride);
+      uint32_t usable_end = std::min(block_end, high_aligned);
       if (usable_end < page_count) {
         continue;
       }
@@ -1260,10 +1265,12 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address,
       }
 
       // Compute the lowest aligned start within this block and range.
+      // high_page_number is treated as exclusive — the page at
+      // high_page_number itself is never returned.
       uint32_t earliest = std::max(block_start, low_page_number);
       uint32_t aligned_start = xe::round_up(earliest, page_scan_stride, false);
       if (aligned_start + page_count <= block_end &&
-          aligned_start + page_count - 1 <= high_page_number) {
+          aligned_start + page_count <= high_page_number) {
         start_page_number = aligned_start;
         end_page_number = aligned_start + page_count - 1;
         break;

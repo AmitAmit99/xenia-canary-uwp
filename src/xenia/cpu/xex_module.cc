@@ -1372,20 +1372,20 @@ void XexInfoCache::Init(XexModule* xexmod) {
 
   auto try_open = [this, &infocache_path, num_codebytes]() {
     bool did_exist = true;
+    const size_t file_size = sizeof(InfoCacheFlagsHeader) +
+                             (sizeof(InfoCacheFlags) * (num_codebytes / 4));
 
     if (!std::filesystem::exists(infocache_path)) {
       xe::filesystem::CreateEmptyFile(infocache_path);
+      std::filesystem::resize_file(infocache_path, file_size);
       did_exist = false;
     }
 
     // todo: prepopulate with stuff from pdata, dll exports
-
-    this->executable_addr_flags_ = std::move(xe::MappedMemory::Open(
+    this->executable_addr_flags_ = MappedMemory::Open(
         infocache_path, xe::MappedMemory::Mode::kReadWrite, 0,
-        sizeof(InfoCacheFlagsHeader) +
-            (sizeof(InfoCacheFlags) *
-             (num_codebytes /
-              4))));  // one infocacheflags entry for each PPC instr-sized addr
+        file_size);  // one infocacheflags entry for each PPC instr-sized addr
+
     return did_exist;
   };
 

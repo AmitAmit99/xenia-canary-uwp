@@ -48,8 +48,9 @@ struct XMP_SONGINFO {
   xe::be<uint32_t> track_number;
   xe::be<uint32_t> duration;
   xe::be<uint32_t> song_format;
+  xe::be<uint32_t> unknown_1;
 };
-static_assert_size(XMP_SONGINFO, 988);
+static_assert_size(XMP_SONGINFO, 0x3E0);
 
 struct XMP_PLAY_TITLE_PLAYLIST {
   xe::be<uint32_t> xmp_client;

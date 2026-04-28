@@ -244,14 +244,6 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry,
       return X_STATUS_FILE_IS_A_DIRECTORY;
     }
 
-    if (!(entry->attributes() & kFileAttributeDirectory) && is_directory) {
-      // Device root should be treated as a directory, but because we do not
-      // emulate that correctly for now I will leave this ugly hack.
-      if (!entry->absolute_path().starts_with("\\Device")) {
-        return X_STATUS_NOT_A_DIRECTORY;
-      }
-    }
-
     // If the entry does not exist on the host then remove the cached entry
     if (parent_entry) {
       const xe::vfs::HostPathEntry* host_path =

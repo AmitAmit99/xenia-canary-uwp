@@ -7,6 +7,10 @@
  ******************************************************************************
  */
 
+#include <array>
+#include <cstring>
+#include <vector>
+
 #include "xenia/vfs/devices/disc_image_device.h"
 
 #include "xenia/base/literals.h"
@@ -28,6 +32,16 @@ DiscImageDevice::DiscImageDevice(const std::string_view mount_path,
 DiscImageDevice::~DiscImageDevice() = default;
 
 bool DiscImageDevice::Initialize() {
+#if XE_PLATFORM_WINRT
+  file_handle_ = filesystem::FileHandle::OpenExisting(
+      host_path_, filesystem::FileAccess::kGenericRead);
+  if (!file_handle_) {
+    XELOGE("Disc image could not be opened");
+    return false;
+  }
+  image_size_ = std::filesystem::file_size(host_path_);
+  XELOGFS("DiscImageDevice::Initialize");
+#else
   mmap_ = MappedMemory::Open(host_path_, MappedMemory::Mode::kRead);
   if (!mmap_) {
     XELOGE("Disc image could not be mapped");
@@ -35,10 +49,14 @@ bool DiscImageDevice::Initialize() {
   } else {
     XELOGFS("DiscImageDevice::Initialize");
   }
+  image_size_ = mmap_->size();
+#endif
 
   ParseState state = {0};
+#if !XE_PLATFORM_WINRT
   state.ptr = mmap_->data();
-  state.size = mmap_->size();
+#endif
+  state.size = image_size_;
   auto result = Verify(&state);
   if (result != Error::kSuccess) {
     XELOGE("Failed to verify disc image header: {}",
@@ -46,13 +64,49 @@ bool DiscImageDevice::Initialize() {
     return false;
   }
 
+#if XE_PLATFORM_WINRT
+  std::vector<uint8_t> root_buffer(state.root_size);
+  size_t root_bytes_read = 0;
+  if (!ReadImageData(state.root_offset, root_buffer.data(), root_buffer.size(),
+                     &root_bytes_read) ||
+      root_bytes_read != root_buffer.size()) {
+    XELOGE("Failed to read root directory from disc image");
+    return false;
+  }
+  result = ReadAllEntries(&state, root_buffer.data());
+#else
   result = ReadAllEntries(&state, state.ptr + state.root_offset);
+#endif
   if (result != Error::kSuccess) {
     XELOGE("Failed to read all GDFX entries: {}", static_cast<int32_t>(result));
     return false;
   }
 
   return true;
+}
+
+bool DiscImageDevice::ReadImageData(size_t file_offset, void* buffer,
+                                    size_t buffer_length,
+                                    size_t* out_bytes_read) const {
+  if (out_bytes_read) {
+    *out_bytes_read = 0;
+  }
+#if XE_PLATFORM_WINRT
+  if (!file_handle_) {
+    return false;
+  }
+  return file_handle_->Read(file_offset, buffer, buffer_length, out_bytes_read);
+#else
+  if (!mmap_ || file_offset > mmap_->size() ||
+      buffer_length > mmap_->size() - file_offset) {
+    return false;
+  }
+  std::memcpy(buffer, mmap_->data() + file_offset, buffer_length);
+  if (out_bytes_read) {
+    *out_bytes_read = buffer_length;
+  }
+  return true;
+#endif
 }
 
 void DiscImageDevice::Dump(StringBuffer* string_buffer) {
@@ -90,7 +144,14 @@ DiscImageDevice::Error DiscImageDevice::Verify(ParseState* state) {
   if (state->size < state->game_offset + (32 * kXESectorSize)) {
     return Error::kErrorReadError;
   }
-  uint8_t* fs_ptr = state->ptr + state->game_offset + (32 * kXESectorSize);
+  std::array<uint8_t, kXESectorSize> fs_sector;
+  size_t fs_bytes_read = 0;
+  if (!ReadImageData(state->game_offset + (32 * kXESectorSize),
+                     fs_sector.data(), fs_sector.size(), &fs_bytes_read) ||
+      fs_bytes_read != fs_sector.size()) {
+    return Error::kErrorReadError;
+  }
+  uint8_t* fs_ptr = fs_sector.data();
   state->root_sector = xe::load<uint32_t>(fs_ptr + 20);
   state->root_size = xe::load<uint32_t>(fs_ptr + 24);
   state->root_offset =
@@ -108,7 +169,11 @@ bool DiscImageDevice::VerifyMagic(ParseState* state, size_t offset) {
   }
 
   // Simple check to see if the given offset contains the magic value.
-  return std::memcmp(state->ptr + offset, "MICROSOFT*XBOX*MEDIA", 20) == 0;
+  uint8_t magic[20];
+  size_t magic_bytes_read = 0;
+  return ReadImageData(offset, magic, sizeof(magic), &magic_bytes_read) &&
+         magic_bytes_read == sizeof(magic) &&
+         std::memcmp(magic, "MICROSOFT*XBOX*MEDIA", sizeof(magic)) == 0;
 }
 
 DiscImageDevice::Error DiscImageDevice::ReadAllEntries(
@@ -170,12 +235,26 @@ bool DiscImageDevice::ReadEntry(ParseState* state, const uint8_t* buffer,
         // Out of bounds read.
         return false;
       }
+#if XE_PLATFORM_WINRT
+      std::vector<uint8_t> folder_buffer(length);
+      size_t folder_bytes_read = 0;
+      if (!ReadImageData(state->game_offset + (sector * kXESectorSize),
+                         folder_buffer.data(), folder_buffer.size(),
+                         &folder_bytes_read) ||
+          folder_bytes_read != folder_buffer.size()) {
+        return false;
+      }
+      if (!ReadEntry(state, folder_buffer.data(), 0, entry.get())) {
+        return false;
+      }
+#else
       // Read child list.
       uint8_t* folder_ptr =
           state->ptr + state->game_offset + (sector * kXESectorSize);
       if (!ReadEntry(state, folder_ptr, 0, entry.get())) {
         return false;
       }
+#endif
     }
   } else {
     // File.

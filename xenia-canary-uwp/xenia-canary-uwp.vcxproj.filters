@@ -23,6 +23,18 @@
     <ClInclude Include="XeniaUWP.h" />
   </ItemGroup>
   <ItemGroup>
+    <Image Include="Assets\A.png">
+      <Filter>Assets</Filter>
+    </Image>
+    <Image Include="Assets\B.png">
+      <Filter>Assets</Filter>
+    </Image>
+    <Image Include="Assets\X.png">
+      <Filter>Assets</Filter>
+    </Image>
+    <Image Include="Assets\Y.png">
+      <Filter>Assets</Filter>
+    </Image>
     <Image Include="Assets\StoreLogo.png">
       <Filter>Assets</Filter>
     </Image>
@@ -63,13 +75,5 @@
     <Filter Include="Assets">
       <UniqueIdentifier>{b4052912-ca18-4b06-8a74-43d31e0a21dc}</UniqueIdentifier>
     </Filter>
-  </ItemGroup>
-  <ItemGroup>
-    <Font Include="Assets\NotoSansJP-Regular.ttf">
-      <Filter>Assets</Filter>
-    </Font>
-    <Font Include="Assets\Roboto-Regular.ttf">
-      <Filter>Assets</Filter>
-    </Font>
   </ItemGroup>
 </Project>

@@ -9,9 +9,13 @@
 
 #include "xenia/ui/imgui_drawer.h"
 
+#include <algorithm>
 #include <cfloat>
+#include <cstdint>
+#include <cmath>
 #include <cstring>
 #include <ranges>
+#include <vector>
 
 #include "third_party/imgui/imgui.h"
 #include "xenia/base/assert.h"
@@ -24,6 +28,7 @@
 #include "xenia/ui/ui_event.h"
 #include "xenia/ui/window.h"
 #include <xenia/hid/input.h>
+#include "xenia/config.h"
 
 #if XE_PLATFORM_WINRT
 #include "xenia-canary-uwp/XeniaUWP.h"
@@ -53,6 +58,12 @@ DEFINE_path(
 DEFINE_uint32(font_size, 14, "Allows user to set custom font size.", "UI");
 UPDATE_from_uint32(font_size, 2024, 8, 31, 20, 12);
 
+DECLARE_string(ui_text_effect);
+DECLARE_string(ui_text_color);
+DECLARE_string(ui_border_color);
+DECLARE_double(ui_text_brightness);
+DECLARE_double(ui_text_contrast);
+
 namespace xe {
 namespace ui {
 
@@ -63,6 +74,247 @@ constexpr char kProggyTinyCompressedDataBase85[10953 + 1] =
 
 static_assert(sizeof(ImmediateVertex) == sizeof(ImDrawVert),
               "Vertex types must match");
+
+namespace {
+
+enum class ConfiguredTextEffect {
+  kNone,
+  kShadow,
+  kLift,
+  kStrokeFill,
+  kGlow,
+  kOutline,
+  kDoubleShadow,
+  kBold,
+};
+
+enum class ConfiguredTextColorMode {
+  kWhite,
+  kBlack,
+};
+
+ImVec4 GetConfiguredUIAccentColor(float alpha = 1.0f) {
+  const std::string& accent = cvars::ui_border_color;
+  if (accent == "purple") {
+    return ImVec4(168.0f / 255.0f, 78.0f / 255.0f, 211.0f / 255.0f, alpha);
+  }
+  if (accent == "red") {
+    return ImVec4(206.0f / 255.0f, 46.0f / 255.0f, 60.0f / 255.0f, alpha);
+  }
+  if (accent == "orange") {
+    return ImVec4(224.0f / 255.0f, 119.0f / 255.0f, 47.0f / 255.0f, alpha);
+  }
+  if (accent == "blue") {
+    return ImVec4(104.0f / 255.0f, 157.0f / 255.0f, 203.0f / 255.0f, alpha);
+  }
+  if (accent == "yellow") {
+    return ImVec4(214.0f / 255.0f, 195.0f / 255.0f, 82.0f / 255.0f, alpha);
+  }
+  if (accent == "grey") {
+    return ImVec4(215.0f / 255.0f, 217.0f / 255.0f, 219.0f / 255.0f, alpha);
+  }
+  if (accent == "black") {
+    return ImVec4(0.0f, 0.0f, 0.0f, alpha);
+  }
+  if (accent == "white") {
+    return ImVec4(1.0f, 1.0f, 1.0f, alpha);
+  }
+  return ImVec4(97.0f / 255.0f, 192.0f / 255.0f, 50.0f / 255.0f, alpha);
+}
+
+void ApplyConfiguredUIAccentStyle(ImGuiStyle& style) {
+  const ImVec4 highlight_color = GetConfiguredUIAccentColor(1.0f);
+  const ImVec4 highlight_hover_color =
+      ImVec4(highlight_color.x, highlight_color.y, highlight_color.z, 0.95f);
+  const ImVec4 highlight_dim_color =
+      ImVec4(highlight_color.x, highlight_color.y, highlight_color.z, 0.75f);
+  const ImVec4 highlight_bg_color =
+      ImVec4(highlight_color.x, highlight_color.y, highlight_color.z, 0.18f);
+
+  style.Colors[ImGuiCol_Border] = highlight_dim_color;
+  style.Colors[ImGuiCol_FrameBgActive] = ImVec4(highlight_color.x,
+                                                highlight_color.y,
+                                                highlight_color.z, 0.55f);
+  style.Colors[ImGuiCol_TitleBg] = highlight_dim_color;
+  style.Colors[ImGuiCol_TitleBgCollapsed] =
+      ImVec4(highlight_color.x, highlight_color.y, highlight_color.z, 0.80f);
+  style.Colors[ImGuiCol_TitleBgActive] = highlight_color;
+  style.Colors[ImGuiCol_CheckMark] = highlight_color;
+  style.Colors[ImGuiCol_SliderGrab] = ImVec4(highlight_color.x,
+                                             highlight_color.y,
+                                             highlight_color.z, 0.55f);
+  style.Colors[ImGuiCol_SliderGrabActive] = highlight_color;
+  style.Colors[ImGuiCol_Button] = highlight_dim_color;
+  style.Colors[ImGuiCol_ButtonHovered] = highlight_hover_color;
+  style.Colors[ImGuiCol_ButtonActive] = highlight_color;
+  style.Colors[ImGuiCol_Header] =
+      ImVec4(highlight_color.x, highlight_color.y, highlight_color.z, 0.80f);
+  style.Colors[ImGuiCol_HeaderHovered] = highlight_hover_color;
+  style.Colors[ImGuiCol_HeaderActive] = highlight_color;
+  style.Colors[ImGuiCol_Separator] = highlight_dim_color;
+  style.Colors[ImGuiCol_SeparatorHovered] = highlight_hover_color;
+  style.Colors[ImGuiCol_SeparatorActive] = highlight_color;
+  style.Colors[ImGuiCol_ScrollbarBg] = highlight_bg_color;
+  style.Colors[ImGuiCol_ScrollbarGrab] = highlight_dim_color;
+  style.Colors[ImGuiCol_ScrollbarGrabHovered] = highlight_hover_color;
+  style.Colors[ImGuiCol_ScrollbarGrabActive] = highlight_color;
+  style.Colors[ImGuiCol_Tab] = highlight_dim_color;
+  style.Colors[ImGuiCol_TabHovered] = highlight_hover_color;
+  style.Colors[ImGuiCol_TabSelected] = highlight_color;
+  style.Colors[ImGuiCol_NavCursor] = highlight_color;
+  style.Colors[ImGuiCol_TextSelectedBg] =
+      ImVec4(highlight_color.x, highlight_color.y, highlight_color.z, 0.35f);
+}
+
+struct ConfiguredTextPass {
+  ImVec2 offset;
+  float alpha_scale;
+  bool use_opposite_color;
+};
+
+ConfiguredTextEffect GetConfiguredTextEffect() {
+  if (cvars::ui_text_effect == "shadow") {
+    return ConfiguredTextEffect::kShadow;
+  }
+  if (cvars::ui_text_effect == "lift") {
+    return ConfiguredTextEffect::kLift;
+  }
+  if (cvars::ui_text_effect == "stroke_fill") {
+    return ConfiguredTextEffect::kStrokeFill;
+  }
+  if (cvars::ui_text_effect == "glow") {
+    return ConfiguredTextEffect::kGlow;
+  }
+  if (cvars::ui_text_effect == "outline") {
+    return ConfiguredTextEffect::kOutline;
+  }
+  if (cvars::ui_text_effect == "double_shadow") {
+    return ConfiguredTextEffect::kDoubleShadow;
+  }
+  if (cvars::ui_text_effect == "bold") {
+    return ConfiguredTextEffect::kBold;
+  }
+  return ConfiguredTextEffect::kNone;
+}
+
+ConfiguredTextColorMode GetConfiguredTextColorMode() {
+  return cvars::ui_text_color == "black" ? ConfiguredTextColorMode::kBlack
+                                          : ConfiguredTextColorMode::kWhite;
+}
+
+uint8_t ClampTextColorChannel(float value) {
+  return static_cast<uint8_t>(
+      std::clamp<long>(std::lround(value), 0l, 255l));
+}
+
+bool IsNearlyMonochrome(uint32_t color) {
+  const int r = static_cast<int>((color >> IM_COL32_R_SHIFT) & 0xFFu);
+  const int g = static_cast<int>((color >> IM_COL32_G_SHIFT) & 0xFFu);
+  const int b = static_cast<int>((color >> IM_COL32_B_SHIFT) & 0xFFu);
+  return std::max({r, g, b}) - std::min({r, g, b}) <= 24;
+}
+
+float GetTextColorLuminance(uint32_t color) {
+  const float r = float((color >> IM_COL32_R_SHIFT) & 0xFFu) / 255.0f;
+  const float g = float((color >> IM_COL32_G_SHIFT) & 0xFFu) / 255.0f;
+  const float b = float((color >> IM_COL32_B_SHIFT) & 0xFFu) / 255.0f;
+  return 0.2126f * r + 0.7152f * g + 0.0722f * b;
+}
+
+uint32_t ApplyConfiguredBrightnessContrast(uint32_t color) {
+  const float brightness =
+      std::max(0.0f, static_cast<float>(cvars::ui_text_brightness));
+  const float contrast =
+      std::max(0.0f, static_cast<float>(cvars::ui_text_contrast));
+  const uint32_t alpha = (color >> IM_COL32_A_SHIFT) & 0xFFu;
+  auto transform_channel = [&](uint32_t shift) {
+    float channel = float((color >> shift) & 0xFFu) / 255.0f;
+    channel = ((channel - 0.5f) * contrast) + 0.5f;
+    channel *= brightness;
+    return ClampTextColorChannel(channel * 255.0f);
+  };
+  return IM_COL32(transform_channel(IM_COL32_R_SHIFT),
+                  transform_channel(IM_COL32_G_SHIFT),
+                  transform_channel(IM_COL32_B_SHIFT), alpha);
+}
+
+uint32_t GetConfiguredBaseTextColor(uint32_t color) {
+  const uint32_t alpha = (color >> IM_COL32_A_SHIFT) & 0xFFu;
+  if (IsNearlyMonochrome(color)) {
+    const uint8_t channel = GetConfiguredTextColorMode() ==
+                                    ConfiguredTextColorMode::kBlack
+                                ? 0u
+                                : 255u;
+    color = IM_COL32(channel, channel, channel, alpha);
+  }
+  return ApplyConfiguredBrightnessContrast(color);
+}
+
+uint32_t GetConfiguredPassColor(const ConfiguredTextPass& pass,
+                                uint32_t base_color) {
+  const uint32_t base_alpha = (base_color >> IM_COL32_A_SHIFT) & 0xFFu;
+  const uint32_t alpha = static_cast<uint32_t>(std::clamp<int>(
+      static_cast<int>(std::lround(float(base_alpha) * pass.alpha_scale)), 0,
+      255));
+  if (!pass.use_opposite_color) {
+    return (base_color & 0x00FFFFFFu) | (alpha << IM_COL32_A_SHIFT);
+  }
+  const uint8_t channel = GetTextColorLuminance(base_color) >= 0.5f ? 0u : 255u;
+  return IM_COL32(channel, channel, channel, alpha);
+}
+
+std::vector<ConfiguredTextPass> GetConfiguredTextPasses(
+    ConfiguredTextEffect effect) {
+  switch (effect) {
+    case ConfiguredTextEffect::kShadow:
+      return {{ImVec2(1.5f, 1.5f), 180.0f / 255.0f, true}};
+    case ConfiguredTextEffect::kLift:
+      return {{ImVec2(-1.0f, -1.0f), 150.0f / 255.0f, true}};
+    case ConfiguredTextEffect::kStrokeFill:
+      return {{ImVec2(-1.0f, 0.0f), 0.95f, true},
+              {ImVec2(1.0f, 0.0f), 0.95f, true},
+              {ImVec2(0.0f, -1.0f), 0.95f, true},
+              {ImVec2(0.0f, 1.0f), 0.95f, true},
+              {ImVec2(-1.0f, -1.0f), 0.75f, true},
+              {ImVec2(1.0f, -1.0f), 0.75f, true},
+              {ImVec2(-1.0f, 1.0f), 0.75f, true},
+              {ImVec2(1.0f, 1.0f), 0.75f, true},
+              {ImVec2(0.7f, 0.0f), 1.0f, false}};
+    case ConfiguredTextEffect::kGlow:
+      return {{ImVec2(-1.5f, 0.0f), 0.30f, true},
+              {ImVec2(1.5f, 0.0f), 0.30f, true},
+              {ImVec2(0.0f, -1.5f), 0.30f, true},
+              {ImVec2(0.0f, 1.5f), 0.30f, true},
+              {ImVec2(-1.5f, -1.5f), 0.24f, true},
+              {ImVec2(1.5f, -1.5f), 0.24f, true},
+              {ImVec2(-1.5f, 1.5f), 0.24f, true},
+              {ImVec2(1.5f, 1.5f), 0.24f, true},
+              {ImVec2(-3.0f, 0.0f), 0.14f, true},
+              {ImVec2(3.0f, 0.0f), 0.14f, true},
+              {ImVec2(0.0f, -3.0f), 0.14f, true},
+              {ImVec2(0.0f, 3.0f), 0.14f, true}};
+    case ConfiguredTextEffect::kOutline:
+      return {{ImVec2(-1.0f, 0.0f), 0.90f, true},
+              {ImVec2(1.0f, 0.0f), 0.90f, true},
+              {ImVec2(0.0f, -1.0f), 0.90f, true},
+              {ImVec2(0.0f, 1.0f), 0.90f, true},
+              {ImVec2(-1.0f, -1.0f), 0.70f, true},
+              {ImVec2(1.0f, -1.0f), 0.70f, true},
+              {ImVec2(-1.0f, 1.0f), 0.70f, true},
+              {ImVec2(1.0f, 1.0f), 0.70f, true}};
+    case ConfiguredTextEffect::kDoubleShadow:
+      return {{ImVec2(1.5f, 1.5f), 0.55f, true},
+              {ImVec2(3.0f, 3.0f), 0.30f, true}};
+    case ConfiguredTextEffect::kBold:
+      return {{ImVec2(0.7f, 0.0f), 1.0f, false},
+              {ImVec2(0.0f, 0.45f), 0.75f, false}};
+    case ConfiguredTextEffect::kNone:
+    default:
+      return {};
+  }
+}
+
+}  // namespace
 
 ImGuiDrawer::ImGuiDrawer(xe::ui::Window* window, size_t z_order)
     : window_(window), z_order_(z_order) {
@@ -184,21 +436,27 @@ void ImGuiDrawer::Initialize() {
   auto& style = ImGui::GetStyle();
   style.ScrollbarRounding = 6.0f;
   style.WindowRounding = 6.0f;
-  style.PopupRounding = 6.0f;
-  style.TabRounding = 6.0f;
+  style.TabRounding = 4.0f;
+  style.FrameRounding = 4.0f;
+  style.PopupRounding = 4.0f;
+  style.GrabRounding = 4.0f;
+  style.ScrollbarSize = 16.0f;
+  style.WindowBorderSize = 1.0f;
+  style.ChildBorderSize = 0.0f;
+  style.PopupBorderSize = 1.0f;
+  style.FrameBorderSize = 0.0f;
+  style.TabBorderSize = 0.0f;
+  style.ButtonTextAlign = ImVec2(0.5f, 0.5f);
+  style.DisplaySafeAreaPadding = ImVec2(0.0f, 0.0f);
+  style.DisplayWindowPadding = ImVec2(0.0f, 0.0f);
 
   style.Colors[ImGuiCol_Text] = ImVec4(0.89f, 0.90f, 0.90f, 1.00f);
   style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.60f, 0.60f, 0.60f, 1.00f);
   style.Colors[ImGuiCol_WindowBg] = ImVec4(0.00f, 0.06f, 0.00f, 1.00f);
   style.Colors[ImGuiCol_ChildBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-  style.Colors[ImGuiCol_Border] = ImVec4(0.00f, 0.35f, 0.00f, 1.00f);
   style.Colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
   style.Colors[ImGuiCol_FrameBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.30f);
   style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.90f, 0.80f, 0.80f, 0.40f);
-  style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.90f, 0.65f, 0.65f, 0.45f);
-  style.Colors[ImGuiCol_TitleBg] = ImVec4(0.00f, 0.40f, 0.00f, 1.00f);
-  style.Colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.00f, 0.33f, 0.00f, 1.00f);
-  style.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.16f, 0.65f, 0.00f, 1.00f);
   style.Colors[ImGuiCol_MenuBarBg] = ImVec4(0.00f, 0.35f, 0.00f, 1.00f);
   style.Colors[ImGuiCol_ScrollbarBg] = ImVec4(0.00f, 0.40f, 0.11f, 0.59f);
   style.Colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.00f, 0.68f, 0.00f, 0.68f);
@@ -207,24 +465,9 @@ void ImGuiDrawer::Initialize() {
   style.Colors[ImGuiCol_ScrollbarGrabActive] =
       ImVec4(0.00f, 0.91f, 0.09f, 0.40f);
   style.Colors[ImGuiCol_PopupBg] = ImVec4(0.20f, 0.20f, 0.20f, 0.99f);
-  style.Colors[ImGuiCol_CheckMark] = ImVec4(0.74f, 0.90f, 0.72f, 0.50f);
-  style.Colors[ImGuiCol_SliderGrab] = ImVec4(1.00f, 1.00f, 1.00f, 0.30f);
-  style.Colors[ImGuiCol_SliderGrabActive] = ImVec4(0.34f, 0.75f, 0.11f, 1.00f);
-  style.Colors[ImGuiCol_Button] = ImVec4(0.15f, 0.56f, 0.11f, 0.60f);
-  style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.19f, 0.72f, 0.09f, 1.00f);
-  style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.19f, 0.60f, 0.09f, 1.00f);
-  style.Colors[ImGuiCol_Header] = ImVec4(0.00f, 0.40f, 0.00f, 0.71f);
-  style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.00f, 0.60f, 0.26f, 0.80f);
-  style.Colors[ImGuiCol_HeaderActive] = ImVec4(0.00f, 0.75f, 0.00f, 0.80f);
-  style.Colors[ImGuiCol_Separator] = ImVec4(0.00f, 0.35f, 0.00f, 1.00f);
-  style.Colors[ImGuiCol_SeparatorHovered] = ImVec4(0.36f, 0.89f, 0.38f, 1.00f);
-  style.Colors[ImGuiCol_SeparatorActive] = ImVec4(0.13f, 0.50f, 0.11f, 1.00f);
   style.Colors[ImGuiCol_ResizeGrip] = ImVec4(1.00f, 1.00f, 1.00f, 0.30f);
   style.Colors[ImGuiCol_ResizeGripHovered] = ImVec4(1.00f, 1.00f, 1.00f, 0.60f);
   style.Colors[ImGuiCol_ResizeGripActive] = ImVec4(1.00f, 1.00f, 1.00f, 0.90f);
-  style.Colors[ImGuiCol_Tab] = style.Colors[ImGuiCol_Button];
-  style.Colors[ImGuiCol_TabHovered] = style.Colors[ImGuiCol_ButtonHovered];
-  style.Colors[ImGuiCol_TabSelected] = style.Colors[ImGuiCol_ButtonActive];
   style.Colors[ImGuiCol_TabDimmed] = style.Colors[ImGuiCol_FrameBg];
   style.Colors[ImGuiCol_TabDimmedSelected] =
       style.Colors[ImGuiCol_FrameBgHovered];
@@ -233,8 +476,8 @@ void ImGuiDrawer::Initialize() {
   style.Colors[ImGuiCol_PlotHistogram] = ImVec4(0.90f, 0.70f, 0.00f, 1.00f);
   style.Colors[ImGuiCol_PlotHistogramHovered] =
       ImVec4(1.00f, 0.60f, 0.00f, 1.00f);
-  style.Colors[ImGuiCol_TextSelectedBg] = ImVec4(0.00f, 1.00f, 0.00f, 0.21f);
   style.Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.20f, 0.20f, 0.20f, 0.35f);
+  ApplyConfiguredUIAccentStyle(style);
 
   frame_time_tick_frequency_ = double(Clock::QueryHostTickFrequency());
   last_frame_time_ticks_ = Clock::QueryHostTickCount();
@@ -392,7 +635,7 @@ bool ImGuiDrawer::LoadWindowsFont(ImGuiIO& io, ImFontConfig& font_config,
   }
 
   std::filesystem::path font_path = std::wstring(fonts_dir);
-  font_path.append("tahoma.ttf");
+  font_path.append("segoeui.ttf");
   if (!std::filesystem::exists(font_path)) {
     return false;
   }
@@ -605,6 +848,7 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   ImGui::SetCurrentContext(internal_state_);
 
   ImGuiIO& io = ImGui::GetIO();
+  ApplyConfiguredUIAccentStyle(ImGui::GetStyle());
 
   uint64_t current_frame_time_ticks = Clock::QueryHostTickCount();
   io.DeltaTime =
@@ -674,12 +918,9 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
     io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
   }
 
-  // Detaching is deferred if the last dialog is removed during drawing, perform
-  // it now if needed.
   DetachIfLastWindowRemoved();
 
   if (!dialogs_.empty() || !notifications_.empty()) {
-    // Repaint (and handle input) continuously if still active.
     presenter_->RequestUIPaintFromUIThread();
   }
 }
@@ -702,22 +943,152 @@ void ImGuiDrawer::ClearDialogs() {
 void ImGuiDrawer::RenderDrawLists(ImDrawData* data,
                                   UIDrawContext& ui_draw_context) {
   ImGuiIO& io = ImGui::GetIO();
+  const ConfiguredTextEffect configured_effect = GetConfiguredTextEffect();
+  const std::vector<ConfiguredTextPass> configured_passes =
+      GetConfiguredTextPasses(configured_effect);
+  const bool apply_effect = !configured_passes.empty();
 
   immediate_drawer_->Begin(ui_draw_context, io.DisplaySize.x, io.DisplaySize.y);
 
   for (int i = 0; i < data->CmdListsCount; ++i) {
     const auto cmd_list = data->CmdLists[i];
+    const auto* source_vertices =
+        reinterpret_cast<const ImmediateVertex*>(cmd_list->VtxBuffer.Data);
+
+    std::vector<ImmediateVertex> base_vertices(source_vertices,
+                                               source_vertices + cmd_list->VtxBuffer.size());
+    std::vector<uint8_t> text_vertex_marked(base_vertices.size(), 0);
+
+    const float uv_epsilon_u =
+        io.Fonts->TexWidth > 0 ? (3.0f / float(io.Fonts->TexWidth)) : 0.004f;
+    const float uv_epsilon_v =
+        io.Fonts->TexHeight > 0 ? (3.0f / float(io.Fonts->TexHeight)) : 0.004f;
+    const float white_u_min = io.Fonts->TexUvWhitePixel.x - uv_epsilon_u;
+    const float white_u_max = io.Fonts->TexUvWhitePixel.x + uv_epsilon_u;
+    const float white_v_min = io.Fonts->TexUvWhitePixel.y - uv_epsilon_v;
+    const float white_v_max = io.Fonts->TexUvWhitePixel.y + uv_epsilon_v;
+
+    auto is_likely_text_vertex = [&](const ImmediateVertex& vertex) {
+      return vertex.u < white_u_min || vertex.u > white_u_max ||
+             vertex.v < white_v_min || vertex.v > white_v_max;
+    };
+
+    auto handle_marker_callback = [](const ImDrawCmd& cmd,
+                                     bool* inside_configured_text_block) {
+      if (!cmd.UserCallback) {
+        return false;
+      }
+      const intptr_t marker_value =
+          reinterpret_cast<intptr_t>(cmd.UserCallbackData);
+      if (marker_value == 1) {
+        *inside_configured_text_block = true;
+      } else if (marker_value == 2) {
+        *inside_configured_text_block = false;
+      }
+      return true;
+    };
+
+    bool inside_configured_text_block = false;
+    for (int j = 0; j < cmd_list->CmdBuffer.size(); ++j) {
+      const auto& cmd = cmd_list->CmdBuffer[j];
+      if (handle_marker_callback(cmd, &inside_configured_text_block)) {
+        cmd.UserCallback(cmd_list, &cmd);
+        continue;
+      }
+      if (inside_configured_text_block) {
+        continue;
+      }
+      if (cmd.TextureId != io.Fonts->TexID) {
+        continue;
+      }
+      const unsigned int cmd_index_end = cmd.IdxOffset + cmd.ElemCount;
+      for (unsigned int k = cmd.IdxOffset; k < cmd_index_end; ++k) {
+        const ImDrawIdx idx = cmd_list->IdxBuffer[k];
+        if (idx >= base_vertices.size() || !is_likely_text_vertex(base_vertices[idx])) {
+          continue;
+        }
+        text_vertex_marked[idx] = 1;
+      }
+    }
+
+    bool has_text_vertices = false;
+    for (size_t j = 0; j < base_vertices.size(); ++j) {
+      if (!text_vertex_marked[j]) {
+        continue;
+      }
+      has_text_vertices = true;
+      base_vertices[j].color = GetConfiguredBaseTextColor(base_vertices[j].color);
+    }
+
+    if (apply_effect && has_text_vertices) {
+      for (const ConfiguredTextPass& pass : configured_passes) {
+        std::vector<ImmediateVertex> effect_vertices(base_vertices);
+        for (auto& vertex : effect_vertices) {
+          vertex.color &= 0x00FFFFFFu;
+        }
+
+        for (size_t j = 0; j < effect_vertices.size(); ++j) {
+          if (!text_vertex_marked[j]) {
+            continue;
+          }
+          effect_vertices[j].x += pass.offset.x;
+          effect_vertices[j].y += pass.offset.y;
+          effect_vertices[j].color =
+              GetConfiguredPassColor(pass, base_vertices[j].color);
+        }
+
+        ImmediateDrawBatch effect_batch;
+        effect_batch.vertices = effect_vertices.data();
+        effect_batch.vertex_count = int(effect_vertices.size());
+        effect_batch.indices = cmd_list->IdxBuffer.Data;
+        effect_batch.index_count = cmd_list->IdxBuffer.size();
+        immediate_drawer_->BeginDrawBatch(effect_batch);
+
+        inside_configured_text_block = false;
+        for (int j = 0; j < cmd_list->CmdBuffer.size(); ++j) {
+          const auto& cmd = cmd_list->CmdBuffer[j];
+          if (handle_marker_callback(cmd, &inside_configured_text_block)) {
+            cmd.UserCallback(cmd_list, &cmd);
+            continue;
+          }
+          if (inside_configured_text_block) {
+            continue;
+          }
+          if (cmd.TextureId != io.Fonts->TexID) {
+            continue;
+          }
+
+          ImmediateDraw effect_draw;
+          effect_draw.primitive_type = ImmediatePrimitiveType::kTriangles;
+          effect_draw.count = cmd.ElemCount;
+          effect_draw.index_offset = cmd.IdxOffset;
+          effect_draw.texture = reinterpret_cast<ImmediateTexture*>(cmd.TextureId);
+          effect_draw.scissor = true;
+          effect_draw.scissor_left = cmd.ClipRect.x;
+          effect_draw.scissor_top = cmd.ClipRect.y;
+          effect_draw.scissor_right = cmd.ClipRect.z;
+          effect_draw.scissor_bottom = cmd.ClipRect.w;
+          immediate_drawer_->Draw(effect_draw);
+        }
+
+        immediate_drawer_->EndDrawBatch();
+      }
+    }
 
     ImmediateDrawBatch batch;
-    batch.vertices =
-        reinterpret_cast<ImmediateVertex*>(cmd_list->VtxBuffer.Data);
+    batch.vertices = base_vertices.data();
     batch.vertex_count = cmd_list->VtxBuffer.size();
     batch.indices = cmd_list->IdxBuffer.Data;
     batch.index_count = cmd_list->IdxBuffer.size();
     immediate_drawer_->BeginDrawBatch(batch);
 
+    inside_configured_text_block = false;
     for (int j = 0; j < cmd_list->CmdBuffer.size(); ++j) {
       const auto& cmd = cmd_list->CmdBuffer[j];
+      if (handle_marker_callback(cmd, &inside_configured_text_block)) {
+        cmd.UserCallback(cmd_list, &cmd);
+        continue;
+      }
 
       ImmediateDraw draw;
       draw.primitive_type = ImmediatePrimitiveType::kTriangles;
@@ -865,6 +1236,7 @@ void ImGuiDrawer::ClearInput() {
   io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
   std::memset(io.MouseDown, 0, sizeof(io.MouseDown));
   io.ClearInputKeys();
+  io.ClearInputMouse();
   touch_pointer_id_ = TouchEvent::kPointerIDNone;
   reset_mouse_position_after_next_frame_ = false;
 }

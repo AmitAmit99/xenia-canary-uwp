@@ -11,6 +11,7 @@
 #define XENIA_KERNEL_XAM_UI_CREATE_PROFILE_UI_H_
 
 #include "xenia/kernel/xam/xam_ui.h"
+#include "xenia/emulator.h"
 
 namespace xe {
 namespace kernel {
@@ -35,6 +36,7 @@ class CreateProfileUI final : public XamDialog {
   bool has_opened_ = false;
   bool migration_ = false;
   char gamertag_[16] = "";
+  bool gamertag_focus_requested_ = true;
   Emulator* emulator_;
 };
 

@@ -62,6 +62,7 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
     SetImmediateDrawer(new_immediate_drawer);
   }
 
+  ImmediateDrawer* GetImmediateDrawer() { return immediate_drawer_; }
   void SetIgnoreInput(bool ignore);
   bool GetIgnoreInput();
   void Draw(UIDrawContext& ui_draw_context) override;
@@ -96,6 +97,7 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   void SetGuideButtonAction(std::function<void(uint8_t)> func);
 
   bool IsAnyDialogOpen() const { return !dialogs_.empty(); };
+  size_t GetDialogCount() const { return dialogs_.size(); }
 
  protected:
   void OnKeyDown(KeyEvent& e) override;

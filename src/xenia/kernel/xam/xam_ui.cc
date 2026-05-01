@@ -8,7 +8,9 @@
  */
 
 #include "xenia/kernel/xam/xam_ui.h"
-#include "xenia/app/emulator_window.h"
+#include "xenia/app/ui_text_effect_helpers.h"
+#include "xenia/base/cvar.h"
+#include "xenia/base/logging.h"
 #include "xenia/base/png_utils.h"
 #include "xenia/base/system.h"
 #include "xenia/hid/input_system.h"
@@ -26,7 +28,6 @@
 #include "xenia/kernel/xam/ui/gamercard_ui.h"
 #include "xenia/kernel/xam/ui/passcode_ui.h"
 #include "xenia/kernel/xam/ui/signin_ui.h"
-#include "xenia/kernel/xam/ui/title_info_ui.h"
 
 DEFINE_bool(storage_selection_dialog, false,
             "Show storage device selection dialog when the game requests it.",
@@ -37,6 +38,71 @@ DECLARE_int32(license_mask);
 namespace xe {
 namespace kernel {
 namespace xam {
+
+namespace {
+ui::SigninUI* g_active_signin_dialog = nullptr;
+
+float DrawWrappedConfiguredText(ImDrawList* draw_list, ImFont* font,
+                                float font_size, ImVec2 pos,
+                                float max_width, ImU32 color,
+                                const std::string& text) {
+  if (text.empty()) {
+    return 0.0f;
+  }
+
+  const char* text_begin = text.c_str();
+  const char* text_end = text_begin + text.size();
+  const float font_scale = font->FontSize > 0.0f ? font_size / font->FontSize
+                                                 : 1.0f;
+  const float line_height = font_size + 4.0f;
+  float cursor_y = pos.y;
+
+  while (text_begin < text_end) {
+    const char* paragraph_end = text_begin;
+    while (paragraph_end < text_end && *paragraph_end != '\n') {
+      ++paragraph_end;
+    }
+
+    if (paragraph_end == text_begin) {
+      cursor_y += line_height;
+    } else {
+      const char* line_begin = text_begin;
+      while (line_begin < paragraph_end) {
+        const char* wrap_end =
+            font->CalcWordWrapPositionA(font_scale, line_begin, paragraph_end,
+                                        max_width);
+        if (wrap_end == line_begin) {
+          wrap_end = std::min(line_begin + 1, paragraph_end);
+        }
+        while (wrap_end > line_begin &&
+               (*(wrap_end - 1) == ' ' || *(wrap_end - 1) == '\t')) {
+          --wrap_end;
+        }
+        std::string line(line_begin, wrap_end);
+        xe::app::DrawTextWithConfiguredEffect(
+            draw_list, font, font_size, ImVec2(pos.x, cursor_y), color,
+            line.c_str());
+        cursor_y += line_height;
+        line_begin = wrap_end;
+        while (line_begin < paragraph_end &&
+               (*line_begin == ' ' || *line_begin == '\t')) {
+          ++line_begin;
+        }
+      }
+    }
+
+    if (paragraph_end < text_end && *paragraph_end == '\n') {
+      text_begin = paragraph_end + 1;
+    } else {
+      text_begin = paragraph_end;
+    }
+  }
+
+  return cursor_y - pos.y;
+}
+
+}  // namespace
+
 // TODO(gibbed): This is all one giant WIP that seems to work better than the
 // previous immediate synchronous completion of dialogs.
 //
@@ -232,34 +298,244 @@ X_RESULT xeXamDispatchHeadlessAsync(std::function<void()> run_callback) {
 }
 
 void MessageBoxDialog::OnDraw(ImGuiIO& io) {
-  bool first_draw = false;
+#if XE_PLATFORM_WINRT
   if (!has_opened_) {
-    ImGui::OpenPopup(title_.c_str());
     has_opened_ = true;
-    first_draw = true;
+    focus_requested_ = true;
   }
-  if (ImGui::BeginPopupModal(title_.c_str(), nullptr,
-                             ImGuiWindowFlags_AlwaysAutoResize)) {
-    if (description_.size()) {
-      ImGui::Text("%s", description_.c_str());
+
+  const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(viewport->Pos);
+  ImGui::SetNextWindowSize(viewport->Size);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+  const ImGuiWindowFlags dim_flags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoInputs |
+      ImGuiWindowFlags_NoCollapse;
+  if (ImGui::Begin("##message_box_dim", nullptr, dim_flags)) {
+    ImDrawList* dim_draw_list = ImGui::GetWindowDrawList();
+    const ImVec2 dim_min = ImGui::GetWindowPos();
+    const ImVec2 dim_max(dim_min.x + ImGui::GetWindowSize().x,
+                         dim_min.y + ImGui::GetWindowSize().y);
+    dim_draw_list->AddRectFilled(
+        dim_min, dim_max,
+        ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 0.55f)));
+  }
+  ImGui::End();
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar(3);
+
+  static std::shared_ptr<xe::ui::ImmediateTexture> guide_bg_tex = nullptr;
+  static std::shared_ptr<xe::ui::ImmediateTexture> button_a_tex = nullptr;
+  static std::shared_ptr<xe::ui::ImmediateTexture> button_b_tex = nullptr;
+  if (!guide_bg_tex) {
+    guide_bg_tex = xe::app::LoadConfiguredGuideBackgroundTexture(imgui_drawer());
+  }
+  if (!button_a_tex) {
+    button_a_tex = xe::app::LoadButtonTexture(imgui_drawer(), 'A');
+  }
+  if (!button_b_tex) {
+    button_b_tex = xe::app::LoadButtonTexture(imgui_drawer(), 'B');
+  }
+
+  const ImVec2 panel_size =
+      xe::app::GetGuidePanelSize(guide_bg_tex, io.DisplaySize.y);
+  const ImVec2 panel_padding = xe::app::GetGuidePanelPadding();
+  const float ux = io.DisplaySize.x / 1024.0f;
+  const float uy = io.DisplaySize.y / 576.0f;
+  const ImVec2 overlay_pos = viewport->Pos;
+
+  ImGui::SetNextWindowPos(overlay_pos, ImGuiCond_Always);
+  ImGui::SetNextWindowSize(panel_size, ImGuiCond_Always);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, panel_padding);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+  const ImGuiWindowFlags panel_flags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse |
+      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove;
+  if (!ImGui::Begin("##message_box_overlay", nullptr, panel_flags)) {
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
+    Close();
+    return;
+  }
+
+  ImDrawList* overlay_draw_list = ImGui::GetWindowDrawList();
+  const ImVec2 overlay_min = ImGui::GetWindowPos();
+  const ImVec2 overlay_max(overlay_min.x + ImGui::GetWindowSize().x,
+                           overlay_min.y + ImGui::GetWindowSize().y);
+
+  xe::app::DrawGuidePanelBackground(overlay_draw_list, guide_bg_tex,
+                                    overlay_min, overlay_max);
+
+  const xe::app::OverlayHeaderLayout header_layout =
+      xe::app::DrawOverlayHeader(overlay_draw_list, overlay_min, panel_size,
+                                 panel_padding, ux, uy, title_.c_str());
+
+  const float content_start_y =
+      header_layout.position.y + header_layout.font_size + 55.0f;
+  const float content_width = std::max(
+      0.0f, std::min(430.0f * ux, panel_size.x - panel_padding.x * 2.0f) -
+                (50.0f * ux));
+  const float description_font_size = 22.0f * uy;
+  const ImVec2 description_pos(overlay_min.x + panel_padding.x,
+                               content_start_y);
+  float description_height = 0.0f;
+  if (!description_.empty()) {
+    description_height = DrawWrappedConfiguredText(
+        overlay_draw_list, ImGui::GetFont(), description_font_size,
+        description_pos, content_width, IM_COL32(228, 228, 228, 255),
+        description_);
+  }
+
+  if (buttons_.empty()) {
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
+    return;
+  }
+
+  if (chosen_button_ >= buttons_.size()) {
+    chosen_button_ = static_cast<uint32_t>(buttons_.size() - 1);
+  }
+
+  const bool confirm_down = ImGui::IsKeyDown(ImGuiKey_Enter) ||
+                            ImGui::IsKeyDown(ImGuiKey_KeypadEnter) ||
+                            ImGui::IsKeyDown(ImGuiKey_Space) ||
+                            ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown);
+  const bool cancel_down = ImGui::IsKeyDown(ImGuiKey_Escape) ||
+                           ImGui::IsKeyDown(ImGuiKey_GamepadFaceRight);
+  const bool should_focus_button =
+      focus_requested_ &&
+      ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+      !ImGui::IsAnyItemActive() && !ImGui::IsMouseClicked(0) &&
+      !(confirm_down || cancel_down);
+  if (should_focus_button) {
+    focus_requested_ = false;
+  }
+
+  const auto choose_button = [&](uint32_t index) {
+    chosen_button_ = index;
+    Close();
+  };
+
+  const float button_gap = 8.0f * ux;
+  const ImVec2 button_size((content_width - button_gap) / 2.0f, 0.0f);
+  ImGui::SetCursorScreenPos(
+      ImVec2(overlay_min.x + panel_padding.x,
+             description_pos.y + description_height + (18.0f * uy)));
+
+  for (size_t i = 0; i < buttons_.size(); ++i) {
+    if (i > 0) {
+      ImGui::SameLine(0.0f, button_gap);
     }
-    if (first_draw) {
+    ImGui::PushID(static_cast<int>(i));
+    if (should_focus_button && i == chosen_button_) {
       ImGui::SetKeyboardFocusHere();
     }
-    for (size_t i = 0; i < buttons_.size(); ++i) {
-      if (ImGui::Button(buttons_[i].c_str())) {
-        chosen_button_ = static_cast<uint32_t>(i);
-        ImGui::CloseCurrentPopup();
-        Close();
-      }
+    if (xe::app::DrawTextEffectButton(buttons_[i].c_str(), button_size)) {
+      choose_button(static_cast<uint32_t>(i));
+      ImGui::PopID();
+      ImGui::End();
+      ImGui::PopStyleColor();
+      ImGui::PopStyleVar(3);
+      return;
+    }
+    if (ImGui::IsItemFocused() || ImGui::IsItemHovered()) {
+      chosen_button_ = static_cast<uint32_t>(i);
+    }
+    ImGui::PopID();
+  }
+
+  const float footer_text_size = 13.5f * uy;
+  const float footer_icon_size = 15.6f * uy;
+  const float footer_spacing_y = 17.0f * uy;
+  const float footer_select_y = overlay_max.y - (32.0f * uy);
+  const float footer_back_y = footer_select_y - footer_spacing_y;
+  const float footer_base_x = overlay_min.x + panel_size.x * 0.9f;
+  const float footer_back_text_x = footer_base_x - (70.0f * ux);
+  const float footer_back_icon_offset = 35.0f * ux;
+  const float footer_select_text_x = footer_base_x - (60.0f * ux);
+  const float footer_select_icon_offset = 42.0f * ux;
+  xe::app::DrawFooterPrompt(overlay_draw_list, button_b_tex, footer_text_size,
+                            footer_icon_size, "Back", footer_back_y,
+                            footer_back_text_x, footer_back_icon_offset);
+  xe::app::DrawFooterPrompt(overlay_draw_list, button_a_tex, footer_text_size,
+                            footer_icon_size, "Select", footer_select_y,
+                            footer_select_text_x, footer_select_icon_offset);
+
+  ImGui::End();
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar(3);
+#else
+  static_cast<void>(io);
+  if (!has_opened_) {
+    has_opened_ = true;
+    focus_requested_ = true;
+    ImGui::OpenPopup(title_.c_str());
+  }
+
+  if (!ImGui::BeginPopupModal(title_.c_str(), nullptr,
+                              ImGuiWindowFlags_AlwaysAutoResize)) {
+    Close();
+    return;
+  }
+
+  if (!description_.empty()) {
+    ImGui::TextWrapped("%s", description_.c_str());
+    ImGui::Spacing();
+  }
+
+  if (buttons_.empty()) {
+    ImGui::EndPopup();
+    return;
+  }
+
+  if (chosen_button_ >= buttons_.size()) {
+    chosen_button_ = static_cast<uint32_t>(buttons_.size() - 1);
+  }
+
+  for (size_t i = 0; i < buttons_.size(); ++i) {
+    if (i > 0) {
       ImGui::SameLine();
     }
-    ImGui::Spacing();
-    ImGui::Spacing();
-    ImGui::EndPopup();
-  } else {
-    Close();
+    ImGui::PushID(static_cast<int>(i));
+    if (focus_requested_ && i == chosen_button_) {
+      ImGui::SetKeyboardFocusHere();
+      focus_requested_ = false;
+    }
+    if (ImGui::Button(buttons_[i].c_str())) {
+      chosen_button_ = static_cast<uint32_t>(i);
+      ImGui::CloseCurrentPopup();
+      Close();
+      ImGui::PopID();
+      ImGui::EndPopup();
+      return;
+    }
+    if (ImGui::IsItemFocused() || ImGui::IsItemHovered()) {
+      chosen_button_ = static_cast<uint32_t>(i);
+    }
+    ImGui::PopID();
   }
+
+  if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+      ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+    chosen_button_ = default_button_ < buttons_.size() ? default_button_ : 0;
+    ImGui::CloseCurrentPopup();
+    Close();
+    ImGui::EndPopup();
+    return;
+  }
+
+  ImGui::EndPopup();
+#endif
 }
 
 void KeyboardInputDialog::OnDraw(ImGuiIO& io) {
@@ -281,12 +557,12 @@ void KeyboardInputDialog::OnDraw(ImGuiIO& io) {
     bool input_submitted =
         ImGui::InputText("##body", text_buffer_.data(), text_buffer_.size(),
                          ImGuiInputTextFlags_EnterReturnsTrue);
-    // Context menu for paste functionality
     if (ImGui::BeginPopupContextItem("input_context_menu")) {
       if (ImGui::MenuItem("Paste")) {
         if (ImGui::GetClipboardText() != nullptr) {
           std::string clipboard_text = ImGui::GetClipboardText();
-          xe::string_util::copy_truncating(text_buffer_.data(), clipboard_text,
+          xe::string_util::copy_truncating(text_buffer_.data(),
+                                           clipboard_text,
                                            text_buffer_.size());
         }
       }
@@ -838,9 +1114,35 @@ bool xeDrawProfileContent(xe::ui::ImGuiDrawer* imgui_drawer,
                           const xe::ui::ImmediateTexture* profile_icon,
                           std::function<bool()> context_menu,
                           std::function<void()> on_profile_change,
-                          uint64_t* selected_xuid) {
+                          uint64_t* selected_xuid,
+                          bool request_focus) {
   const ImVec2 start_position = ImGui::GetCursorPos();
 
+  // Make the entire profile area directly selectable
+  const bool is_selected = (selected_xuid && *selected_xuid == xuid);
+  if (ImGui::Selectable("##profile_item", is_selected, ImGuiSelectableFlags_SpanAllColumns)) {
+    if (selected_xuid) {
+      *selected_xuid = xuid;
+    }
+    ImGui::OpenPopup("Profile Menu");
+  }
+  
+  if (request_focus) {
+    ImGui::SetItemDefaultFocus();
+  }
+
+  // Draw highlight if selected or focused
+  if (is_selected || ImGui::IsItemFocused()) {
+    const ImVec2 padding(3.0f, 3.0f);
+    xe::app::DrawConfiguredComboHighlight(
+        ImVec2(ImGui::GetItemRectMin().x - padding.x,
+               ImGui::GetItemRectMin().y - padding.y),
+        ImVec2(ImGui::GetItemRectMax().x + padding.x,
+               ImGui::GetItemRectMax().y + padding.y),
+        1.6f, 4.0f);
+  }
+
+  // Draw profile content inside the selectable
   ImGui::BeginGroup();
   {
     if (profile_icon) {
@@ -856,7 +1158,7 @@ bool xeDrawProfileContent(xe::ui::ImGuiDrawer* imgui_drawer,
       }
     }
 
-    ImGui::SameLine();
+    ImGui::SameLine(0.0f, 10.0f * ImGui::GetIO().DisplayFramebufferScale.x);
 
     ImGui::BeginGroup();
     {
@@ -874,22 +1176,8 @@ bool xeDrawProfileContent(xe::ui::ImGuiDrawer* imgui_drawer,
   }
   ImGui::EndGroup();
 
-  if (xuid && selected_xuid) {
-    const ImVec2 end_draw_position =
-        ImVec2(ImGui::GetCursorPos().x - start_position.x,
-               ImGui::GetCursorPos().y - start_position.y);
-
-    ImGui::SetCursorPos(start_position);
-    if (ImGui::Selectable("##Selectable", *selected_xuid == xuid,
-                          ImGuiSelectableFlags_SpanAllColumns,
-                          end_draw_position)) {
-      *selected_xuid = xuid;
-      ImGui::OpenPopup("Profile Menu");
-    }
-
-    if (context_menu) {
-      return context_menu();
-    }
+  if (context_menu) {
+    return context_menu();
   }
 
   return true;
@@ -919,15 +1207,28 @@ X_RESULT xeXamShowSigninUI(uint32_t user_index, uint32_t users_needed,
     });
   }
 
-  auto close = [](ui::SigninUI* dialog) -> void {};
+  if (g_active_signin_dialog) {
+    auto dialog = g_active_signin_dialog;
+    auto display_window = kernel_state()->emulator()->display_window();
+    display_window->app_context().CallInUIThread([dialog]() {
+      dialog->RequestFocus();
+    });
+    return X_ERROR_SUCCESS;
+  }
+
+  auto close = [](ui::SigninUI* dialog) -> void {
+    if (g_active_signin_dialog == dialog) {
+      g_active_signin_dialog = nullptr;
+    }
+  };
 
   const Emulator* emulator = kernel_state()->emulator();
   xe::ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
-  return xeXamDispatchDialogAsync<ui::SigninUI>(
-      new ui::SigninUI(
-          imgui_drawer, kernel_state()->xam_state()->profile_manager(),
-          emulator->input_system()->GetLastUsedSlot(), users_needed),
-      close);
+  auto dialog = new ui::SigninUI(
+      imgui_drawer, kernel_state()->xam_state()->profile_manager(),
+      emulator->input_system()->GetLastUsedSlot(), users_needed);
+  g_active_signin_dialog = dialog;
+  return xeXamDispatchDialogAsync<ui::SigninUI>(dialog, close);
 }
 
 X_RESULT xeXamShowCreateProfileUIEx(uint32_t user_index, dword_t flag,

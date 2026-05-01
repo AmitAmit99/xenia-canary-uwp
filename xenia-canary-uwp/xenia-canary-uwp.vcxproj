@@ -272,8 +272,10 @@
     </AppxManifest>
   </ItemGroup>
   <ItemGroup>
-    <Image Include="Assets\background.png" />
-    <Image Include="Assets\background2.png" />
+    <Image Include="Assets\A.png" />
+    <Image Include="Assets\B.png" />
+    <Image Include="Assets\X.png" />
+    <Image Include="Assets\Y.png" />
     <Image Include="Assets\LockScreenLogo.scale-200.png" />
     <Image Include="Assets\SplashScreen.scale-200.png" />
     <Image Include="Assets\Square150x150Logo.scale-200.png" />
@@ -281,9 +283,19 @@
     <Image Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
     <Image Include="Assets\StoreLogo.png" />
     <Image Include="Assets\Wide310x150Logo.scale-200.png" />
+    <Image Include="Assets\xenia-logo.png" />
+    <Image Include="Assets\backgrounds\xenia.png" />
+    <Image Include="Assets\backgrounds\secondary.png" />
+    <Image Include="Assets\interface_overlays\blades.png" />
+    <Image Include="Assets\interface_overlays\preview.png" />
+    <Image Include="Assets\guide_images\blades.png" />
+    <Image Include="Assets\guide_images\blades_wide.png" />
+    <Image Include="Assets\guide_images\guide.png" />
+    <Image Include="Assets\guide_images\guide-wide.png" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\xenia\app\emulator_window.cc" />
+    <ClCompile Include="..\src\xenia\app\profile_dialogs.cc" />
     <ClCompile Include="..\src\xenia\app\xenia_main.cc" />
     <ClCompile Include="App.cpp" />
     <ClCompile Include="pch.cpp">
@@ -303,10 +315,6 @@
     <Text Include="readme.txt">
       <DeploymentContent>false</DeploymentContent>
     </Text>
-  </ItemGroup>
-  <ItemGroup>
-    <Font Include="Assets\NotoSansJP-Regular.ttf" />
-    <Font Include="Assets\Roboto-Regular.ttf" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

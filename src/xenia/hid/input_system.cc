@@ -32,6 +32,14 @@ DEFINE_double(left_stick_deadzone_percentage, 0.0,
 DEFINE_double(
     right_stick_deadzone_percentage, 0.0,
     "Defines deadzone level for right stick. Allowed range [0.0-1.0].", "HID");
+DEFINE_double(
+    left_trigger_deadzone_percentage, 0.0,
+    "Defines deadzone level for left trigger. Allowed range [0.0-1.0].",
+    "HID");
+DEFINE_double(
+    right_trigger_deadzone_percentage, 0.0,
+    "Defines deadzone level for right trigger. Allowed range [0.0-1.0].",
+    "HID");
 
 InputSystem::InputSystem(xe::ui::Window* window) : window_(window) {
   skylander_portal_ = std::make_unique<SkylanderPortalEmulated>();
@@ -251,6 +259,24 @@ void InputSystem::AdjustDeadzoneLevels(const uint8_t slot,
     if (gamepad->thumb_rx > -deadzone_x_value &&
         gamepad->thumb_rx < deadzone_x_value) {
       gamepad->thumb_rx = 0;
+    }
+  }
+
+  if (cvars::left_trigger_deadzone_percentage > 0.0 &&
+      cvars::left_trigger_deadzone_percentage < 1.0) {
+    const uint8_t deadzone_left_trigger_value =
+        static_cast<uint8_t>(255.0 * cvars::left_trigger_deadzone_percentage);
+    if (gamepad->left_trigger < deadzone_left_trigger_value) {
+      gamepad->left_trigger = 0;
+    }
+  }
+
+  if (cvars::right_trigger_deadzone_percentage > 0.0 &&
+      cvars::right_trigger_deadzone_percentage < 1.0) {
+    const uint8_t deadzone_right_trigger_value =
+        static_cast<uint8_t>(255.0 * cvars::right_trigger_deadzone_percentage);
+    if (gamepad->right_trigger < deadzone_right_trigger_value) {
+      gamepad->right_trigger = 0;
     }
   }
 }

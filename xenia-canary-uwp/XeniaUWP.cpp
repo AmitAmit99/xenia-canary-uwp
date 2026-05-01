@@ -3,6 +3,9 @@
 #include "UWPUtil.h"
 #include "WinRTKeyboard.h"
 
+#include <algorithm>
+#include <array>
+#include <cctype>
 #include <fstream>
 
 #include "windowed_app_context_uwp.h"
@@ -15,6 +18,7 @@
 #include "xenia/base/filesystem.h"
 #include "xenia/ui/windowed_app.h"
 #include "xenia/base/cvar.h"
+#include "xenia/base/clock.h"
 #include "xenia/base/logging.h"
 #include "xenia/ui/window.h"
 #include "xenia/ui/d3d12/d3d12_provider.h"
@@ -41,10 +45,102 @@ static std::vector<std::string> s_paths;
 static std::vector<std::tuple<std::string, std::string>> s_games;
 static std::vector<std::string> s_scanned_paths;
 
+namespace {
+constexpr uint64_t kAnalogNavInitialDelayMs = 275;
+constexpr uint64_t kAnalogNavRepeatIntervalMs = 115;
+
+std::string NormalizeScannedPath(const std::filesystem::path& path) {
+  std::error_code ec;
+  std::filesystem::path normalized = std::filesystem::weakly_canonical(path, ec);
+  if (ec) {
+    normalized = path.lexically_normal();
+  }
+
+  std::string normalized_string = xe::path_to_utf8(normalized);
+  std::replace(normalized_string.begin(), normalized_string.end(), '/', '\\');
+  std::transform(normalized_string.begin(), normalized_string.end(),
+                 normalized_string.begin(), [](unsigned char c) {
+                   return static_cast<char>(std::tolower(c));
+                 });
+  return normalized_string;
+}
+
+bool HasScannedDirectory(const std::string& normalized_path) {
+  return std::find(s_scanned_paths.cbegin(), s_scanned_paths.cend(),
+                   normalized_path) != s_scanned_paths.cend();
+}
+
+bool AddGameEntry(const std::filesystem::path& path, const std::string& name) {
+  const std::string normalized_path = NormalizeScannedPath(path);
+  auto existing = std::find_if(
+      s_games.cbegin(), s_games.cend(), [&](const auto& game) {
+        return NormalizeScannedPath(std::get<0>(game)) == normalized_path;
+      });
+  if (existing != s_games.cend()) {
+    return false;
+  }
+
+  s_games.push_back({path.string(), name});
+  return true;
+}
+
+enum class AnalogNavDirection { kLeft = 0, kRight, kUp, kDown };
+
+struct AnalogNavRepeatState {
+  bool active = false;
+  bool repeating = false;
+  uint64_t start_time_ms = 0;
+  uint64_t last_emit_time_ms = 0;
+};
+
+std::array<AnalogNavRepeatState, 4> g_analog_nav_repeat_states;
+
+bool UpdateAnalogNavRepeatState(AnalogNavDirection direction,
+                                bool analog_active,
+                                uint64_t now_ms) {
+  auto& state = g_analog_nav_repeat_states[static_cast<size_t>(direction)];
+
+  if (!analog_active) {
+    state = {};
+    return false;
+  }
+
+  if (!state.active) {
+    state.active = true;
+    state.start_time_ms = now_ms;
+    state.last_emit_time_ms = now_ms;
+    return true;
+  }
+
+  if (!state.repeating) {
+    if (now_ms - state.start_time_ms >= kAnalogNavInitialDelayMs) {
+      state.repeating = true;
+      state.last_emit_time_ms = now_ms;
+      return true;
+    }
+    return false;
+  }
+
+  if (now_ms - state.last_emit_time_ms >= kAnalogNavRepeatIntervalMs) {
+    state.last_emit_time_ms = now_ms;
+    return true;
+  }
+
+  return false;
+}
+
+void ResetAnalogNavRepeatStates() {
+  for (auto& state : g_analog_nav_repeat_states) {
+    state = {};
+  }
+}
+
+}  // namespace
+
 void UWP::StartXenia() {
   app_context = std::make_unique<ui::UWPWindowedAppContext>();
   app = xe::ui::GetWindowedAppCreator()(*app_context.get());
-  
+
   xe::InitializeWin32App(app->GetName());
 
   if (app->OnInitialize()) {
@@ -86,40 +182,65 @@ void UWP::UpdateImGuiIO() {
   }
 
   auto driver = static_cast<xe::ui::UWPWindow*>(s_window)->xinputdriver();
-  if (!driver) return;
+  if (!driver) {
+    ResetAnalogNavRepeatStates();
+    return;
+  }
 
   hid::X_INPUT_STATE state;
-  if (driver->GetState(0, &state) != X_STATUS_SUCCESS) return;
+  if (driver->GetState(0, &state) != X_STATUS_SUCCESS) {
+    ResetAnalogNavRepeatStates();
+    return;
+  }
 
   const uint16_t buttons = state.gamepad.buttons;
 
   io.AddKeyEvent(ImGuiKey_GamepadFaceDown,   (buttons & X_INPUT_GAMEPAD_A) != 0);
   io.AddKeyEvent(ImGuiKey_GamepadFaceRight,  (buttons & X_INPUT_GAMEPAD_B) != 0);
-  io.AddKeyEvent(ImGuiKey_GamepadFaceLeft,   (buttons & X_INPUT_GAMEPAD_X) != 0);
+  io.AddKeyEvent(ImGuiKey_GamepadFaceLeft,   false);
+  io.AddKeyEvent(ImGuiKey_F12,               (buttons & X_INPUT_GAMEPAD_X) != 0);
   io.AddKeyEvent(ImGuiKey_GamepadFaceUp,     (buttons & X_INPUT_GAMEPAD_Y) != 0);
   io.AddKeyEvent(ImGuiKey_GamepadStart,      (buttons & X_INPUT_GAMEPAD_START) != 0);
+
   io.AddKeyEvent(ImGuiKey_GamepadBack,       (buttons & X_INPUT_GAMEPAD_BACK) != 0);
   io.AddKeyEvent(ImGuiKey_GamepadL1,         (buttons & X_INPUT_GAMEPAD_LEFT_SHOULDER) != 0);
   io.AddKeyEvent(ImGuiKey_GamepadR1,         (buttons & X_INPUT_GAMEPAD_RIGHT_SHOULDER) != 0);
   io.AddKeyEvent(ImGuiKey_GamepadL3,         (buttons & X_INPUT_GAMEPAD_LEFT_THUMB) != 0);
   io.AddKeyEvent(ImGuiKey_GamepadR3,         (buttons & X_INPUT_GAMEPAD_RIGHT_THUMB) != 0);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadLeft,   (buttons & X_INPUT_GAMEPAD_DPAD_LEFT) != 0);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadRight,  (buttons & X_INPUT_GAMEPAD_DPAD_RIGHT) != 0);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadUp,     (buttons & X_INPUT_GAMEPAD_DPAD_UP) != 0);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadDown,   (buttons & X_INPUT_GAMEPAD_DPAD_DOWN) != 0);
 
-  // Left stick — threshold at ~25% (8000/32767)
+  const int16_t kStickNavDeadzone = X_INPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+  const bool ls_left  = state.gamepad.thumb_lx <= -kStickNavDeadzone;
+  const bool ls_right = state.gamepad.thumb_lx >=  kStickNavDeadzone;
+  const bool ls_up    = state.gamepad.thumb_ly >=  kStickNavDeadzone;
+  const bool ls_down  = state.gamepad.thumb_ly <= -kStickNavDeadzone;
+  const uint64_t now_ms = Clock::QueryHostUptimeMillis();
+
+  const bool analog_nav_left =
+      UpdateAnalogNavRepeatState(AnalogNavDirection::kLeft, ls_left, now_ms);
+  const bool analog_nav_right =
+      UpdateAnalogNavRepeatState(AnalogNavDirection::kRight, ls_right, now_ms);
+  const bool analog_nav_up =
+      UpdateAnalogNavRepeatState(AnalogNavDirection::kUp, ls_up, now_ms);
+  const bool analog_nav_down =
+      UpdateAnalogNavRepeatState(AnalogNavDirection::kDown, ls_down, now_ms);
+
+  io.AddKeyEvent(ImGuiKey_GamepadDpadLeft,
+                 ((buttons & X_INPUT_GAMEPAD_DPAD_LEFT) != 0) ||
+                     analog_nav_left);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadRight,
+                 ((buttons & X_INPUT_GAMEPAD_DPAD_RIGHT) != 0) ||
+                     analog_nav_right);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadUp,
+                 ((buttons & X_INPUT_GAMEPAD_DPAD_UP) != 0) || analog_nav_up);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadDown,
+                 ((buttons & X_INPUT_GAMEPAD_DPAD_DOWN) != 0) ||
+                     analog_nav_down);
+
+  // Right stick still exposed for camera/mouse emulation
   constexpr float kStickDeadzone = 8000.0f / 32767.0f;
-  const float lx = state.gamepad.thumb_lx / 32767.0f;
-  const float ly = state.gamepad.thumb_ly / 32767.0f;
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft,  lx < -kStickDeadzone, lx < 0 ? -lx : 0.0f);
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, lx >  kStickDeadzone, lx > 0 ?  lx : 0.0f);
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp,    ly >  kStickDeadzone, ly > 0 ?  ly : 0.0f);
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown,  ly < -kStickDeadzone, ly < 0 ? -ly : 0.0f);
-
-  // Right stick
   const float rx = state.gamepad.thumb_rx / 32767.0f;
   const float ry = state.gamepad.thumb_ry / 32767.0f;
+
   io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickLeft,  rx < -kStickDeadzone, rx < 0 ? -rx : 0.0f);
   io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickRight, rx >  kStickDeadzone, rx > 0 ?  rx : 0.0f);
   io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickUp,    ry >  kStickDeadzone, ry > 0 ?  ry : 0.0f);
@@ -135,6 +256,17 @@ void UWP::UpdateImGuiIO() {
 
 void RecurseFolderForGames(std::string path) {
   try {
+    const std::string normalized_directory = NormalizeScannedPath(path);
+
+    if (HasScannedDirectory(normalized_directory)) {
+      return;
+    }
+    s_scanned_paths.push_back(normalized_directory);
+
+    std::filesystem::path loose_xex_path;
+    std::string loose_xex_name;
+    bool has_loose_xex = false;
+
     for (auto file : std::filesystem::directory_iterator(path)) {
       if (file.is_directory() && file.path().string() != path) {
         RecurseFolderForGames(file.path().string());
@@ -146,25 +278,31 @@ void RecurseFolderForGames(std::string path) {
       switch (xe::GetFileSignature(file.path())) {
         case xe::Emulator::FileSignatureType::XEX1:
         case xe::Emulator::FileSignatureType::XEX2: {
-          std::string filename = "default";
-          if (_stricmp(file.path().filename().string().c_str(),
-                       "default.xex") == 0) {
-            if (file.path().has_parent_path())
-              filename = file.path().parent_path().filename().string();
-          } else {
-            filename = file.path().stem().string();
+          const bool is_default_xex =
+              _stricmp(file.path().filename().string().c_str(),
+                       "default.xex") == 0;
+          if (!is_default_xex) {
+            break;
           }
 
-          s_games.push_back({file.path().string(), filename});
+          loose_xex_path = file.path();
+          if (file.path().has_parent_path()) {
+            loose_xex_name = file.path().parent_path().filename().string();
+          } else {
+            loose_xex_name = file.path().stem().string();
+          }
+          has_loose_xex = true;
           break;
         }
         case xe::Emulator::FileSignatureType::CON:
         case xe::Emulator::FileSignatureType::PIRS:
         case xe::Emulator::FileSignatureType::ZAR: {
           std::string filename = file.path().stem().string();
-          s_games.push_back({file.path().string(), filename});
+
+          AddGameEntry(file.path(), filename);
           break;
         }
+
         case xe::Emulator::FileSignatureType::LIVE: {
           std::ifstream in(file.path().string(), std::ios::binary);
 
@@ -179,13 +317,17 @@ void RecurseFolderForGames(std::string path) {
             if (c == 0) break;
           }
 
-          s_games.push_back({file.path().string(), data});
+          AddGameEntry(file.path(), data);
 
           in.close();
         }
         default:
           continue;
       }
+    }
+
+    if (has_loose_xex) {
+      AddGameEntry(loose_xex_path, loose_xex_name);
     }
   } catch (std::exception) {
     // This folder can't be opened.
@@ -195,6 +337,7 @@ void RecurseFolderForGames(std::string path) {
 void UWP::RefreshPaths() {
   s_paths.clear();
   s_games.clear();
+  s_scanned_paths.clear();
 
   RecurseFolderForGames(UWP::GetLocalCache());
 

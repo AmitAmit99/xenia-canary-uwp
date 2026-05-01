@@ -7,13 +7,32 @@
  ******************************************************************************
  */
 
+#include <vector>
+
 #include "xenia/vfs/devices/xcontent_devices/stfs_container_device.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/kernel/xam/content_manager.h"
 #include "xenia/vfs/devices/xcontent_devices/stfs_container_entry.h"
 
 namespace xe {
 namespace vfs {
+
+namespace {
+
+class BufferedMappedMemory : public MappedMemory {
+ public:
+  explicit BufferedMappedMemory(std::vector<uint8_t> buffer)
+      : MappedMemory(nullptr, 0), buffer_(std::move(buffer)) {
+    data_ = buffer_.data();
+    size_ = buffer_.size();
+  }
+
+ private:
+  std::vector<uint8_t> buffer_;
+};
+
+}  // namespace
 
 StfsContainerDevice::StfsContainerDevice(const std::string_view mount_path,
                                          const std::filesystem::path& host_path)
@@ -43,6 +62,24 @@ XContentContainerDevice::Result StfsContainerDevice::LoadHostFiles() {
   }
 
   data_ = MappedMemory::Open(host_path_, MappedMemory::Mode::kRead);
+#if XE_PLATFORM_WINRT
+  if (!data_) {
+    auto host_file = xe::filesystem::OpenFile(host_path_, "rb");
+    if (!host_file) {
+      return Result::kReadError;
+    }
+    const size_t host_size = static_cast<size_t>(std::filesystem::file_size(host_path_));
+    std::vector<uint8_t> buffered_data(host_size);
+    const size_t bytes_read =
+        fread(buffered_data.data(), 1, buffered_data.size(), host_file);
+    fclose(host_file);
+    if (bytes_read != buffered_data.size()) {
+      return Result::kReadError;
+    }
+    XELOGW("Falling back to buffered STFS read for {} on UWP.", host_path_);
+    data_ = std::make_unique<BufferedMappedMemory>(std::move(buffered_data));
+  }
+#endif
   if (!data_) {
     return Result::kOutOfMemory;
   }

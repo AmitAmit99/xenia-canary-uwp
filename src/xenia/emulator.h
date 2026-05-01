@@ -266,10 +266,9 @@ class Emulator {
   // Migrates data from content to content/xuid with respect to common data.
   X_STATUS DataMigration(const uint64_t xuid);
 
-  X_STATUS ProcessContentPackageHeader(const std::filesystem::path& path,
-                                       ContentInstallEntry& installation_info);
-
   // Extract content of package to content specific directory.
+  X_STATUS ProcessContentPackageHeader(const std::filesystem::path& path,
+                                     ContentInstallEntry& installation_info);
   X_STATUS InstallContentPackage(const std::filesystem::path& path,
                                  ContentInstallEntry& installation_info);
 

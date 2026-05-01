@@ -8,6 +8,10 @@
  */
 
 #include "xenia/kernel/xam/ui/gamercard_ui.h"
+
+#include <appmodel.h>
+
+#include "xenia/app/ui_text_effect_helpers.h"
 #include "xenia/base/png_utils.h"
 #include "xenia/ui/file_picker.h"
 
@@ -15,6 +19,78 @@ namespace xe {
 namespace kernel {
 namespace xam {
 namespace ui {
+
+namespace {
+
+bool IsPackagedAppProcess() {
+  UINT32 package_full_name_length = 0;
+  const LONG result = GetCurrentPackageFullName(&package_full_name_length, nullptr);
+  return result == ERROR_INSUFFICIENT_BUFFER;
+}
+
+constexpr float kUwpLeftColumnControlBaseAlignment = 88.0f;
+constexpr float kUwpLeftColumnControlWidthScale = 0.7f;
+constexpr float kUwpLeftColumnWidth = 287.0f;
+constexpr float kUwpFooterButtonWidth = 120.0f;
+constexpr float kUwpFooterButtonSpacing = 12.0f;
+
+float GetUwpLeftColumnControlAlignment(const ImGuiIO& io) {
+  const float ux = io.DisplaySize.x / 1024.0f;
+  return kUwpLeftColumnControlBaseAlignment + (30.0f * ux);
+}
+
+float GetUwpUniformControlWidth(const ImGuiIO& io) {
+  const float ux = io.DisplaySize.x / 1024.0f;
+  return (235.0f * ux) * kUwpLeftColumnControlWidthScale;
+}
+
+float GetUwpGameSettingsAlignment(const ImGuiIO& io) {
+  const float ux = io.DisplaySize.x / 1024.0f;
+  return 140.0f + (48.0f * ux);
+}
+
+float GetUwpGameSettingsSeparatorWidth(const ImGuiIO& io) {
+  return GetUwpGameSettingsAlignment(io) + GetUwpUniformControlWidth(io);
+}
+
+float GetUwpLeftSettingsSeparatorWidth(const ImGuiIO& io) {
+  return kUwpLeftColumnWidth * (io.DisplaySize.x / 1024.0f);
+}
+
+void DrawUwpSeparatorText(const char* text, float width) {
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const ImVec2 pos = ImGui::GetCursorScreenPos();
+  const ImVec2 text_size = ImGui::CalcTextSize(text, nullptr, true);
+  const float separator_width = std::max(width, text_size.x + style.ItemSpacing.x);
+  const float height =
+      std::max(ImGui::GetTextLineHeight(), text_size.y + style.FramePadding.y);
+  const float text_x = pos.x + style.ItemSpacing.x * 0.5f;
+  const float text_y = pos.y + (height - text_size.y) * 0.5f;
+  const float line_y = pos.y + height * 0.5f;
+  const float left_line_end = text_x - (style.ItemSpacing.x * 0.25f);
+  const float right_line_start = text_x + text_size.x + style.ItemSpacing.x;
+  const float right_line_end = pos.x + separator_width;
+
+  ImGui::Dummy(ImVec2(separator_width, height));
+
+  ImDrawList* draw_list = ImGui::GetWindowDrawList();
+  const ImU32 separator_color = ImGui::GetColorU32(ImGuiCol_Separator);
+  if (left_line_end > pos.x) {
+    draw_list->AddLine(ImVec2(pos.x, line_y), ImVec2(left_line_end, line_y),
+                       separator_color, 1.0f);
+  }
+  if (right_line_end > right_line_start) {
+    draw_list->AddLine(ImVec2(right_line_start, line_y),
+                       ImVec2(right_line_end, line_y), separator_color, 1.0f);
+  }
+
+  xe::app::DrawTextWithConfiguredEffect(draw_list, ImGui::GetFont(),
+                                        ImGui::GetFontSize(),
+                                        ImVec2(text_x, text_y),
+                                        ImGui::GetColorU32(ImGuiCol_Text), text);
+}
+
+}  // namespace
 
 constexpr float leftSideTextObjectAlignment = 100.f;
 constexpr float rightSideTextObjectAlignment = 140.f;
@@ -319,7 +395,10 @@ void GamercardUI::DrawInputTextBox(
 void GamercardUI::DrawSettingComboBox(UserSettingId setting_id,
                                       std::string label,
                                       const char* const items[], int item_count,
-                                      float alignment) {
+                                      float alignment, float label_offset) {
+  if (label_offset != 0.0f) {
+    ImGui::SetCursorPosX(std::max(0.0f, ImGui::GetCursorPosX() + label_offset));
+  }
   ImGui::Text("%s:", label.c_str());
   ImGui::SameLine(alignment);
 
@@ -367,12 +446,22 @@ void GamercardUI::SelectNewIcon() {
   }
 }
 
-void GamercardUI::DrawBaseSettings(ImGuiIO& io) {
-  ImGui::SeparatorText("Profile Settings");
+void GamercardUI::DrawBaseSettings(ImGuiIO& io, bool draw_header) {
+  if (draw_header) {
+    ImGui::SeparatorText("Profile Settings");
+  }
+  const bool use_uwp_layout = IsPackagedAppProcess() && !draw_header;
+  const float profile_settings_alignment =
+      use_uwp_layout ? GetUwpLeftColumnControlAlignment(io)
+                      : leftSideTextObjectAlignment;
+  const float profile_settings_item_width =
+      use_uwp_layout ? GetUwpUniformControlWidth(io)
+                      : ImGui::CalcItemWidth();
+  ImGui::PushItemWidth(profile_settings_item_width);
 
   DrawInputTextBox(
       "Gamertag:", gamercardValues_.gamertag,
-      std::size(gamercardValues_.gamertag), leftSideTextObjectAlignment,
+      std::size(gamercardValues_.gamertag), profile_settings_alignment,
       [](std::span<const char> data) {
         return ProfileManager::IsGamertagValid(std::string(data.data()));
       });
@@ -398,19 +487,19 @@ void GamercardUI::DrawBaseSettings(ImGuiIO& io) {
   }
 
   ImGui::Text("Gamer Name:");
-  ImGui::SameLine(leftSideTextObjectAlignment);
+  ImGui::SameLine(profile_settings_alignment);
   ImGui::InputText("###GamerName", gamercardValues_.gamer_name,
                    static_cast<int>(std::size(gamercardValues_.gamer_name)),
                    ImGuiInputTextFlags_ReadOnly);
 
   ImGui::Text("Gamer Motto:");
-  ImGui::SameLine(leftSideTextObjectAlignment);
+  ImGui::SameLine(profile_settings_alignment);
   ImGui::InputText("###GamerMotto", gamercardValues_.gamer_motto,
                    static_cast<int>(std::size(gamercardValues_.gamer_motto)),
                    ImGuiInputTextFlags_ReadOnly);
 
   ImGui::Text("Gamer Bio:");
-  ImGui::SameLine(leftSideTextObjectAlignment);
+  ImGui::SameLine(profile_settings_alignment);
   ImGui::InputTextMultiline(
       "###GamerBio", gamercardValues_.gamer_bio,
       static_cast<int>(std::size(gamercardValues_.gamer_bio)), ImVec2(),
@@ -419,32 +508,41 @@ void GamercardUI::DrawBaseSettings(ImGuiIO& io) {
   ImGui::EndDisabled();
 
   ImGui::Text("Language:");
-  ImGui::SameLine(leftSideTextObjectAlignment);
+  ImGui::SameLine(profile_settings_alignment);
   ImGui::Combo("###Language",
                reinterpret_cast<int*>(&gamercardValues_.language),
                XLanguageName, static_cast<int>(std::size(XLanguageName)));
 
   ImGui::Text("Country:");
-  ImGui::SameLine(leftSideTextObjectAlignment);
+  ImGui::SameLine(profile_settings_alignment);
   ImGui::Combo("###Country", reinterpret_cast<int*>(&gamercardValues_.country),
                XOnlineCountry, static_cast<int>(std::size(XOnlineCountry)));
+  ImGui::PopItemWidth();
 }
 
 void GamercardUI::DrawOnlineSettings(ImGuiIO& io) {
   ImGui::SeparatorText("Online Profile Settings");
+  const bool use_uwp_layout = IsPackagedAppProcess();
+  const float online_settings_alignment =
+      use_uwp_layout ? GetUwpLeftColumnControlAlignment(io)
+                      : leftSideTextObjectAlignment;
+  const float online_settings_item_width =
+      use_uwp_layout ? GetUwpUniformControlWidth(io)
+                      : ImGui::CalcItemWidth();
+  ImGui::PushItemWidth(online_settings_item_width);
 
   if (ImGui::Checkbox("Live Enabled", &gamercardValues_.is_live_enabled)) {
     // TODO: Add checks to decide if online XUID generation is required
   }
 
   ImGui::Text("Online XUID:");
-  ImGui::SameLine(leftSideTextObjectAlignment);
+  ImGui::SameLine(online_settings_alignment);
   ImGui::InputText("###OnlineXUID", gamercardValues_.online_xuid,
                    std::size(gamercardValues_.online_xuid),
                    ImGuiInputTextFlags_ReadOnly);
 
   ImGui::Text("Online Domain:");
-  ImGui::SameLine(leftSideTextObjectAlignment);
+  ImGui::SameLine(online_settings_alignment);
   ImGui::InputText("###OnlineDomain", gamercardValues_.online_domain,
                    std::size(gamercardValues_.online_domain),
                    ImGuiInputTextFlags_ReadOnly);
@@ -452,96 +550,320 @@ void GamercardUI::DrawOnlineSettings(ImGuiIO& io) {
   ImGui::BeginDisabled(!gamercardValues_.is_live_enabled);
   DrawSettingComboBox(
       UserSettingId::XPROFILE_GAMERCARD_ZONE, "Gamer Zone", XGamerzoneName,
-      static_cast<int>(std::size(XGamerzoneName)), leftSideTextObjectAlignment);
+      static_cast<int>(std::size(XGamerzoneName)), online_settings_alignment);
 
   ImGui::Text("Subscription Tier:");
-  ImGui::SameLine(leftSideTextObjectAlignment);
+  ImGui::SameLine(online_settings_alignment);
   ImGui::Combo(
       "###Subscription",
       reinterpret_cast<int*>(&gamercardValues_.account_subscription_tier),
       AccountSubscription, static_cast<int>(std::size(AccountSubscription)));
 
   ImGui::EndDisabled();
+  ImGui::PopItemWidth();
 }
 
-void GamercardUI::DrawGpdSettings(ImGuiIO& io) {
-  ImGui::SeparatorText("Game Settings");
+void GamercardUI::DrawGpdSettings(ImGuiIO& io, bool draw_header) {
+  if (draw_header) {
+    ImGui::SeparatorText("Game Settings");
+  }
+  const bool use_uwp_layout = IsPackagedAppProcess() && !draw_header;
+  const float game_settings_alignment =
+      use_uwp_layout ? GetUwpGameSettingsAlignment(io)
+                      : rightSideTextObjectAlignment;
+  const float game_settings_separator_width =
+      use_uwp_layout ? GetUwpGameSettingsSeparatorWidth(io) : 0.0f;
+  if (use_uwp_layout) {
+    ImGui::PushItemWidth(GetUwpUniformControlWidth(io));
+  }
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_DIFFICULTY, "Difficulty",
                       GamerDifficultyOptions,
                       static_cast<int>(std::size(GamerDifficultyOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
   DrawSettingComboBox(UserSettingId::XPROFILE_OPTION_CONTROLLER_VIBRATION,
                       "Controller Vibration", ControllerVibrationOptions,
                       static_cast<int>(std::size(ControllerVibrationOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_CONTROL_SENSITIVITY,
                       "Control Sensitivity", ControlSensitivityOptions,
                       static_cast<int>(std::size(ControlSensitivityOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_PREFERRED_COLOR_FIRST,
                       "Favorite Color (First)", PreferredColorOptions,
                       static_cast<int>(std::size(PreferredColorOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_PREFERRED_COLOR_SECOND,
                       "Favorite Color (Second)", PreferredColorOptions,
                       static_cast<int>(std::size(PreferredColorOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
-  ImGui::SeparatorText("Action Games Settings");
+  if (use_uwp_layout) {
+    DrawUwpSeparatorText("Action Games Settings",
+                         game_settings_separator_width);
+  } else {
+    ImGui::SeparatorText("Action Games Settings");
+  }
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_YAXIS_INVERSION,
                       "Y-axis Inversion", YAxisInversionOptions,
                       static_cast<int>(std::size(YAxisInversionOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_ACTION_AUTO_AIM, "Auto Aim",
                       AutoAimOptions,
                       static_cast<int>(std::size(AutoAimOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_ACTION_AUTO_CENTER,
                       "Auto Center", AutoCenterOptions,
                       static_cast<int>(std::size(AutoCenterOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_ACTION_MOVEMENT_CONTROL,
                       "Movement Control", MovementControlOptions,
                       static_cast<int>(std::size(MovementControlOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
-  ImGui::SeparatorText("Racing Games Settings");
+  if (use_uwp_layout) {
+    DrawUwpSeparatorText("Racing Games Settings",
+                         game_settings_separator_width);
+  } else {
+    ImGui::SeparatorText("Racing Games Settings");
+  }
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_RACE_TRANSMISSION,
                       "Transmission", TransmissionOptions,
                       static_cast<int>(std::size(TransmissionOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_RACE_CAMERA_LOCATION,
                       "Camera Location", CameraLocationOptions,
                       static_cast<int>(std::size(CameraLocationOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_RACE_BRAKE_CONTROL,
                       "Brake Control", BrakeControlOptions,
                       static_cast<int>(std::size(BrakeControlOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
 
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_RACE_ACCELERATOR_CONTROL,
                       "Accelerator Control", AcceleratorControlOptions,
                       static_cast<int>(std::size(AcceleratorControlOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
   DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_TYPE, "Gamer Type",
                       GamerTypeOptions,
                       static_cast<int>(std::size(GamerTypeOptions)),
-                      rightSideTextObjectAlignment);
+                      game_settings_alignment);
+  if (use_uwp_layout) {
+    ImGui::PopItemWidth();
+  }
 }
 
 void GamercardUI::OnDraw(ImGuiIO& io) {
+  if (IsPackagedAppProcess()) {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    std::string gamercard_title = gamercardOriginalValues_.gamertag[0]
+                                     ? fmt::format("{} - Gamercard",
+                                                   std::string(gamercardOriginalValues_.gamertag))
+                                     : std::string("Gamercard");
+    static std::shared_ptr<xe::ui::ImmediateTexture> guide_bg_tex = nullptr;
+    static std::shared_ptr<xe::ui::ImmediateTexture> button_a_tex = nullptr;
+    static std::shared_ptr<xe::ui::ImmediateTexture> button_b_tex = nullptr;
+    static std::string cached_guide_asset_path;
+    const std::string guide_asset_path =
+        xe::app::ResolveConfiguredGuideBackgroundAssetPath(true);
+    if (!guide_bg_tex || cached_guide_asset_path != guide_asset_path) {
+      guide_bg_tex = xe::app::LoadConfiguredGuideBackgroundTexture(
+          imgui_drawer(), true);
+      cached_guide_asset_path = guide_asset_path;
+    }
+    if (!button_a_tex) {
+      button_a_tex = xe::app::LoadButtonTexture(imgui_drawer(), 'A');
+    }
+    if (!button_b_tex) {
+      button_b_tex = xe::app::LoadButtonTexture(imgui_drawer(), 'B');
+    }
+
+    const ImVec2 raw_panel_size =
+        xe::app::GetGuidePanelSize(guide_bg_tex, io.DisplaySize.y);
+    const ImVec2 panel_size(std::min(viewport->Size.x, raw_panel_size.x),
+                            raw_panel_size.y);
+    const ImVec2 panel_padding = xe::app::GetGuidePanelPadding();
+    const float ux = io.DisplaySize.x / 1024.0f;
+    const float uy = io.DisplaySize.y / 576.0f;
+    const float footer_reserved_height = 110.0f * uy;
+    const ImVec2 overlay_min = viewport->Pos;
+    const ImVec2 overlay_max(overlay_min.x + panel_size.x,
+                             overlay_min.y + panel_size.y);
+
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    if (!has_opened_) {
+      ImGui::SetNextWindowFocus();
+      has_opened_ = true;
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+    const ImGuiWindowFlags window_flags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar;
+    const std::string window_name =
+        fmt::format("##gamercard_overlay_{}", GetWindowId());
+    if (!ImGui::Begin(window_name.c_str(), nullptr, window_flags)) {
+      ImGui::End();
+      ImGui::PopStyleColor();
+      ImGui::PopStyleVar(3);
+      return;
+    }
+
+    ImDrawList* root_draw_list = ImGui::GetWindowDrawList();
+    const ImVec2 screen_min = viewport->Pos;
+    const ImVec2 screen_max(screen_min.x + viewport->Size.x,
+                            screen_min.y + viewport->Size.y);
+    root_draw_list->AddRectFilled(
+        screen_min, screen_max,
+        ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 0.55f)));
+    xe::app::DrawGuidePanelBackground(root_draw_list, guide_bg_tex, overlay_min,
+                                      overlay_max);
+    const xe::app::OverlayHeaderLayout header_layout =
+        xe::app::DrawOverlayHeader(root_draw_list, overlay_min, panel_size,
+                                   panel_padding, ux, uy, gamercard_title.c_str());
+
+    bool dialog_open = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      dialog_open = false;
+    }
+
+    const float content_left = overlay_min.x + panel_padding.x + (18.0f * ux) - (30.0f * ux);
+    const float content_top =
+        header_layout.position.y + header_layout.font_size + (52.0f * uy) - (30.0f * uy);
+    const float content_width = std::max(320.0f * ux,
+                                         panel_size.x - panel_padding.x * 2.0f -
+                                             (36.0f * ux) + (30.0f * ux));
+    const ImGuiTableFlags section_table_flags =
+        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX |
+        ImGuiTableFlags_NoPadInnerX;
+
+    ImGui::SetCursorScreenPos(ImVec2(content_left, content_top));
+    if (ImGui::BeginTable("###GamercardHeaderTable", 2,
+                          section_table_flags,
+                          ImVec2(content_width - (12.0f * ux), 0.0f))) {
+      ImGui::TableSetupColumn("###HeaderLeftColumn",
+                              ImGuiTableColumnFlags_WidthFixed,
+                              kUwpLeftColumnWidth * ux);
+      ImGui::TableSetupColumn("###HeaderRightColumn",
+                              ImGuiTableColumnFlags_WidthStretch);
+
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      DrawUwpSeparatorText("Profile Settings",
+                           GetUwpLeftSettingsSeparatorWidth(io));
+      ImGui::TableNextColumn();
+      DrawUwpSeparatorText("Game Settings", GetUwpGameSettingsSeparatorWidth(io));
+
+      ImGui::EndTable();
+    }
+
+    const float scroll_top = ImGui::GetCursorScreenPos().y;
+    const float content_height = std::max(
+        180.0f * uy,
+        panel_size.y - (scroll_top - overlay_min.y) - footer_reserved_height -
+            (50.0f * uy));
+
+    ImGui::SetCursorScreenPos(ImVec2(content_left, scroll_top));
+    ImGui::PushItemWidth(235.0f * ux);
+    if (ImGui::BeginChild("##gamercard_overlay_scroll",
+                          ImVec2(content_width, content_height), true,
+                          ImGuiWindowFlags_NoScrollbar)) {
+      if (ImGui::BeginTable("###GamercardTable", 2,
+                            section_table_flags,
+                            ImVec2(content_width - (12.0f * ux), 0.0f))) {
+        ImGui::TableSetupColumn("###LeftColumn",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                kUwpLeftColumnWidth * ux);
+        ImGui::TableSetupColumn("###RightColumn",
+                                ImGuiTableColumnFlags_WidthStretch);
+
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        DrawBaseSettings(io, false);
+        DrawOnlineSettings(io);
+        ImGui::TableNextColumn();
+        DrawGpdSettings(io, false);
+
+        ImGui::EndTable();
+      }
+    }
+    ImGui::EndChild();
+    ImGui::PopItemWidth();
+
+    const bool is_valid_gamertag =
+        ProfileManager::IsGamertagValid(std::string(gamercardValues_.gamertag));
+    const ImVec2 button_size(kUwpFooterButtonWidth * ux, 0.0f);
+    const float button_y = ImGui::GetCursorScreenPos().y + (10.0f * uy);
+    const float save_button_x = content_left;
+    const float cancel_button_x =
+        save_button_x + button_size.x + (kUwpFooterButtonSpacing * ux);
+
+    ImGui::SetCursorScreenPos(ImVec2(save_button_x, button_y));
+    ImGui::BeginDisabled(!is_valid_gamertag);
+    if (xe::app::DrawTextEffectButton("Save", button_size)) {
+      SaveProfileIcon();
+      SaveSettings();
+      SaveAccountData();
+      dialog_open = false;
+    }
+    if (!is_valid_gamertag &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) {
+      ImGui::SetTooltip("Saving disabled! Invalid gamertag provided.");
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SetCursorScreenPos(ImVec2(cancel_button_x, button_y));
+    if (xe::app::DrawTextEffectButton("Cancel", button_size)) {
+      dialog_open = false;
+    }
+
+    const float footer_text_size = 13.5f * uy;
+    const float footer_icon_size = 15.6f * uy;
+    const float footer_spacing_y = 17.0f * uy;
+    const float footer_select_y = overlay_max.y - (32.0f * uy);
+    const float footer_back_y = footer_select_y - footer_spacing_y;
+    const float footer_base_x = overlay_min.x + panel_size.x * 0.9f;
+    const float footer_back_text_x = footer_base_x - (70.0f * ux);
+    const float footer_back_icon_offset = 35.0f * ux;
+    const float footer_select_text_x = footer_base_x - (60.0f * ux);
+    const float footer_select_icon_offset = 42.0f * ux;
+    xe::app::DrawFooterPrompt(root_draw_list, button_b_tex, footer_text_size,
+                              footer_icon_size, "Back", footer_back_y,
+                              footer_back_text_x, footer_back_icon_offset);
+    xe::app::DrawFooterPrompt(root_draw_list, button_a_tex, footer_text_size,
+                              footer_icon_size, "Select", footer_select_y,
+                              footer_select_text_x, footer_select_icon_offset);
+
+    if (!dialog_open) {
+      Close();
+      ImGui::End();
+      ImGui::PopStyleColor();
+      ImGui::PopStyleVar(3);
+      return;
+    }
+
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
+    return;
+  }
+
   if (!has_opened_) {
     ImGui::OpenPopup(fmt::format("{}'s Gamercard",
                                  std::string(gamercardOriginalValues_.gamertag))

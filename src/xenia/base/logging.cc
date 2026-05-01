@@ -58,10 +58,17 @@ DEFINE_uint32(log_mask, 0,
               "Kernel = 1, Apu = 2, Cpu = 4, Gpu = 8.",
               "Logging");
 
+#if XE_PLATFORM_WINRT
+DEFINE_int32(
+    log_level, 2,
+    "Maximum level to be logged. (0=error, 1=warning, 2=info, 3=debug)",
+    "Logging");
+#else
 DEFINE_int32(
     log_level, -1,
     "Maximum level to be logged. (0=error, 1=warning, 2=info, 3=debug)",
     "Logging");
+#endif
 
 namespace dp = disruptorplus;
 using namespace xe::literals;
@@ -403,7 +410,6 @@ class Logger {
   void AppendLine(uint32_t thread_id, const char prefix_char,
                   const char* buffer_data, size_t buffer_length,
                   bool terminate = false) {
-    return;
     size_t count = BlockCount(sizeof(LogLine) + buffer_length);
 
     auto range = claim_strategy_.claim(count);
@@ -438,7 +444,7 @@ void InitializeLogging(const std::string_view app_name) {
   if (cvars::log_to_logcat) {
     logger_->AddLogSink(std::make_unique<AndroidLogSink>(app_name));
   }
-//#else // if UWP, we should fix this at some point, for now it's annoying to get a UWP path to here
+#else
   FILE* log_file = nullptr;
   if (cvars::log_file.empty()) {
     // Default to app name.

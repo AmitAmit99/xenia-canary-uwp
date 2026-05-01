@@ -63,6 +63,7 @@ class MessageBoxDialog : public XamDialog {
 
  private:
   bool has_opened_ = false;
+  bool focus_requested_ = false;
   std::string title_;
   std::string description_;
   std::vector<std::string> buttons_;
@@ -118,7 +119,8 @@ bool xeDrawProfileContent(xe::ui::ImGuiDrawer* imgui_drawer,
                           const xe::ui::ImmediateTexture* profile_icon,
                           std::function<bool()> context_menu,
                           std::function<void()> on_profile_change,
-                          uint64_t* selected_xuid);
+                          uint64_t* selected_xuid,
+                          bool request_focus = false);
 
 }  // namespace xam
 }  // namespace kernel

@@ -21,6 +21,10 @@
 DECLARE_bool(gpu_allow_invalid_upload_range);
 DECLARE_bool(tiled_shared_memory);
 
+DEFINE_bool(d3d12_enable_tiled_shared_memory, false,
+            "Use D3D12 reserved resources for shared memory emulation for UWP/Xbox.",
+            "D3D12");
+
 namespace xe {
 namespace gpu {
 namespace d3d12 {
@@ -46,7 +50,7 @@ bool D3D12SharedMemory::Initialize() {
   ui::d3d12::util::FillBufferResourceDesc(
       buffer_desc, kBufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
   buffer_state_ = D3D12_RESOURCE_STATE_COPY_DEST;
-  if (cvars::tiled_shared_memory &&
+  if (cvars::d3d12_enable_tiled_shared_memory && cvars::tiled_shared_memory &&
       provider.GetTiledResourcesTier() !=
           D3D12_TILED_RESOURCES_TIER_NOT_SUPPORTED &&
       !provider.GetGraphicsAnalysis()) {
@@ -422,8 +426,8 @@ bool D3D12SharedMemory::UploadRanges(
       const uint32_t range_start_addr = upload_range_start << page_size_log2();
       const uint32_t upload_range_last_page =
           upload_range_start + upload_range_length - 1;
-      const uint32_t range_end_addr = upload_range_last_page
-                                      << page_size_log2();
+      const uint32_t range_end_addr =
+          upload_range_last_page << page_size_log2();
 
       const memory::PageAccess start_access =
           memory().GetPhysicalHeap()->QueryRangeAccess(range_start_addr,

@@ -11,7 +11,7 @@ Xenia Canary UWP is an unofficial fork of Xenia Canary to support UWP and the Xb
 Xenia Canary is an experimental fork of the Xenia emulator. For more information, see the
 [Xenia Canary wiki](https://github.com/xenia-canary/xenia-canary/wiki).
 
-Come chat with us about **emulator-related topics** on [Discord](https://discord.gg/Q9mxZf9).
+Come Join the Xbox Emulation Hub Discord server for help, support and general dissusion: https://discord.gg/WCmxvvxHqu
 For developer chat join `#dev` but stay on topic. Lurking is not only fine, but encouraged!
 Please check the [FAQ](https://github.com/xenia-canary/xenia-canary/wiki/FAQ) page before asking questions.
 We've got jobs/lives/etc, so don't expect instant answers.

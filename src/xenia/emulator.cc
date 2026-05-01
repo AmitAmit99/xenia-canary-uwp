@@ -863,6 +863,20 @@ X_STATUS Emulator::InstallContentPackage(
     const std::filesystem::path& path, ContentInstallEntry& installation_info) {
   installation_info.installation_state_ = InstallState::preparing;
 
+  // Ensure installation paths are populated from the package header.
+  // Without this, data_installation_path_ is empty and files get dumped
+  // loosely into content_root() instead of the correct
+  // {xuid}/{title_id}/{content_type}/{filename} hierarchy.
+  if (installation_info.data_installation_path_.empty()) {
+    X_STATUS header_result =
+        ProcessContentPackageHeader(path, installation_info);
+    if (XFAILED(header_result)) {
+      installation_info.installation_state_ = InstallState::failed;
+      return header_result;
+    }
+    installation_info.installation_state_ = InstallState::preparing;
+  }
+
   std::unique_ptr<vfs::XContentContainerDevice> device =
       vfs::XContentContainerDevice::CreateContentDevice("", path);
 
@@ -1330,6 +1344,11 @@ void Emulator::WaitUntilExit() {
   while (true) {
     if (main_thread_) {
       xe::threading::Wait(main_thread_->thread(), false);
+      main_thread_ = nullptr;
+      title_id_ = std::nullopt;
+      title_name_.clear();
+      title_version_.clear();
+      on_terminate();
     }
 
     if (restoring_) {

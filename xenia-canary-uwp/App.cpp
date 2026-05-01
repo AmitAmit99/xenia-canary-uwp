@@ -18,6 +18,7 @@
 #include <winrt/Windows.UI.Composition.h>
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.UI.Input.h>
+#include <winrt/Windows.UI.ViewManagement.h>
 #include <winrt/windows.graphics.display.core.h>
 
 #include <Gamingdeviceinformation.h>
@@ -153,8 +154,15 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
           UWP::SetAutomaticLaunch(gamePath);
         }
 
+        auto appView = winrt::Windows::UI::ViewManagement::
+            ApplicationView::GetForCurrentView();
+        appView.PreferredLaunchWindowingMode(
+            winrt::Windows::UI::ViewManagement::
+                ApplicationViewWindowingMode::FullScreen);
+
         CoreWindow window = CoreWindow::GetForCurrentThread();
         window.Activate();
+        appView.TryEnterFullScreenMode();
     }
 
     void OnCharacterReceived(

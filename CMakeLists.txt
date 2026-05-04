@@ -37,6 +37,10 @@ message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_T
 option(XENIA_BUILD_TESTS "Build test suites" OFF)
 option(XENIA_BUILD_MISC "Build misc subprojects (trace viewers, shader compiler, vfs-dump, demos)" OFF)
 
+# Toggle profiler
+add_compile_definitions(XE_OPTION_PROFILING=1)
+add_compile_definitions(XE_OPTION_PROFILING_UI=1)
+
 if(XENIA_BUILD_TESTS)
   enable_testing()
   include(${PROJECT_SOURCE_DIR}/third_party/catch/contrib/Catch.cmake)

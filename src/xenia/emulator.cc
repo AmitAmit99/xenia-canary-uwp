@@ -1299,11 +1299,12 @@ bool Emulator::ExceptionCallback(Exception* ex) {
   if (ex->code() == Exception::Code::kAccessViolation) {
     const char* op_str = "unknown";
     if (ex->access_violation_operation() ==
-        Exception::AccessViolationOperation::kRead)
+        Exception::AccessViolationOperation::kRead) {
       op_str = "read";
-    else if (ex->access_violation_operation() ==
-             Exception::AccessViolationOperation::kWrite)
+    } else if (ex->access_violation_operation() ==
+               Exception::AccessViolationOperation::kWrite) {
       op_str = "write";
+    }
     crash_msg.append(fmt::format("Access Violation: {} at 0x{:016X}\n", op_str,
                                  ex->fault_address()));
   } else if (ex->code() == Exception::Code::kIllegalInstruction) {

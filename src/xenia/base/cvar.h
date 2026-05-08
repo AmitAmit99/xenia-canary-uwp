@@ -205,7 +205,9 @@ ConfigVar<T>::ConfigVar(const char* name, T* default_value,
 
 template <class T>
 void CommandVar<T>::UpdateValue() {
-  if (commandline_value_) return SetValue(*commandline_value_);
+  if (commandline_value_) {
+    return SetValue(*commandline_value_);
+  }
   return SetValue(default_value_);
 }
 template <class T>
@@ -213,8 +215,12 @@ void ConfigVar<T>::UpdateValue() {
   if (this->commandline_value_) {
     return this->SetValue(*this->commandline_value_);
   }
-  if (game_config_value_) return this->SetValue(*game_config_value_);
-  if (config_value_) return this->SetValue(*config_value_);
+  if (game_config_value_) {
+    return this->SetValue(*game_config_value_);
+  }
+  if (config_value_) {
+    return this->SetValue(*config_value_);
+  }
   return this->SetValue(this->default_value_);
 }
 template <class T>
@@ -268,7 +274,9 @@ bool ConfigVar<T>::is_transient() const {
 }
 template <class T>
 std::string ConfigVar<T>::config_value() const {
-  if (config_value_) return this->ToString(*config_value_);
+  if (config_value_) {
+    return this->ToString(*config_value_);
+  }
   return this->ToString(this->default_value_);
 }
 template <class T>

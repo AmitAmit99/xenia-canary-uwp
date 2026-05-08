@@ -154,8 +154,9 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
 
             // If VSYNC is enabled, but frames are not limited,
             // lock framerate at default value of 60
-            if (normalized_framerate_limit == 0 && cvars::vsync)
+            if (normalized_framerate_limit == 0 && cvars::vsync) {
               normalized_framerate_limit = 60;
+            }
 
             const double vsync_duration_d =
                 cvars::vsync

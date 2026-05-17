@@ -12,6 +12,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
+#include "xenia/kernel/util/xfiletime.h"
 #include "xenia/kernel/xam/xam_private.h"
 #include "xenia/kernel/xenumerator.h"
 #include "xenia/kernel/xthread.h"
@@ -456,9 +457,9 @@ dword_result_t XamGetLocaleDateFormat_entry(dword_t locale) {
 
 DECLARE_XAM_EXPORT1(XamGetLocaleDateFormat, kLocale, kImplemented);
 
-void XamFormatDateString_entry(dword_t locale_format, qword_t filetime,
-                               lpvoid_t output_buffer, dword_t output_count) {
-  output_buffer.Zero(output_count * sizeof(char16_t));
+void XFormatDateString(uint64_t filetime, uint32_t buffer_address,
+                       uint32_t buffer_size) {
+  auto buffer = kernel_memory()->TranslateVirtual<char16_t*>(buffer_address);
 
   auto tp = xe::chrono::WinSystemClock::to_sys(
       xe::chrono::WinSystemClock::from_file_time(filetime));
@@ -469,14 +470,25 @@ void XamFormatDateString_entry(dword_t locale_format, qword_t filetime,
                          static_cast<unsigned>(year_month_day.month()),
                          static_cast<unsigned>(year_month_day.day()),
                          static_cast<int>(year_month_day.year()));
-  xe::string_util::copy_and_swap_truncating(output_buffer.as<char16_t*>(), str,
-                                            output_count);
+  xe::string_util::copy_and_swap_truncating(buffer, str, buffer_size);
+}
+
+void XamFormatDateString_entry(dword_t locale_format, qword_t filetime,
+                               lpvoid_t output_buffer, dword_t output_count,
+                               const ppc_context_t& ctx) {
+  // There is a different definition between dashboards.
+  // New dashboards do not have first param and everyting is shifted.
+  if (X_FILETIME(filetime).is_valid()) {
+    XFormatDateString(filetime, output_buffer.guest_address(), output_count);
+  } else {
+    XFormatDateString(ctx->r[3], ctx->r[4], ctx->r[5]);
+  }
 }
 DECLARE_XAM_EXPORT1(XamFormatDateString, kNone, kImplemented);
 
-void XamFormatTimeString_entry(dword_t user_index, qword_t filetime,
-                               lpvoid_t output_buffer, dword_t output_count) {
-  output_buffer.Zero(output_count * sizeof(char16_t));
+void XFormatTimeString(uint64_t filetime, uint32_t buffer_address,
+                       uint32_t buffer_size) {
+  auto buffer = kernel_memory()->TranslateVirtual<char16_t*>(buffer_address);
 
   auto tp = xe::chrono::WinSystemClock::to_sys(
       xe::chrono::WinSystemClock::from_file_time(filetime));
@@ -485,8 +497,19 @@ void XamFormatTimeString_entry(dword_t user_index, qword_t filetime,
 
   auto str = fmt::format(u"{:02d}:{:02d}", time.hours().count(),
                          time.minutes().count());
-  xe::string_util::copy_and_swap_truncating(output_buffer.as<char16_t*>(), str,
-                                            output_count);
+  xe::string_util::copy_and_swap_truncating(buffer, str, buffer_size);
+}
+
+void XamFormatTimeString_entry(dword_t user_index, qword_t filetime,
+                               lpvoid_t output_buffer, dword_t output_count,
+                               const ppc_context_t& ctx) {
+  // There is a different definition between dashboards.
+  // New dashboards do not have first param and everyting is shifted.
+  if (X_FILETIME(filetime).is_valid()) {
+    XFormatTimeString(filetime, output_buffer.guest_address(), output_count);
+  } else {
+    XFormatTimeString(ctx->r[3], ctx->r[4], ctx->r[5]);
+  }
 }
 DECLARE_XAM_EXPORT1(XamFormatTimeString, kNone, kImplemented);
 

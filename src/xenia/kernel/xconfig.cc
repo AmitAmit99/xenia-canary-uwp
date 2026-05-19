@@ -14,6 +14,7 @@
 #include "xenia/base/filesystem.h"
 
 #include "xenia/base/byte_order.h"
+#include "xenia/base/string_util.h"
 #include "xenia/xbox.h"
 
 #include <ranges>
@@ -113,6 +114,10 @@ void XConfig::SetDefaults() {
   memcpy(xconfig_data_.user.tz_dlt_date.data(), tz.tz_dlt_date.data(), 4);
   xconfig_data_.user.tz_std_bias = tz.tz_std_bias;
   xconfig_data_.user.tz_dlt_bias = tz.tz_dlt_bias;
+
+  xe::string_util::copy_and_swap_truncating(
+      xconfig_data_.iptv.service_provider_name.data(), u"Xenia TV",
+      xconfig_data_.iptv.service_provider_name.size());
 }
 
 void XConfig::FlushToFile() {

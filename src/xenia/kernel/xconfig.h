@@ -799,7 +799,7 @@ struct XConfigData {
   struct Iptv {
     xe::be<uint32_t> checksum;                         // 0x000
     xe::be<uint32_t> version;                          // 0x004
-    std::array<uint8_t, 120> service_provider_name;    // 0x008  wchar
+    std::array<char16_t, 60> service_provider_name;    // 0x008  wchar
     std::array<uint8_t, 128> provisioning_server_url;  // 0x080  wchar
     std::array<uint8_t, 128> support_info;             // 0x100  wchar
     std::array<uint8_t, 128> bootstrap_server_url;     // 0x180  wchar
@@ -1032,6 +1032,10 @@ class XConfig {
       // XCONFIG_FIELD(XCONFIG_CONSOLE_CATEGORY,
       //              XCONFIG_CONSOLE_PC_TITLE_EXEMPTIONS,
       //              Console, keyboard_layout),
+
+      // -- XCONFIG_IPTV (0x7) --------------------------------------------
+      XCONFIG_FIELD(XCONFIG_IPTV_CATEGORY, XCONFIG_IPTV_SERVICE_PROVIDER_NAME,
+                    Iptv, service_provider_name),
 
       // -- XCONFIG_SYSTEM (0xA) ---------------------------------------------
       XCONFIG_FIELD(XCONFIG_SYSTEM_CATEGORY, XCONFIG_SYSTEM_ALARM_TIME, System,

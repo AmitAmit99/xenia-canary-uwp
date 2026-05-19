@@ -26,8 +26,10 @@ static const std::map<uint32_t, std::string> kLanguageMap = {
     {3, "German"},     {4, "French"},
     {5, "Spanish"},    {6, "Italian"},
     {7, "Korean"},     {8, "Traditional Chinese"},
-    {9, "Portuguese"}, {10, "Simplified Chinese"},
-    {11, "Polish"},    {12, "Russian"}};
+    {9, "Portuguese"}, {11, "Polish"},
+    {12, "Russian"},   {13, "Swedish"},
+    {14, "Turkish"},   {15, "Norwegian"},
+    {16, "Dutch"},     {17, "Simplified Chinese"}};
 
 static const std::map<uint8_t, std::string> kCountryMap = {
     {1, "AE"},   {2, "AL"},   {3, "AM"},   {4, "AR"},   {5, "AT"},

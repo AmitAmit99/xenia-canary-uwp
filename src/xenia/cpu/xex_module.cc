@@ -87,7 +87,7 @@ namespace cpu {
 using xe::kernel::KernelState;
 
 XexModule::XexModule(Processor* processor, KernelState* kernel_state)
-    : Module(processor), processor_(processor), kernel_state_(kernel_state) {}
+    : Module(processor), kernel_state_(kernel_state) {}
 
 XexModule::~XexModule() {}
 

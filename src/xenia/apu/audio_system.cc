@@ -50,9 +50,9 @@ AudioSystem::AudioSystem(cpu::Processor* processor)
       processor_(processor),
       worker_running_(false) {
   std::memset(clients_, 0, sizeof(clients_));
-  queued_frames_ = std::min(
-      static_cast<uint32_t>(kMaximumQueuedFrames),
-      std::max(cvars::apu_max_queued_frames, static_cast<uint32_t>(4)));
+  queued_frames_ = std::clamp(cvars::apu_max_queued_frames,
+                              static_cast<uint32_t>(kMinimumQueuedFrames),
+                              static_cast<uint32_t>(kMaximumQueuedFrames));
 
   for (size_t i = 0; i < kMaximumClientCount; ++i) {
     client_semaphores_[i] = xe::threading::Semaphore::Create(0, queued_frames_);

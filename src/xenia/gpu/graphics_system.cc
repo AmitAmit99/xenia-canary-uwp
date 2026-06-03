@@ -138,7 +138,7 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
             while (frame_limiter_worker_running_) {
               // If there is no title running then there is no need for guest
               // frame limiter thread.
-              if (!kernel_state_->title_id()) {
+              if (!kernel_state_->is_title_open()) {
                 xe::threading::Sleep(std::chrono::milliseconds(100));
                 continue;
               }

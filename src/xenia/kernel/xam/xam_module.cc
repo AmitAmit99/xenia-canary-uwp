@@ -66,11 +66,9 @@ void XamModule::LoadLoaderData() {
   FILE* file = xe::filesystem::OpenFile(kXamModuleLoaderDataFileName, "rb");
 
   if (!file) {
-    loader_data_.launch_data_present = false;
+    loader_data_.launch_data.clear();
     return;
   }
-
-  loader_data_.launch_data_present = true;
 
   auto string_read = [file]() {
     uint16_t string_size = 0;

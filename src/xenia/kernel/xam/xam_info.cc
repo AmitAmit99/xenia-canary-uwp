@@ -247,7 +247,6 @@ DECLARE_XAM_EXPORT1(XamGetExecutionId, kNone, kImplemented);
 dword_result_t XamLoaderSetLaunchData_entry(lpvoid_t data, dword_t size) {
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
   auto& loader_data = xam->loader_data();
-  loader_data.launch_data_present = size ? true : false;
   loader_data.launch_data.resize(size);
   std::memcpy(loader_data.launch_data.data(), data, size);
   return 0;
@@ -275,7 +274,7 @@ dword_result_t XamLoaderGetLaunchData_entry(lpvoid_t buffer_ptr,
                                             dword_t buffer_size) {
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
   auto& loader_data = xam->loader_data();
-  if (!buffer_size) {
+  if (loader_data.launch_data.empty()) {
     return X_ERROR_NOT_FOUND;
   }
 
@@ -298,7 +297,6 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
   // Translate the launch path to a full path.
   if (raw_name_ptr && !raw_name_ptr.value().empty()) {
     loader_data.launch_path = xe::path_to_utf8(raw_name_ptr.value());
-    loader_data.launch_data_present = true;
     xam->SaveLoaderData();
     title = "Title was restarted";
     message =

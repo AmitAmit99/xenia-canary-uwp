@@ -762,7 +762,7 @@ void EmulatorApp::EmulatorThread() {
   if (xam) {
     xam->LoadLoaderData();
 
-    if (xam->loader_data().launch_data_present) {
+    if (!xam->loader_data().host_path.empty()) {
       const std::filesystem::path host_path = xam->loader_data().host_path;
       app_context().CallInUIThread([this, host_path]() {
         return emulator_window_->RunTitle(host_path);

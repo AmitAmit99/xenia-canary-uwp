@@ -31,7 +31,6 @@ class XamModule : public KernelModule {
   static void RegisterExportTable(xe::cpu::ExportResolver* export_resolver);
 
   struct LoaderData {
-    bool launch_data_present = false;
     std::string host_path;  // Full host path to next title to load
     std::string
         launch_path;  // Full guest path to next xex. might be default.xex

@@ -2080,8 +2080,8 @@ class DevenvCommand(Command):
                 # and force the correct generator/instance since CMake might
                 # otherwise pick a VS without ARM64 support.
                 vs_generator_map = {
-                    2019: "Visual Studio 16 2019",
                     2022: "Visual Studio 17 2022",
+                    2026: "Visual Studio 18 2026",
                 }
                 try:
                     vswhere_out = subprocess.check_output(

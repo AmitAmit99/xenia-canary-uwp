@@ -9,7 +9,7 @@ drivers.
 ### Windows
 
 * Windows 10 or later
-* [Visual Studio 2022](https://www.visualstudio.com/downloads/)
+* [Visual Studio 2022 or later](https://www.visualstudio.com/downloads/)
 * CMake 3.10+ (or C++ CMake tools for Windows)
 * Windows 11 SDK version 10.0.22000.0 (for Visual Studio 2022, this or any newer version)
 * [Python 3.6+ 64-bit](https://www.python.org/downloads/)

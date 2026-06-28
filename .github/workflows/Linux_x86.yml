@@ -29,14 +29,14 @@ jobs:
 
       - name: Cache Vulkan SDK
         id: cache-vulkan-sdk-linux
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/vulkan-sdk
           key: ${{ runner.os }}-vulkan-sdk-latest
 
       - name: Cache linuxdeploy tools
         id: cache-linuxdeploy
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/linuxdeploy
           key: ${{ runner.os }}-linuxdeploy-tools

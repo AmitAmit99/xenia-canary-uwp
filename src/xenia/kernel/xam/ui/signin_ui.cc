@@ -613,29 +613,27 @@ void SigninUI::OnDraw(ImGuiIO& io) {
   if (ImGui::BeginPopupModal(kCreateProfilePopupName, nullptr,
                              ImGuiWindowFlags_AlwaysAutoResize)) {
     if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
-      std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
+      std::ranges::fill(gamertag_, '\0');
       creating_profile_ = false;
       creating_profile_focus_requested_ = false;
       focus_requested_ = true;
       ImGui::CloseCurrentPopup();
       ImGui::EndPopup();
     } else {
-      auto profile_manager = kernel_state()->xam_state()->profile_manager();
-
       ImGui::TextUnformatted("Gamertag:");
       if (creating_profile_focus_requested_) {
         ImGui::SetKeyboardFocusHere();
         creating_profile_focus_requested_ = false;
       }
-      ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_));
+      if (ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_))) {
+        valid_gamertag_ =
+            profile_manager_->IsGamertagValid(std::string(gamertag_));
+      }
 
-      const std::string gamertag_string = gamertag_;
-      bool valid = profile_manager->IsGamertagValid(gamertag_string);
-
-      ImGui::BeginDisabled(!valid);
+      ImGui::BeginDisabled(!valid_gamertag_);
       if (ImGui::Button("Create")) {
-        profile_manager->CreateProfile(gamertag_string, false);
-        std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
+        profile_manager_->CreateProfile(std::string(gamertag_), false);
+        std::ranges::fill(gamertag_, '\0');
         creating_profile_ = false;
         creating_profile_focus_requested_ = false;
         focus_requested_ = true;
@@ -648,7 +646,7 @@ void SigninUI::OnDraw(ImGuiIO& io) {
         ImGui::SameLine();
 
         if (ImGui::Button("Cancel")) {
-          std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
+          std::ranges::fill(gamertag_, '\0');
           creating_profile_ = false;
           creating_profile_focus_requested_ = false;
           focus_requested_ = true;

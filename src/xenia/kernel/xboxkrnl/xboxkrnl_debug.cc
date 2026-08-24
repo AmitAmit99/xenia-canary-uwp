@@ -9,10 +9,15 @@
 
 #include "xenia/base/debugging.h"
 #include "xenia/base/logging.h"
+#include "xenia/emulator.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
 #include "xenia/kernel/xthread.h"
+#include "xenia/ui/imgui_dialog.h"
+#include "xenia/ui/imgui_drawer.h"
+#include "xenia/ui/window.h"
+#include "xenia/ui/windowed_app_context.h"
 
 namespace xe {
 namespace kernel {
@@ -53,8 +58,7 @@ void HandleSetThreadName(pointer_t<X_EXCEPTION_RECORD> record) {
   // SJIS and there's no way to automatically know this.
   auto name = std::string(
       kernel_memory()->TranslateVirtual<const char*>(thread_info->name_ptr));
-  std::replace_if(
-      name.begin(), name.end(), [](auto c) { return c < 32 || c > 127; }, '?');
+  std::ranges::replace_if(name, [](auto c) { return c < 32 || c > 127; }, '?');
 
   object_ref<XThread> thread;
   if (thread_info->thread_id == -1) {
@@ -147,13 +151,39 @@ DECLARE_XBOXKRNL_EXPORT2(RtlRaiseException, kDebug, kStub, kImportant);
 
 void KeBugCheckEx_entry(dword_t code, dword_t param1, dword_t param2,
                         dword_t param3, dword_t param4) {
-  XELOGD("*** STOP: 0x{:08X} (0x{:08X}, 0x{:08X}, 0x{:08X}, 0x{:08X})",
-         static_cast<uint32_t>(code), static_cast<uint32_t>(param1),
-         static_cast<uint32_t>(param2), static_cast<uint32_t>(param3),
-         static_cast<uint32_t>(param4));
+  auto msg =
+      fmt::format("*** STOP: 0x{:08X} (0x{:08X}, 0x{:08X}, 0x{:08X}, 0x{:08X})",
+                  static_cast<uint32_t>(code), static_cast<uint32_t>(param1),
+                  static_cast<uint32_t>(param2), static_cast<uint32_t>(param3),
+                  static_cast<uint32_t>(param4));
+  XELOGE("{}", msg);
   fflush(stdout);
-  xe::debugging::Break();
-  assert_always();
+
+  if (xe::debugging::IsDebuggerAttached()) {
+    xe::debugging::Break();
+  }
+
+  // Show crash dialog and suspend the guest thread instead of killing the
+  // host process.
+  auto current_thread = kernel::XThread::GetCurrentThread();
+  const auto* emulator = kernel_state()->emulator();
+  auto* display_window = emulator->display_window();
+  auto* imgui_drawer = emulator->imgui_drawer();
+  if (display_window && imgui_drawer) {
+    auto dlg_msg = fmt::format(
+        "The guest kernel has crashed (KeBugCheck).\n\n{}\n\n"
+        "The faulting thread has been suspended.",
+        msg);
+    display_window->app_context().CallInUIThreadSynchronous(
+        [imgui_drawer, &dlg_msg]() {
+          xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer,
+                                              "Guest Kernel Crash", dlg_msg);
+        });
+  }
+
+  if (current_thread) {
+    current_thread->Suspend(nullptr);
+  }
 }
 DECLARE_XBOXKRNL_EXPORT2(KeBugCheckEx, kDebug, kStub, kImportant);
 

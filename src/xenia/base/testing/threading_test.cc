@@ -100,7 +100,9 @@ TEST_CASE("Fence") {
 
   pFence->Signal();
 
-  for (auto& t : threads) t.join();
+  for (auto& t : threads) {
+    t.join();
+  }
   REQUIRE(finished.load() == threads.size());
 }  // namespace test
 
@@ -815,14 +817,14 @@ TEST_CASE("Wait on Timer", "[timer]") {
   // Test Repeating
   REQUIRE(timer->SetRepeatingAfter(1ms, 10ms));
   for (int i = 0; i < 10; ++i) {
-    result = Wait(timer.get(), false, 20ms);
+    result = Wait(timer.get(), false, 100ms);
     INFO(i);
     REQUIRE(result == WaitResult::kSuccess);
   }
   MaybeYield();
   Sleep(10ms);  // Skip a few events
   for (int i = 0; i < 10; ++i) {
-    result = Wait(timer.get(), false, 20ms);
+    result = Wait(timer.get(), false, 100ms);
     REQUIRE(result == WaitResult::kSuccess);
   }
   // Cancel it

@@ -40,10 +40,8 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms,
                           uint32_t routine, uint32_t routine_arg, bool resume) {
   using xe::chrono::WinSystemClock;
   using xe::chrono::XSystemClock;
-  // Caller is checking for STATUS_TIMER_RESUME_IGNORED.
-  if (resume) {
-    return X_STATUS_TIMER_RESUME_IGNORED;
-  }
+
+  std::lock_guard<std::mutex> lock(timer_lock_);
 
   period_ms = Clock::ScaleGuestDurationMillis(period_ms);
   WinSystemClock::time_point due_tp;
@@ -63,9 +61,13 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms,
   callback_routine_arg_ = routine_arg;
 
   // This callback will only be issued when the timer is fired.
+  // Capture values by value to avoid racing with a future SetTimer() call.
   std::function<void()> callback = nullptr;
   if (callback_routine_) {
-    callback = [this]() {
+    auto cb_thread = callback_thread_;
+    auto cb_routine = callback_routine_;
+    auto cb_routine_arg = callback_routine_arg_;
+    callback = [cb_thread, cb_routine, cb_routine_arg]() {
       // Queue APC to call back routine with (arg, low, high).
       // It'll be executed on the thread that requested the timer.
       uint64_t time = xe::Clock::QueryGuestSystemTime();
@@ -73,9 +75,8 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms,
       uint32_t time_high = static_cast<uint32_t>(time >> 32);
       XELOGI(
           "XTimer enqueuing timer callback to {:08X}({:08X}, {:08X}, {:08X})",
-          callback_routine_, callback_routine_arg_, time_low, time_high);
-      callback_thread_->EnqueueApc(callback_routine_, callback_routine_arg_,
-                                   time_low, time_high);
+          cb_routine, cb_routine_arg, time_low, time_high);
+      cb_thread->EnqueueApc(cb_routine, cb_routine_arg, time_low, time_high);
     };
   }
 
@@ -87,10 +88,16 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms,
         due_tp, std::chrono::milliseconds(period_ms), std::move(callback));
   }
 
+  if (resume) {
+    XThread::SetLastError(X_ERROR_NOT_SUPPORTED);
+    return X_STATUS_TIMER_RESUME_IGNORED;
+  }
+
   return result ? X_STATUS_SUCCESS : X_STATUS_UNSUCCESSFUL;
 }
 
 X_STATUS XTimer::Cancel() {
+  std::lock_guard<std::mutex> lock(timer_lock_);
   return timer_->Cancel() ? X_STATUS_SUCCESS : X_STATUS_UNSUCCESSFUL;
 }
 

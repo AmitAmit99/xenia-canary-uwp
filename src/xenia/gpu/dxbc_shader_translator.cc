@@ -30,11 +30,11 @@ DEFINE_bool(dxbc_switch, false,
             "(possibly the shader compiler tries to flatten them). On Intel "
             "HD Graphics, this is ignored because of a crash with the switch "
             "instruction.",
-            "GPU");
+            "GPU.Debug");
 DEFINE_bool(dxbc_source_map, false,
             "Disassemble Xenos instructions as comments in the resulting DXBC "
             "for debugging.",
-            "GPU");
+            "GPU.Debug");
 
 namespace xe {
 namespace gpu {
@@ -66,7 +66,7 @@ using namespace ucode;
 
 DxbcShaderTranslator::DxbcShaderTranslator(
     ui::GraphicsProvider::GpuVendorID vendor_id, bool bindless_resources_used,
-    bool edram_rov_used, bool gamma_render_target_as_srgb,
+    bool edram_rov_used, bool gamma_render_target_as_unorm8,
     bool msaa_2x_supported, uint32_t draw_resolution_scale_x,
     uint32_t draw_resolution_scale_y, bool force_emit_source_map)
     : a_(shader_code_, statistics_),
@@ -74,7 +74,7 @@ DxbcShaderTranslator::DxbcShaderTranslator(
       vendor_id_(vendor_id),
       bindless_resources_used_(bindless_resources_used),
       edram_rov_used_(edram_rov_used),
-      gamma_render_target_as_srgb_(gamma_render_target_as_srgb),
+      gamma_render_target_as_unorm8_(gamma_render_target_as_unorm8),
       msaa_2x_supported_(msaa_2x_supported),
       draw_resolution_scale_x_(draw_resolution_scale_x),
       draw_resolution_scale_y_(draw_resolution_scale_y),
@@ -174,6 +174,7 @@ void DxbcShaderTranslator::Reset() {
   uav_count_ = 0;
   uav_index_shared_memory_ = kBindingIndexUnallocated;
   uav_index_edram_ = kBindingIndexUnallocated;
+  uav_index_zpd_rov_counter_ = kBindingIndexUnallocated;
 
   sampler_bindings_.clear();
 
@@ -223,9 +224,10 @@ void DxbcShaderTranslator::PopSystemTemp(uint32_t count) {
 }
 
 void DxbcShaderTranslator::PWLGammaToLinear(
-    uint32_t target_temp, uint32_t target_temp_component, uint32_t source_temp,
-    uint32_t source_temp_component, bool source_pre_saturated, uint32_t temp1,
-    uint32_t temp1_component, uint32_t temp2, uint32_t temp2_component) {
+    dxbc::Assembler& a, uint32_t target_temp, uint32_t target_temp_component,
+    uint32_t source_temp, uint32_t source_temp_component,
+    bool source_pre_saturated, uint32_t temp1, uint32_t temp1_component,
+    uint32_t temp2, uint32_t temp2_component) {
   // The source is needed only once to begin building the result, so it can be
   // the same as the destination.
   assert_true(temp1 != target_temp || temp1_component != target_temp_component);
@@ -246,25 +248,25 @@ void DxbcShaderTranslator::PWLGammaToLinear(
   // Using `source >= threshold` comparisons because the input might have not
   // been saturated yet, and thus it may be NaN - since it will be saturated to
   // 0 later, the 0...64/255 case should be selected for it.
-  a_.OpGE(temp2_dest, source_src, dxbc::Src::LF(96.0f / 255.0f));
-  a_.OpIf(true, temp2_src);
+  a.OpGE(temp2_dest, source_src, dxbc::Src::LF(96.0f / 255.0f));
+  a.OpIf(true, temp2_src);
   // [96/255 ... 1
-  a_.OpGE(temp2_dest, source_src, dxbc::Src::LF(192.0f / 255.0f));
-  a_.OpMovC(temp1_dest, temp2_src, dxbc::Src::LF(8.0f / 1024.0f),
-            dxbc::Src::LF(4.0f / 1024.0f));
-  a_.OpMovC(temp2_dest, temp2_src, dxbc::Src::LF(-1024.0f),
-            dxbc::Src::LF(-256.0f));
-  a_.OpElse();
+  a.OpGE(temp2_dest, source_src, dxbc::Src::LF(192.0f / 255.0f));
+  a.OpMovC(temp1_dest, temp2_src, dxbc::Src::LF(8.0f / 1024.0f),
+           dxbc::Src::LF(4.0f / 1024.0f));
+  a.OpMovC(temp2_dest, temp2_src, dxbc::Src::LF(-1024.0f),
+           dxbc::Src::LF(-256.0f));
+  a.OpElse();
   // 0 ... 96/255)
-  a_.OpGE(temp2_dest, source_src, dxbc::Src::LF(64.0f / 255.0f));
-  a_.OpMovC(temp1_dest, temp2_src, dxbc::Src::LF(2.0f / 1024.0f),
-            dxbc::Src::LF(1.0f / 1024.0f));
-  a_.OpMovC(temp2_dest, temp2_src, dxbc::Src::LF(-64.0f), dxbc::Src::LF(0.0f));
-  a_.OpEndIf();
+  a.OpGE(temp2_dest, source_src, dxbc::Src::LF(64.0f / 255.0f));
+  a.OpMovC(temp1_dest, temp2_src, dxbc::Src::LF(2.0f / 1024.0f),
+           dxbc::Src::LF(1.0f / 1024.0f));
+  a.OpMovC(temp2_dest, temp2_src, dxbc::Src::LF(-64.0f), dxbc::Src::LF(0.0f));
+  a.OpEndIf();
 
   if (!source_pre_saturated) {
     // Saturate the input, and flush NaN to 0.
-    a_.OpMov(target_dest, source_src, true);
+    a.OpMov(target_dest, source_src, true);
   }
   // linear = gamma * (255 * 1024) * scale + offset
   // As both 1024 and the scale are powers of 2, and 1024 * scale is not smaller
@@ -273,22 +275,22 @@ void DxbcShaderTranslator::PWLGammaToLinear(
   // gamma * (255 * 1024 * scale) - or the option chosen here, as long as
   // 1024 is applied before the scale since the scale is < 1 (specifically at
   // least 1/1024), and it may make very small values denormal.
-  a_.OpMul(target_dest, source_pre_saturated ? source_src : target_src,
-           dxbc::Src::LF(255.0f * 1024.0f));
-  a_.OpMAd(target_dest, target_src, temp1_src, temp2_src);
+  a.OpMul(target_dest, source_pre_saturated ? source_src : target_src,
+          dxbc::Src::LF(255.0f * 1024.0f));
+  a.OpMAd(target_dest, target_src, temp1_src, temp2_src);
   // linear += trunc(linear * scale)
-  a_.OpMul(temp1_dest, target_src, temp1_src);
-  a_.OpRoundZ(temp1_dest, temp1_src);
-  a_.OpAdd(target_dest, target_src, temp1_src);
+  a.OpMul(temp1_dest, target_src, temp1_src);
+  a.OpRoundZ(temp1_dest, temp1_src);
+  a.OpAdd(target_dest, target_src, temp1_src);
   // linear *= 1/1023
-  a_.OpMul(target_dest, target_src, dxbc::Src::LF(1.0f / 1023.0f));
+  a.OpMul(target_dest, target_src, dxbc::Src::LF(1.0f / 1023.0f));
 }
 
 void DxbcShaderTranslator::PreSaturatedLinearToPWLGamma(
-    uint32_t target_temp, uint32_t target_temp_component, uint32_t source_temp,
-    uint32_t source_temp_component, uint32_t temp_or_target,
-    uint32_t temp_or_target_component, uint32_t temp_non_target,
-    uint32_t temp_non_target_component) {
+    dxbc::Assembler& a, uint32_t target_temp, uint32_t target_temp_component,
+    uint32_t source_temp, uint32_t source_temp_component,
+    uint32_t temp_or_target, uint32_t temp_or_target_component,
+    uint32_t temp_non_target, uint32_t temp_non_target_component) {
   // The source may be the same as the target, but in this case it can't also be
   // used as a temporary variable.
   assert_true(target_temp != source_temp ||
@@ -318,28 +320,28 @@ void DxbcShaderTranslator::PreSaturatedLinearToPWLGamma(
 
   // Get the scale (into temp_or_target) and the offset (into temp_non_target)
   // for the piece.
-  a_.OpGE(temp_non_target_dest, source_src, dxbc::Src::LF(128.0f / 1023.0f));
-  a_.OpIf(true, temp_non_target_src);
+  a.OpGE(temp_non_target_dest, source_src, dxbc::Src::LF(128.0f / 1023.0f));
+  a.OpIf(true, temp_non_target_src);
   // [128/1023 ... 1
-  a_.OpGE(temp_non_target_dest, source_src, dxbc::Src::LF(512.0f / 1023.0f));
-  a_.OpMovC(temp_or_target_dest, temp_non_target_src,
-            dxbc::Src::LF(1023.0f / 8.0f), dxbc::Src::LF(1023.0f / 4.0f));
-  a_.OpMovC(temp_non_target_dest, temp_non_target_src,
-            dxbc::Src::LF(128.0f / 255.0f), dxbc::Src::LF(64.0f / 255.0f));
-  a_.OpElse();
+  a.OpGE(temp_non_target_dest, source_src, dxbc::Src::LF(512.0f / 1023.0f));
+  a.OpMovC(temp_or_target_dest, temp_non_target_src,
+           dxbc::Src::LF(1023.0f / 8.0f), dxbc::Src::LF(1023.0f / 4.0f));
+  a.OpMovC(temp_non_target_dest, temp_non_target_src,
+           dxbc::Src::LF(128.0f / 255.0f), dxbc::Src::LF(64.0f / 255.0f));
+  a.OpElse();
   // 0 ... 128/1023)
-  a_.OpGE(temp_non_target_dest, source_src, dxbc::Src::LF(64.0f / 1023.0f));
-  a_.OpMovC(temp_or_target_dest, temp_non_target_src,
-            dxbc::Src::LF(1023.0f / 2.0f), dxbc::Src::LF(1023.0f));
-  a_.OpMovC(temp_non_target_dest, temp_non_target_src,
-            dxbc::Src::LF(32.0f / 255.0f), dxbc::Src::LF(0.0f));
-  a_.OpEndIf();
+  a.OpGE(temp_non_target_dest, source_src, dxbc::Src::LF(64.0f / 1023.0f));
+  a.OpMovC(temp_or_target_dest, temp_non_target_src,
+           dxbc::Src::LF(1023.0f / 2.0f), dxbc::Src::LF(1023.0f));
+  a.OpMovC(temp_non_target_dest, temp_non_target_src,
+           dxbc::Src::LF(32.0f / 255.0f), dxbc::Src::LF(0.0f));
+  a.OpEndIf();
 
   // gamma = trunc(linear * scale) * (1.0 / 255.0) + offset
-  a_.OpMul(target_dest, source_src, temp_or_target_src);
-  a_.OpRoundZ(target_dest, target_src);
-  a_.OpMAd(target_dest, target_src, dxbc::Src::LF(1.0f / 255.0f),
-           temp_non_target_src);
+  a.OpMul(target_dest, source_src, temp_or_target_src);
+  a.OpRoundZ(target_dest, target_src);
+  a.OpMAd(target_dest, target_src, dxbc::Src::LF(1.0f / 255.0f),
+          temp_non_target_src);
 }
 
 void DxbcShaderTranslator::RemapAndConvertVertexIndices(
@@ -662,6 +664,18 @@ void DxbcShaderTranslator::StartPixelShader() {
                             in_position_z);
       }
     }
+  } else if (DSV_IsApplyingPolygonOffset() &&
+             !current_shader().writes_depth()) {
+    // The decal path uses the original triangle depth slope. Take it before
+    // guest control flow or kill changes which pixels are still active.
+    assert_true(system_temp_depth_stencil_ != UINT32_MAX);
+    dxbc::Src in_position_z(
+        dxbc::Src::V1D(in_reg_ps_position_, dxbc::Src::kZZZZ));
+    in_position_used_ |= 0b0100;
+    a_.OpDerivRTXCoarse(dxbc::Dest::R(system_temp_depth_stencil_, 0b0001),
+                        in_position_z);
+    a_.OpDerivRTYCoarse(dxbc::Dest::R(system_temp_depth_stencil_, 0b0010),
+                        in_position_z);
   }
 
   // If not translating anything, we only need the depth.
@@ -720,16 +734,17 @@ void DxbcShaderTranslator::StartPixelShader() {
     a_.OpRoundNI(dxbc::Dest::R(param_gen_temp, 0b0011),
                  dxbc::Src::V1D(in_reg_ps_position_));
     uint32_t resolution_scaled_axes =
-        uint32_t(draw_resolution_scale_x_ > 1) |
-        (uint32_t(draw_resolution_scale_y_ > 1) << 1);
+        uint32_t(GetCurrentDrawResolutionScaleX() > 1) |
+        (uint32_t(GetCurrentDrawResolutionScaleY() > 1) << 1);
     if (resolution_scaled_axes) {
       // Revert resolution scale - after truncating, so if the pixel position
       // is passed to tfetch (assuming the game doesn't round it by itself),
       // it will be sampled with higher resolution too.
-      a_.OpMul(dxbc::Dest::R(param_gen_temp, resolution_scaled_axes),
-               dxbc::Src::R(param_gen_temp),
-               dxbc::Src::LF(1.0f / draw_resolution_scale_x_,
-                             1.0f / draw_resolution_scale_y_, 1.0f, 1.0f));
+      a_.OpMul(
+          dxbc::Dest::R(param_gen_temp, resolution_scaled_axes),
+          dxbc::Src::R(param_gen_temp),
+          dxbc::Src::LF(1.0f / GetCurrentDrawResolutionScaleX(),
+                        1.0f / GetCurrentDrawResolutionScaleY(), 1.0f, 1.0f));
     }
     if (shader_modification.pixel.param_gen_point) {
       // A point - always front-facing (the upper bit of X is 0), not a line
@@ -793,8 +808,8 @@ void DxbcShaderTranslator::StartPixelShader() {
     dxbc::Src memexport_enabled_src(dxbc::Src::R(
         system_temp_memexport_enabled_and_eM_written_, dxbc::Src::kXXXX));
     uint32_t resolution_scaled_axes =
-        uint32_t(draw_resolution_scale_x_ > 1) |
-        (uint32_t(draw_resolution_scale_y_ > 1) << 1);
+        uint32_t(GetCurrentDrawResolutionScaleX() > 1) |
+        (uint32_t(GetCurrentDrawResolutionScaleY() > 1) << 1);
     if (resolution_scaled_axes) {
       uint32_t memexport_condition_temp = PushSystemTemp();
       // Only do memexport for one host pixel in a guest pixel - prefer the
@@ -808,12 +823,12 @@ void DxbcShaderTranslator::StartPixelShader() {
       a_.OpUDiv(dxbc::Dest::Null(),
                 dxbc::Dest::R(memexport_condition_temp, resolution_scaled_axes),
                 dxbc::Src::R(memexport_condition_temp),
-                dxbc::Src::LU(draw_resolution_scale_x_,
-                              draw_resolution_scale_y_, 0, 0));
+                dxbc::Src::LU(GetCurrentDrawResolutionScaleX(),
+                              GetCurrentDrawResolutionScaleY(), 0, 0));
       a_.OpIEq(dxbc::Dest::R(memexport_condition_temp, resolution_scaled_axes),
                dxbc::Src::R(memexport_condition_temp),
-               dxbc::Src::LU(draw_resolution_scale_x_ >> 1,
-                             draw_resolution_scale_y_ >> 1, 0, 0));
+               dxbc::Src::LU(GetCurrentDrawResolutionScaleX() >> 1,
+                             GetCurrentDrawResolutionScaleY() >> 1, 0, 0));
       for (uint32_t i = 0; i < 2; ++i) {
         if (!(resolution_scaled_axes & (1 << i))) {
           continue;
@@ -915,6 +930,9 @@ void DxbcShaderTranslator::StartTranslation() {
         // X holds the guest oDepth - make sure it's always initialized because
         // assumptions can't be made about the integrity of the guest code.
         depth_stencil_temp_zero_mask = 0b0001;
+      } else if (DSV_IsApplyingPolygonOffset()) {
+        // XY hold raster depth gradients for the host RT decal path.
+        depth_stencil_temp_zero_mask = 0b0000;
       } else {
         assert_true(edram_rov_used_);
         if (ROV_IsDepthStencilEarly()) {
@@ -2136,7 +2154,8 @@ constexpr DxbcShaderTranslator::SystemConstantRdef
         {"xe_texture_swizzled_signs", ShaderRdefTypeIndex::kUint4Array2,
          sizeof(uint32_t) * 4 * 2},
 
-        {"xe_textures_resolved", ShaderRdefTypeIndex::kUint, sizeof(uint32_t)},
+        {"xe_textures_resolution_scaled", ShaderRdefTypeIndex::kUint,
+         sizeof(uint32_t)},
         {"xe_sample_count_log2", ShaderRdefTypeIndex::kUint2,
          sizeof(uint32_t) * 2},
         {"xe_alpha_test_reference", ShaderRdefTypeIndex::kFloat, sizeof(float)},
@@ -2145,7 +2164,9 @@ constexpr DxbcShaderTranslator::SystemConstantRdef
         {"xe_edram_32bpp_tile_pitch_dwords_scaled", ShaderRdefTypeIndex::kUint,
          sizeof(uint32_t)},
         {"xe_edram_depth_base_dwords_scaled", ShaderRdefTypeIndex::kUint,
-         sizeof(uint32_t), sizeof(uint32_t)},
+         sizeof(uint32_t)},
+        {"xe_zpd_rov_counter_index", ShaderRdefTypeIndex::kUint,
+         sizeof(uint32_t)},
 
         {"xe_color_exp_bias", ShaderRdefTypeIndex::kFloat4, sizeof(float) * 4},
 
@@ -2174,6 +2195,9 @@ constexpr DxbcShaderTranslator::SystemConstantRdef
 
         {"xe_edram_blend_constant", ShaderRdefTypeIndex::kFloat4,
          sizeof(float) * 4},
+
+        {"xe_texture_integer_scale_bits", ShaderRdefTypeIndex::kUint4Array8,
+         sizeof(uint32_t) * 32},
 };
 
 void DxbcShaderTranslator::WriteResourceDefinition() {
@@ -2547,6 +2571,11 @@ void DxbcShaderTranslator::WriteResourceDefinition() {
   if (uav_index_edram_ != kBindingIndexUnallocated) {
     name_ptr += dxbc::AppendAlignedString(shader_object_, "xe_edram");
   }
+  uint32_t zpd_rov_counter_name_ptr = name_ptr;
+  if (uav_index_zpd_rov_counter_ != kBindingIndexUnallocated) {
+    name_ptr +=
+        dxbc::AppendAlignedString(shader_object_, "xe_zpd_rov_counter_uav");
+  }
 
   uint32_t bindings_position_dwords = uint32_t(shader_object_.size());
 
@@ -2677,6 +2706,13 @@ void DxbcShaderTranslator::WriteResourceDefinition() {
         uav.dimension = dxbc::RdefDimension::kUAVBuffer;
         uav.sample_count = UINT32_MAX;
         uav.bind_point = uint32_t(UAVRegister::kEdram);
+      } else if (i == uav_index_zpd_rov_counter_) {
+        // ROV ZPD counter buffer.
+        uav.name_ptr = zpd_rov_counter_name_ptr;
+        uav.type = dxbc::RdefInputType::kUAVRWByteAddress;
+        uav.return_type = dxbc::ResourceReturnType::kMixed;
+        uav.dimension = dxbc::RdefDimension::kUAVBuffer;
+        uav.bind_point = uint32_t(UAVRegister::kZpdRovCounter);
       } else {
         assert_unhandled_case(i);
       }
@@ -3298,7 +3334,8 @@ void DxbcShaderTranslator::WriteOutputSignature() {
 
       // Depth (SV_Depth or SV_DepthLessEqual).
       size_t depth_position = SIZE_MAX;
-      if (current_shader().writes_depth() || DSV_IsWritingFloat24Depth()) {
+      if (current_shader().writes_depth() || DSV_IsWritingFloat24Depth() ||
+          DSV_IsApplyingPolygonOffset()) {
         depth_position = shader_object_.size();
         shader_object_.resize(shader_object_.size() + kParameterDwords);
         ++parameter_count;
@@ -3341,6 +3378,7 @@ void DxbcShaderTranslator::WriteOutputSignature() {
         }
         const char* depth_semantic_name;
         if (!current_shader().writes_depth() &&
+            !DSV_IsApplyingPolygonOffset() &&
             shader_modification.pixel.depth_stencil_mode ==
                 Modification::DepthStencilMode::kFloat24Truncating) {
           depth_semantic_name = "SV_DepthLessEqual";
@@ -3564,6 +3602,12 @@ void DxbcShaderTranslator::WriteShaderCode() {
           dxbc::Src::U(dxbc::Src::Dcl, uav_index_edram_,
                        uint32_t(UAVRegister::kEdram),
                        uint32_t(UAVRegister::kEdram)));
+    } else if (i == uav_index_zpd_rov_counter_) {
+      // ROV ZPD counter buffer.
+      ao_.OpDclUnorderedAccessViewRaw(
+          0, dxbc::Src::U(dxbc::Src::Dcl, uav_index_zpd_rov_counter_,
+                          uint32_t(UAVRegister::kZpdRovCounter),
+                          uint32_t(UAVRegister::kZpdRovCounter)));
     } else {
       assert_unhandled_case(i);
     }
@@ -3706,8 +3750,9 @@ void DxbcShaderTranslator::WriteShaderCode() {
         ao_.OpDclOutput(dxbc::Dest::OMask());
       }
       // Depth output.
-      if (is_writing_float24_depth || shader_writes_depth) {
-        if (!shader_writes_depth &&
+      if (is_writing_float24_depth || DSV_IsApplyingPolygonOffset() ||
+          shader_writes_depth) {
+        if (!shader_writes_depth && !DSV_IsApplyingPolygonOffset() &&
             GetDxbcShaderModification().pixel.depth_stencil_mode ==
                 Modification::DepthStencilMode::kFloat24Truncating) {
           ao_.OpDclOutput(dxbc::Dest::ODepthLE());

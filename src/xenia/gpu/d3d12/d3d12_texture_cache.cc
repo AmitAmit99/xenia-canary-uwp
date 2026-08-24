@@ -140,6 +140,32 @@ bool D3D12TextureCache::Initialize() {
   }
   scaled_resolve_heap_count_ = 0;
 
+  // GetSamplerParameters drops samplers for non-filterable formats.
+  for (uint32_t i = 0; i < xe::countof(host_formats_); ++i) {
+    const HostFormat& host_format = host_formats_[i];
+    uint64_t format_bit = uint64_t(1) << i;
+    if (host_format.dxgi_format_unsigned != DXGI_FORMAT_UNKNOWN) {
+      D3D12_FEATURE_DATA_FORMAT_SUPPORT format_support = {
+          host_format.dxgi_format_unsigned};
+      if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT,
+                                                &format_support,
+                                                sizeof(format_support))) &&
+          (format_support.Support1 & D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE)) {
+        host_filterable_unsigned_ |= format_bit;
+      }
+    }
+    if (host_format.dxgi_format_signed != DXGI_FORMAT_UNKNOWN) {
+      D3D12_FEATURE_DATA_FORMAT_SUPPORT format_support = {
+          host_format.dxgi_format_signed};
+      if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT,
+                                                &format_support,
+                                                sizeof(format_support))) &&
+          (format_support.Support1 & D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE)) {
+        host_filterable_signed_ |= format_bit;
+      }
+    }
+  }
+
   // Create the loading root signature.
   D3D12_ROOT_PARAMETER root_parameters[3];
   // Parameter 0 is constants (changed multiple times when untiling).
@@ -151,26 +177,14 @@ bool D3D12TextureCache::Initialize() {
   root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   // Parameter 1 is the source (may be changed multiple times for the same
   // destination).
-  D3D12_DESCRIPTOR_RANGE root_dest_range;
-  root_dest_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-  root_dest_range.NumDescriptors = 1;
-  root_dest_range.BaseShaderRegister = 0;
-  root_dest_range.RegisterSpace = 0;
-  root_dest_range.OffsetInDescriptorsFromTableStart = 0;
-  root_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  root_parameters[1].DescriptorTable.NumDescriptorRanges = 1;
-  root_parameters[1].DescriptorTable.pDescriptorRanges = &root_dest_range;
+  root_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+  root_parameters[1].Descriptor.ShaderRegister = 0;
+  root_parameters[1].Descriptor.RegisterSpace = 0;
   root_parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   // Parameter 2 is the destination.
-  D3D12_DESCRIPTOR_RANGE root_source_range;
-  root_source_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-  root_source_range.NumDescriptors = 1;
-  root_source_range.BaseShaderRegister = 0;
-  root_source_range.RegisterSpace = 0;
-  root_source_range.OffsetInDescriptorsFromTableStart = 0;
-  root_parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-  root_parameters[2].DescriptorTable.NumDescriptorRanges = 1;
-  root_parameters[2].DescriptorTable.pDescriptorRanges = &root_source_range;
+  root_parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+  root_parameters[2].Descriptor.ShaderRegister = 0;
+  root_parameters[2].Descriptor.RegisterSpace = 0;
   root_parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   D3D12_ROOT_SIGNATURE_DESC root_signature_desc;
   root_signature_desc.NumParameters = UINT(xe::countof(root_parameters));
@@ -777,16 +791,15 @@ D3D12TextureCache::SamplerParameters D3D12TextureCache::GetSamplerParameters(
       xenos::ClampModeUsesBorder(parameters.clamp_y) ||
       xenos::ClampModeUsesBorder(parameters.clamp_z)) {
     parameters.border_color = fetch.border_color;
+    parameters.force_bc_w_to_max = fetch.force_bc_w_to_max;
   } else {
     parameters.border_color = xenos::BorderColor::k_ABGR_Black;
   }
 
-  uint32_t mip_min_level, mip_max_level;
+  uint32_t base_page, mip_min_level, mip_max_level;
   texture_util::GetSubresourcesFromFetchConstant(
-      fetch, nullptr, nullptr, nullptr, nullptr, nullptr, &mip_min_level,
+      fetch, nullptr, nullptr, nullptr, &base_page, nullptr, &mip_min_level,
       &mip_max_level);
-  parameters.mip_min_level = mip_min_level;
-  bool has_mips = mip_max_level > mip_min_level;
   xenos::TextureFilter mag_filter =
       binding.mag_filter == xenos::TextureFilter::kUseFetchConst
           ? fetch.mag_filter
@@ -805,8 +818,12 @@ D3D12TextureCache::SamplerParameters D3D12TextureCache::GetSamplerParameters(
       mip_filter == xenos::TextureFilter::kPoint ||
       mip_filter == xenos::TextureFilter::kLinear;
   bool mip_base_map = mip_filter == xenos::TextureFilter::kBaseMap;
+  if (mip_base_map && base_page != 0) {
+    mip_min_level = 0;
+  }
+  parameters.mip_min_level = mip_min_level;
+  bool has_mips = mip_max_level > mip_min_level;
   // high cache miss count here, prefetch fetch earlier
-  //  TODO(Triang3l): Disable filtering for texture formats not supporting it.
   xenos::AnisoFilter aniso_filter =
       binding.aniso_filter == xenos::AnisoFilter::kUseFetchConst
           ? fetch.aniso_filter
@@ -830,6 +847,27 @@ D3D12TextureCache::SamplerParameters D3D12TextureCache::GetSamplerParameters(
     parameters.mip_linear = mip_filter == xenos::TextureFilter::kLinear;
   }
   parameters.mip_base_map = mip_base_map;
+
+  // Fall back to point sampling if the host formats don't report
+  // D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE.
+  if (parameters.mag_linear || parameters.min_linear || parameters.mip_linear ||
+      parameters.aniso_filter != xenos::AnisoFilter::kDisabled) {
+    TextureKey texture_key;
+    uint8_t texture_swizzled_signs;
+    BindingInfoFromFetchConstant(fetch, texture_key, &texture_swizzled_signs);
+    uint64_t format_bit =
+        texture_key.is_valid ? uint64_t(1) << uint32_t(texture_key.format) : 0;
+    if (!texture_key.is_valid ||
+        (texture_util::IsAnySignNotSigned(texture_swizzled_signs) &&
+         (host_filterable_unsigned_ & format_bit) == 0) ||
+        (texture_util::IsAnySignSigned(texture_swizzled_signs) &&
+         (host_filterable_signed_ & format_bit) == 0)) {
+      parameters.mag_linear = 0;
+      parameters.min_linear = 0;
+      parameters.mip_linear = 0;
+      parameters.aniso_filter = xenos::AnisoFilter::kDisabled;
+    }
+  }
 
   return parameters;
 }
@@ -902,6 +940,9 @@ void D3D12TextureCache::WriteSampler(SamplerParameters parameters,
       desc.BorderColor[2] = 0.0f;
       desc.BorderColor[3] = 0.0f;
       break;
+  }
+  if (parameters.force_bc_w_to_max) {
+    desc.BorderColor[3] = 1.0f;
   }
   desc.MinLOD = float(parameters.mip_min_level);
   if (parameters.mip_base_map) {
@@ -1183,40 +1224,16 @@ void D3D12TextureCache::TransitionCurrentScaledResolveRange(
       buffer.resource(), buffer.SetResourceState(new_state), new_state);
 }
 
-void D3D12TextureCache::CreateCurrentScaledResolveRangeUintPow2SRV(
-    D3D12_CPU_DESCRIPTOR_HANDLE handle, uint32_t element_size_bytes_pow2) {
+D3D12_GPU_VIRTUAL_ADDRESS
+D3D12TextureCache::GetCurrentScaledResolveRangeGPUAddress() const {
   assert_true(IsDrawResolutionScaled());
-  size_t buffer_index = GetCurrentScaledResolveBufferIndex();
+  const size_t buffer_index = GetCurrentScaledResolveBufferIndex();
   const ScaledResolveVirtualBuffer* buffer =
       scaled_resolve_2gb_buffers_[buffer_index].get();
   assert_not_null(buffer);
-  ui::d3d12::util::CreateBufferTypedSRV(
-      command_processor_.GetD3D12Provider().GetDevice(), handle,
-      buffer->resource(),
-      ui::d3d12::util::GetUintPow2DXGIFormat(element_size_bytes_pow2),
-      uint32_t(scaled_resolve_current_range_length_scaled_ >>
-               element_size_bytes_pow2),
-      (scaled_resolve_current_range_start_scaled_ -
-       (uint64_t(buffer_index) << 30)) >>
-          element_size_bytes_pow2);
-}
-
-void D3D12TextureCache::CreateCurrentScaledResolveRangeUintPow2UAV(
-    D3D12_CPU_DESCRIPTOR_HANDLE handle, uint32_t element_size_bytes_pow2) {
-  assert_true(IsDrawResolutionScaled());
-  size_t buffer_index = GetCurrentScaledResolveBufferIndex();
-  const ScaledResolveVirtualBuffer* buffer =
-      scaled_resolve_2gb_buffers_[buffer_index].get();
-  assert_not_null(buffer);
-  ui::d3d12::util::CreateBufferTypedUAV(
-      command_processor_.GetD3D12Provider().GetDevice(), handle,
-      buffer->resource(),
-      ui::d3d12::util::GetUintPow2DXGIFormat(element_size_bytes_pow2),
-      uint32_t(scaled_resolve_current_range_length_scaled_ >>
-               element_size_bytes_pow2),
-      (scaled_resolve_current_range_start_scaled_ -
-       (uint64_t(buffer_index) << 30)) >>
-          element_size_bytes_pow2);
+  return buffer->resource()->GetGPUVirtualAddress() +
+         (scaled_resolve_current_range_start_scaled_ -
+          (uint64_t(buffer_index) << 30));
 }
 
 ID3D12Resource* D3D12TextureCache::RequestSwapTexture(
@@ -1566,61 +1583,18 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     return false;
   }
 
-  // Begin loading.
-  // May use different buffers for scaled base and mips, and also addressability
-  // of more than 128 * 2^20 (2^D3D12_REQ_BUFFER_RESOURCE_TEXEL_COUNT_2_TO_EXP)
-  // texels is not mandatory - need two separate UAV descriptors for base and
-  // mips.
-  // Destination.
-  uint32_t descriptor_count = 1;
-  if (texture_resolution_scaled) {
-    // Source - base and mips, one or both.
-    descriptor_count += (level_first == 0 && level_last != 0) ? 2 : 1;
-  } else {
-    // Source - shared memory.
-    if (!bindless_resources_used_) {
-      ++descriptor_count;
-    }
-  }
-  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors_allocated[3];
-  if (!command_processor_.RequestOneUseSingleViewDescriptors(
-          descriptor_count, descriptors_allocated)) {
-    command_processor_.ReleaseScratchGPUBuffer(copy_buffer, copy_buffer_state);
-    return false;
-  }
-  uint32_t descriptor_write_index = 0;
   command_processor_.SetExternalPipeline(pipeline);
   command_list.D3DSetComputeRootSignature(load_root_signature_.Get());
-  // Set up the destination descriptor.
-  assert_true(descriptor_write_index < descriptor_count);
-  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptor_dest =
-      descriptors_allocated[descriptor_write_index++];
-  ui::d3d12::util::CreateBufferTypedUAV(
-      device, descriptor_dest.first, copy_buffer,
-      ui::d3d12::util::GetUintPow2DXGIFormat(load_shader_info.dest_bpe_log2),
-      uint32_t(copy_buffer_size) >> load_shader_info.dest_bpe_log2);
-  command_list.D3DSetComputeRootDescriptorTable(2, descriptor_dest.second);
-  // Set up the unscaled source descriptor (scaled needs two descriptors that
-  // depend on the buffer being current, so they will be set later - for mips,
-  // after loading the base is done).
+  command_list.D3DSetComputeRootUnorderedAccessView(
+      2, copy_buffer->GetGPUVirtualAddress());
+  // Set up the unscaled source binding (scaled may have the base and the mips
+  // in different buffer resources).
   if (!texture_resolution_scaled) {
     D3D12SharedMemory& d3d12_shared_memory =
         static_cast<D3D12SharedMemory&>(shared_memory());
     d3d12_shared_memory.UseForReading();
-    ui::d3d12::util::DescriptorCpuGpuHandlePair descriptor_unscaled_source;
-    if (bindless_resources_used_) {
-      descriptor_unscaled_source =
-          command_processor_.GetSharedMemoryUintPow2BindlessSRVHandlePair(
-              load_shader_info.source_bpe_log2);
-    } else {
-      assert_true(descriptor_write_index < descriptor_count);
-      descriptor_unscaled_source =
-          descriptors_allocated[descriptor_write_index++];
-      d3d12_shared_memory.WriteUintPow2SRVDescriptor(
-          descriptor_unscaled_source.first, load_shader_info.source_bpe_log2);
-    }
-    command_list.D3DSetComputeRootDescriptorTable(
-        1, descriptor_unscaled_source.second);
+    command_list.D3DSetComputeRootShaderResourceView(
+        1, d3d12_shared_memory.GetGPUAddress());
   }
 
   // Submit the copy buffer population commands.
@@ -1656,20 +1630,15 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
       uint32_t guest_size_unscaled = is_base ? d3d12_texture.GetGuestBaseSize()
                                              : d3d12_texture.GetGuestMipsSize();
       if (!MakeScaledResolveRangeCurrent(guest_address, guest_size_unscaled,
-                                         load_shader_info.source_bpe_log2)) {
+                                         4)) {
         command_processor_.ReleaseScratchGPUBuffer(copy_buffer,
                                                    copy_buffer_state);
         return false;
       }
       TransitionCurrentScaledResolveRange(
           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-      assert_true(descriptor_write_index < descriptor_count);
-      ui::d3d12::util::DescriptorCpuGpuHandlePair descriptor_scaled_source =
-          descriptors_allocated[descriptor_write_index++];
-      CreateCurrentScaledResolveRangeUintPow2SRV(
-          descriptor_scaled_source.first, load_shader_info.source_bpe_log2);
-      command_list.D3DSetComputeRootDescriptorTable(
-          1, descriptor_scaled_source.second);
+      command_list.D3DSetComputeRootShaderResourceView(
+          1, GetCurrentScaledResolveRangeGPUAddress());
       if (!is_base) {
         scaled_mips_source_set_up = true;
       }
@@ -1812,7 +1781,36 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
           source_box.front + std::max(depth >> level, uint32_t(1));
       source_box_ptr = &source_box;
     } else {
+      // Non-packed level: copy the whole footprint. The footprint is sized as
+      // the guest mip reduced then scaled, while the host mip subresource is
+      // the base scaled then reduced, so for the deepest mips of scaled
+      // textures the footprint can be a row or column larger. Compressed dests
+      // round up to the block and absorb it. For uncompressed dests clamp the
+      // copy to the exact subresource with an explicit source box to avoid
+      // overrunning. Clamp per axis to min(footprint, subresource) since a
+      // non-power-of-two axis can be smaller than the subresource while another
+      // axis is larger, and the box must not exceed the source footprint
+      // either.
       source_box_ptr = nullptr;
+      if (!host_block_compressed) {
+        const D3D12_SUBRESOURCE_FOOTPRINT& footprint =
+            location_source.PlacedFootprint.Footprint;
+        uint32_t dst_width = std::max(
+            (width * texture_resolution_scale_x) >> level, uint32_t(1));
+        uint32_t dst_height = std::max(
+            (height * texture_resolution_scale_y) >> level, uint32_t(1));
+        uint32_t dst_depth = std::max(depth >> level, uint32_t(1));
+        if (footprint.Width > dst_width || footprint.Height > dst_height ||
+            footprint.Depth > dst_depth) {
+          source_box.left = 0;
+          source_box.top = 0;
+          source_box.front = 0;
+          source_box.right = std::min(footprint.Width, dst_width);
+          source_box.bottom = std::min(footprint.Height, dst_height);
+          source_box.back = std::min(footprint.Depth, dst_depth);
+          source_box_ptr = &source_box;
+        }
+      }
     }
     for (uint32_t slice = 0; slice < array_size; ++slice) {
       command_list.D3DCopyTextureRegion(&location_dest, 0, 0, 0,
@@ -1895,6 +1893,10 @@ ID3D12Resource* D3D12TextureCache::D3D12Texture::GetOrCreate3DAs2DResource(
   desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
   desc.Width = key().GetWidth();
   desc.Height = key().GetHeight();
+  if (key().scaled_resolve) {
+    desc.Width *= d3d12_cache.draw_resolution_scale_x();
+    desc.Height *= d3d12_cache.draw_resolution_scale_y();
+  }
   desc.DepthOrArraySize = 1;
   desc.MipLevels = 1;
   desc.Format = d3d12_cache.GetDXGIResourceFormat(key());

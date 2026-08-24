@@ -11,7 +11,14 @@
 #define XENIA_CONFIG_H_
 
 #include <filesystem>
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wabsolute-value"
+#endif
 #include "third_party/tomlplusplus/toml.hpp"
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 toml::parse_result ParseFile(const std::filesystem::path& filename);
 

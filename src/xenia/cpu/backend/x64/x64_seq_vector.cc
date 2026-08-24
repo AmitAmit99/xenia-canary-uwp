@@ -13,6 +13,7 @@
 #include <cstring>
 
 #include "xenia/cpu/backend/x64/x64_op.h"
+#include "xenia/cpu/backend/x64/x64_util.h"
 
 // For OPCODE_PACK/OPCODE_UNPACK
 #include "third_party/half/include/half.hpp"
@@ -159,6 +160,17 @@ struct VECTOR_DENORMFLUSH
     : Sequence<VECTOR_DENORMFLUSH,
                I<OPCODE_VECTOR_DENORMFLUSH, V128Op, V128Op>> {
   static void Emit(X64Emitter& e, const EmitArgType& i) {
+    if (e.IsFeatureEnabled(kX64EmitAVX512Ortho | kX64EmitAVX512DQ)) {
+      const Xbyak::Opmask denormal_mask = e.k1;
+      e.vptestnmd(denormal_mask, i.src1,
+                  e.GetXmmConstPtr(XMMSingleDenormalMask));
+      e.vxorps(e.xmm1, e.xmm1, e.xmm1);
+      e.vmovaps(i.dest, i.src1);
+      e.vrangeps(i.dest.reg() | denormal_mask, i.dest, e.xmm1,
+                 FpRangeSelect::AbsMin | FpRangeSign::OperandA);
+      return;
+    }
+
     e.ChangeMxcsrMode(MXCSRMode::Vmx);
     e.vxorps(e.xmm1, e.xmm1, e.xmm1);  // 0.25 P0123
 
@@ -922,8 +934,47 @@ struct VECTOR_SHL_V128
   static void EmitInt8(X64Emitter& e, const EmitArgType& i) {
     // TODO(benvanik): native version (with shift magic).
 
+    // gf2p8mulb's "x8 + x4 + x3 + x + 1"-polynomial-reduction only
+    // applies when the multiplication overflows. Masking away any bits
+    // that would have overflowed turns the polynomial-multiplication into
+    // regular modulo-multiplication
+    const uint64_t gfni_shift_mask = UINT64_C(0x01'03'07'0f'1f'3f'7f'ff);
+    // n << 0 == n * 1 | n << 1 == n * 2 | n << 2 == n * 4 | etc
+    const uint64_t gfni_multiply_table = UINT64_C(0x80'40'20'10'08'04'02'01);
+
     if (e.IsFeatureEnabled(kX64EmitAVX2)) {
       if (!i.src2.is_constant) {
+        if (e.IsFeatureEnabled(kX64EmitGFNI | kX64EmitAVX512Ortho |
+                               kX64EmitAVX512VBMI)) {
+          e.LoadConstantXmm(e.xmm0, vec128q(gfni_shift_mask, gfni_shift_mask));
+          e.vpermb(e.xmm0, i.src2, e.xmm0);
+          e.vpand(e.xmm0, i.src1, e.xmm0);
+
+          e.LoadConstantXmm(e.xmm1,
+                            vec128q(gfni_multiply_table, gfni_multiply_table));
+          e.vpermb(e.xmm1, i.src2, e.xmm1);
+
+          e.vgf2p8mulb(i.dest, e.xmm0, e.xmm1);
+          return;
+        } else if (e.IsFeatureEnabled(kX64EmitGFNI)) {
+          // Only use the lower 4 bits
+          // This also protects from vpshufb from writing zero when the MSB is
+          // set
+          e.LoadConstantXmm(e.xmm0, vec128b(0x0F));
+          e.vpand(e.xmm2, i.src2, e.xmm0);
+
+          e.LoadConstantXmm(e.xmm0, vec128q(gfni_shift_mask, gfni_shift_mask));
+          e.vpshufb(e.xmm0, e.xmm0, e.xmm2);
+          e.vpand(e.xmm0, i.src1, e.xmm0);
+
+          e.LoadConstantXmm(e.xmm1,
+                            vec128q(gfni_multiply_table, gfni_multiply_table));
+          e.vpshufb(e.xmm1, e.xmm1, e.xmm2);
+
+          e.vgf2p8mulb(i.dest, e.xmm0, e.xmm1);
+          return;
+        }
+
         // get high 8 bytes
         e.vpunpckhqdq(e.xmm1, i.src1, i.src1);
         e.vpunpckhqdq(e.xmm3, i.src2, i.src2);
@@ -934,6 +985,7 @@ struct VECTOR_SHL_V128
         e.vpmovzxbd(e.ymm2, i.src2);
         e.vpmovzxbd(e.ymm3, e.xmm3);
 
+        // Mask shift counts to 3 bits (0-7) for byte shifts
         e.vpbroadcastd(e.ymm4, e.GetXmmConstPtr(XMMXOPByteShiftMask));
         e.vpand(e.ymm2, e.ymm2, e.ymm4);
         e.vpand(e.ymm3, e.ymm3, e.ymm4);
@@ -967,6 +1019,15 @@ struct VECTOR_SHL_V128
           }
         }
         if (all_same) {
+          if (e.IsFeatureEnabled(kX64EmitGFNI)) {
+            // Every count is the same, so we can use gf2p8affineqb.
+            const uint8_t shift_amount = seenvalue & 0b111;
+            const uint64_t shift_matrix =
+                UINT64_C(0x0102040810204080) >> (shift_amount * 8);
+            e.vgf2p8affineqb(i.dest, i.src1,
+                             e.StashConstantXmm(0, vec128q(shift_matrix)), 0);
+            return;
+          }
           e.vpmovzxbw(e.ymm0, i.src1);
           e.vpsllw(e.ymm0, e.ymm0, seenvalue);
           e.vextracti128(e.xmm1, e.ymm0, 1);
@@ -978,6 +1039,39 @@ struct VECTOR_SHL_V128
 
         } else {
           e.LoadConstantXmm(e.xmm2, constmask);
+
+          if (e.IsFeatureEnabled(kX64EmitGFNI | kX64EmitAVX512Ortho |
+                                 kX64EmitAVX512VBMI)) {
+            e.LoadConstantXmm(e.xmm0,
+                              vec128q(gfni_shift_mask, gfni_shift_mask));
+            e.vpermb(e.xmm0, e.xmm2, e.xmm0);
+            e.vpand(e.xmm0, i.src1, e.xmm0);
+
+            e.LoadConstantXmm(
+                e.xmm1, vec128q(gfni_multiply_table, gfni_multiply_table));
+            e.vpermb(e.xmm1, e.xmm2, e.xmm1);
+
+            e.vgf2p8mulb(i.dest, e.xmm0, e.xmm1);
+            return;
+          } else if (e.IsFeatureEnabled(kX64EmitGFNI)) {
+            // Only use the lower 4 bits
+            // This also protects from vpshufb from writing zero when the MSB is
+            // set
+            e.LoadConstantXmm(e.xmm0, vec128b(0x0F));
+            e.vpand(e.xmm2, e.xmm2, e.xmm0);
+
+            e.LoadConstantXmm(e.xmm0,
+                              vec128q(gfni_shift_mask, gfni_shift_mask));
+            e.vpshufb(e.xmm0, e.xmm0, e.xmm2);
+            e.vpand(e.xmm0, i.src1, e.xmm0);
+
+            e.LoadConstantXmm(
+                e.xmm1, vec128q(gfni_multiply_table, gfni_multiply_table));
+            e.vpshufb(e.xmm1, e.xmm1, e.xmm2);
+
+            e.vgf2p8mulb(i.dest, e.xmm0, e.xmm1);
+            return;
+          }
 
           e.vpunpckhqdq(e.xmm1, i.src1, i.src1);
           e.vpunpckhqdq(e.xmm3, e.xmm2, e.xmm2);
@@ -1032,7 +1126,8 @@ struct VECTOR_SHL_V128
 
     e.L(looper);
     e.movzx(e.ecx, e.byte[e.rsp + stack_offset_src2 + e.rdx]);
-    e.and_(e.ecx, 7);
+    e.and_(e.cl, 7);  // Mask shift count to 3 bits (0-7) for byte shifts
+
     e.shl(e.byte[e.rsp + stack_offset_src1 + e.rdx], e.cl);
 
     if (e.IsFeatureEnabled(kX64FlagsIndependentVars)) {
@@ -2329,6 +2424,10 @@ struct PERMUTE_I32
         e.LoadConstantXmm(src3, i.src3.constant());
       } else {
         src3 = i.src3;
+      }
+      if (control == MakePermuteMask(0, 2, 0, 3, 1, 0, 1, 1)) {
+        e.vshufps(i.dest, src2, src3, MakeSwizzleMask(2, 3, 0, 1));
+        return;
       }
       if (i.dest != src3) {
         e.vpshufd(i.dest, src2, src_control);

@@ -15,7 +15,14 @@
 #include <optional>
 #include <regex>
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wabsolute-value"
+#endif
 #include "third_party/tomlplusplus/toml.hpp"
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 namespace xe {
 namespace patcher {

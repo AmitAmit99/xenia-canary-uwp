@@ -10,6 +10,8 @@
 #ifndef XENIA_KERNEL_XMUTANT_H_
 #define XENIA_KERNEL_XMUTANT_H_
 
+#include <atomic>
+
 #include "xenia/base/threading.h"
 #include "xenia/kernel/xobject.h"
 #include "xenia/xbox.h"
@@ -26,7 +28,7 @@ class XMutant : public XObject {
   ~XMutant() override;
 
   void Initialize(bool initial_owner);
-  void InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header);
+  void InitializeNative(void* native_ptr, const X_DISPATCH_HEADER* header);
 
   X_STATUS ReleaseMutant(uint32_t priority_increment, bool abandon, bool wait);
 
@@ -42,7 +44,7 @@ class XMutant : public XObject {
   XMutant();
 
   std::unique_ptr<xe::threading::Mutant> mutant_;
-  XThread* owning_thread_ = nullptr;
+  std::atomic<XThread*> owning_thread_{nullptr};
 };
 
 }  // namespace kernel

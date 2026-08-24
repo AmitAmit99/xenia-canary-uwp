@@ -1197,7 +1197,7 @@ void DxbcShaderTranslator::ROV_UnpackColor(
              dxbc::Src::LF(1.0f / 255.0f));
     if (i) {
       for (uint32_t j = 0; j < 3; ++j) {
-        PWLGammaToLinear(color_temp, j, color_temp, j, true, temp1,
+        PWLGammaToLinear(a_, color_temp, j, color_temp, j, true, temp1,
                          temp1_component, temp2, temp2_component);
       }
     }
@@ -1294,8 +1294,9 @@ void DxbcShaderTranslator::ROV_UnpackColor(
               dxbc::Src::LU(0, 16, 0, 16),
               dxbc::Src::R(packed_temp,
                            0b01010000 + packed_temp_components * 0b01010101));
-    // Convert from 16-bit float.
-    a_.OpF16ToF32(color_components_dest, dxbc::Src::R(color_temp));
+    // Convert from extended-range float16, exponent 31 holds finite values on
+    // the guest.
+    Float16ExtendedRangeTo32(color_temp, i ? 0b1111 : 0b0011);
     a_.OpBreak();
   }
 
@@ -1350,7 +1351,7 @@ void DxbcShaderTranslator::ROV_PackPreClampedColor(
           : xenos::ColorRenderTargetFormat::k_8_8_8_8)));
     for (uint32_t j = 0; j < 4; ++j) {
       if (i && j < 3) {
-        PreSaturatedLinearToPWLGamma(temp1, temp1_component, color_temp, j,
+        PreSaturatedLinearToPWLGamma(a_, temp1, temp1_component, color_temp, j,
                                      temp1, temp1_component, temp2,
                                      temp2_component);
         // Denormalize and add 0.5 for rounding.
@@ -1465,18 +1466,20 @@ void DxbcShaderTranslator::ROV_PackPreClampedColor(
     a_.OpCase(dxbc::Src::LU(RenderTargetCache::AddPSIColorFormatFlags(
         i ? xenos::ColorRenderTargetFormat::k_16_16_16_16_FLOAT
           : xenos::ColorRenderTargetFormat::k_16_16_FLOAT)));
+    // Convert to extended-range float16 instead of the plain IEEE conversion,
+    // exponent 31 holds finite values on the guest.
+    Float32ToF16ExtendedRange(color_temp, i ? 0b1111 : 0b0011);
     for (uint32_t j = 0; j < (uint32_t(2) << i); ++j) {
       dxbc::Dest packed_dest_half(
           dxbc::Dest::R(packed_temp, 1 << (packed_temp_components + (j >> 1))));
-      // Convert to 16-bit float.
-      a_.OpF32ToF16((j & 1) ? temp1_dest : packed_dest_half,
-                    dxbc::Src::R(color_temp).Select(j));
-      // Pack green or alpha.
+      // Pack green or alpha into the high half.
       if (j & 1) {
         a_.OpBFI(packed_dest_half, dxbc::Src::LU(16), dxbc::Src::LU(16),
-                 temp1_src,
+                 dxbc::Src::R(color_temp).Select(j),
                  dxbc::Src::R(packed_temp)
                      .Select(packed_temp_components + (j >> 1)));
+      } else {
+        a_.OpMov(packed_dest_half, dxbc::Src::R(color_temp).Select(j));
       }
     }
     a_.OpBreak();
@@ -1685,7 +1688,7 @@ void DxbcShaderTranslator::CompletePixelShader_WriteToRTVs() {
                  SystemConstants::Index::kColorExpBias,
                  offsetof(SystemConstants, color_exp_bias) + sizeof(float) * i,
                  dxbc::Src::kXXXX));
-    if (!gamma_render_target_as_srgb_) {
+    if (gamma_render_target_as_unorm8_) {
       // Convert to gamma space - this is incorrect, since it must be done after
       // blending on the Xbox 360, but this is just one of many blending issues
       // in the RTV path.
@@ -1696,8 +1699,9 @@ void DxbcShaderTranslator::CompletePixelShader_WriteToRTVs() {
       a_.OpMov(dxbc::Dest::R(system_temp_color, 0b0111),
                dxbc::Src::R(system_temp_color), true);
       for (uint32_t j = 0; j < 3; ++j) {
-        PreSaturatedLinearToPWLGamma(system_temp_color, j, system_temp_color, j,
-                                     gamma_temp, 0, gamma_temp, 1);
+        PreSaturatedLinearToPWLGamma(a_, system_temp_color, j,
+                                     system_temp_color, j, gamma_temp, 0,
+                                     gamma_temp, 1);
       }
       a_.OpEndIf();
     }
@@ -1847,6 +1851,38 @@ void DxbcShaderTranslator::CompletePixelShader_WriteToRTVs() {
 
 void DxbcShaderTranslator::CompletePixelShader_DSV_DepthTo24Bit() {
   bool shader_writes_depth = current_shader().writes_depth();
+  bool apply_polygon_offset = DSV_IsApplyingPolygonOffset();
+  auto write_polygon_offset_depth = [&](dxbc::Dest depth_dest, uint32_t temp,
+                                        dxbc::Src unbiased_depth) {
+    dxbc::Dest temp_x_dest(dxbc::Dest::R(temp, 0b0001));
+    dxbc::Src temp_x_src(dxbc::Src::R(temp, dxbc::Src::kXXXX));
+    in_front_face_used_ = true;
+    assert_true(system_temp_depth_stencil_ != UINT32_MAX);
+    a_.OpMax(temp_x_dest,
+             dxbc::Src::R(system_temp_depth_stencil_, dxbc::Src::kXXXX).Abs(),
+             dxbc::Src::R(system_temp_depth_stencil_, dxbc::Src::kYYYY).Abs());
+    a_.OpIf(true, dxbc::Src::V1D(in_reg_ps_front_face_sample_index_,
+                                 dxbc::Src::kXXXX));
+    a_.OpMAd(
+        temp_x_dest, temp_x_src,
+        LoadSystemConstant(SystemConstants::Index::kEdramPolyOffsetFront,
+                           offsetof(SystemConstants, edram_poly_offset_front),
+                           dxbc::Src::kXXXX),
+        LoadSystemConstant(SystemConstants::Index::kEdramPolyOffsetFront,
+                           offsetof(SystemConstants, edram_poly_offset_front),
+                           dxbc::Src::kYYYY));
+    a_.OpElse();
+    a_.OpMAd(
+        temp_x_dest, temp_x_src,
+        LoadSystemConstant(SystemConstants::Index::kEdramPolyOffsetBack,
+                           offsetof(SystemConstants, edram_poly_offset_back),
+                           dxbc::Src::kXXXX),
+        LoadSystemConstant(SystemConstants::Index::kEdramPolyOffsetBack,
+                           offsetof(SystemConstants, edram_poly_offset_back),
+                           dxbc::Src::kYYYY));
+    a_.OpEndIf();
+    a_.OpAdd(depth_dest, temp_x_src, unbiased_depth);
+  };
 
   if (!DSV_IsWritingFloat24Depth()) {
     if (shader_writes_depth) {
@@ -1864,6 +1900,16 @@ void DxbcShaderTranslator::CompletePixelShader_DSV_DepthTo24Bit() {
       // Write the depth from the temporary to the system depth output.
       a_.OpMov(dxbc::Dest::ODepth(),
                dxbc::Src::R(system_temp_depth_stencil_, dxbc::Src::kXXXX));
+    } else if (apply_polygon_offset) {
+      // Some decal draws use bias values too small for host RT depth bias to
+      // stay stable. Writing the biased depth here keeps those redraws stable
+      // against the receiver without forcing larger bias on unrelated draws.
+      uint32_t temp = PushSystemTemp();
+      dxbc::Src in_position_z(
+          dxbc::Src::V1D(in_reg_ps_position_, dxbc::Src::kZZZZ));
+      in_position_used_ |= 0b0100;
+      write_polygon_offset_depth(dxbc::Dest::ODepth(), temp, in_position_z);
+      PopSystemTemp();
     }
     return;
   }
@@ -1883,9 +1929,18 @@ void DxbcShaderTranslator::CompletePixelShader_DSV_DepthTo24Bit() {
     // assumption of it being clamped while working with the bit representation.
     temp = PushSystemTemp();
     in_position_used_ |= 0b0100;
-    a_.OpMul(dxbc::Dest::R(temp, 0b0001),
-             dxbc::Src::V1D(in_reg_ps_position_, dxbc::Src::kZZZZ),
-             dxbc::Src::LF(2.0f), true);
+    dxbc::Dest temp_x_dest(dxbc::Dest::R(temp, 0b0001));
+    dxbc::Src temp_x_src(dxbc::Src::R(temp, dxbc::Src::kXXXX));
+    dxbc::Src in_position_z(
+        dxbc::Src::V1D(in_reg_ps_position_, dxbc::Src::kZZZZ));
+    if (apply_polygon_offset) {
+      // Bias host depth first, then reuse the normal float24 conversion. D24FS
+      // scaling was handled when the polygon offset constants were uploaded.
+      write_polygon_offset_depth(temp_x_dest, temp, in_position_z);
+      a_.OpMul(temp_x_dest, temp_x_src, dxbc::Src::LF(2.0f), true);
+    } else {
+      a_.OpMul(temp_x_dest, in_position_z, dxbc::Src::LF(2.0f), true);
+    }
   }
 
   dxbc::Dest temp_x_dest(dxbc::Dest::R(temp, 0b0001));
@@ -1893,8 +1948,14 @@ void DxbcShaderTranslator::CompletePixelShader_DSV_DepthTo24Bit() {
   dxbc::Dest temp_y_dest(dxbc::Dest::R(temp, 0b0010));
   dxbc::Src temp_y_src(dxbc::Src::R(temp, dxbc::Src::kYYYY));
 
-  if (GetDxbcShaderModification().pixel.depth_stencil_mode ==
-      Modification::DepthStencilMode::kFloat24Truncating) {
+  Modification::DepthStencilMode depth_stencil_mode =
+      GetDxbcShaderModification().pixel.depth_stencil_mode;
+  bool depth_float24_truncating =
+      depth_stencil_mode ==
+          Modification::DepthStencilMode::kFloat24Truncating ||
+      depth_stencil_mode ==
+          Modification::DepthStencilMode::kFloat24TruncatingPolygonOffset;
+  if (depth_float24_truncating) {
     // Simplified conversion, always less than or equal to the original value -
     // just drop the lower bits.
     // The float32 exponent bias is 127.
@@ -1904,8 +1965,9 @@ void DxbcShaderTranslator::CompletePixelShader_DSV_DepthTo24Bit() {
     // The smallest denormalized 20e4 number is -34 - should drop 23 mantissa
     // bits at -34.
     // Anything smaller than 2^-34 becomes 0.
-    dxbc::Dest truncate_dest(shader_writes_depth ? dxbc::Dest::ODepth()
-                                                 : dxbc::Dest::ODepthLE());
+    dxbc::Dest truncate_dest((shader_writes_depth || apply_polygon_offset)
+                                 ? dxbc::Dest::ODepth()
+                                 : dxbc::Dest::ODepthLE());
     // Check if the number is representable as a float24 after truncation - the
     // exponent is at least -34.
     a_.OpUGE(temp_y_dest, temp_x_src, dxbc::Src::LU(0x2E800000));
@@ -2119,6 +2181,52 @@ void DxbcShaderTranslator::CompletePixelShader_AlphaToMask() {
   a_.OpEndIf();
 }
 
+void DxbcShaderTranslator::ROV_AddPassedMSAASamplesToZPD() {
+  if (uav_index_zpd_rov_counter_ == kBindingIndexUnallocated) {
+    uav_index_zpd_rov_counter_ = uav_count_++;
+  }
+
+  uint32_t temp = PushSystemTemp();
+  dxbc::Dest temp_x_dest(dxbc::Dest::R(temp, 0b0001));
+  dxbc::Src temp_x_src(dxbc::Src::R(temp, dxbc::Src::kXXXX));
+  dxbc::Dest temp_y_dest(dxbc::Dest::R(temp, 0b0010));
+  dxbc::Src temp_y_src(dxbc::Src::R(temp, dxbc::Src::kYYYY));
+
+  dxbc::Src counter_index_src(LoadSystemConstant(
+      SystemConstants::Index::kZpdRovCounterIndex,
+      offsetof(SystemConstants, zpd_rov_counter_index), dxbc::Src::kXXXX));
+
+  // UINT32_MAX means no ZPD segment is currently open for this draw.
+  a_.OpINE(temp_x_dest, counter_index_src, dxbc::Src::LU(UINT32_MAX));
+  a_.OpIf(true, temp_x_src);
+
+  {
+    // Only bits 0:3 are surviving coverage. 4:7 are deferred depth/stencil
+    // writes and don't contribute to the counter.
+    a_.OpAnd(temp_x_dest,
+             dxbc::Src::R(system_temp_rov_params_, dxbc::Src::kXXXX),
+             dxbc::Src::LU((uint32_t(1) << 4) - 1));
+    a_.OpCountBits(temp_x_dest, temp_x_src);
+    a_.OpIf(true, temp_x_src);
+    {
+      // The counter UAV is raw, so address it in bytes.
+      // One counter slot is one uint32_t.
+      a_.OpUMul(dxbc::Dest::Null(), temp_y_dest, counter_index_src,
+                dxbc::Src::LU(sizeof(uint32_t)));
+      // Add the number of samples that survived depth/stencil for this pixel to
+      // the active query slot. This slot is copied to the readback buffer when
+      // the ZPD segment is closed.
+      a_.OpAtomicIAdd(dxbc::Dest::U(uav_index_zpd_rov_counter_,
+                                    uint32_t(UAVRegister::kZpdRovCounter), 0),
+                      temp_y_src, 0b0001, temp_x_src);
+    }
+    a_.OpEndIf();
+  }
+  a_.OpEndIf();
+
+  PopSystemTemp();
+}
+
 void DxbcShaderTranslator::CompletePixelShader_WriteToROV() {
   uint32_t temp = PushSystemTemp();
   dxbc::Dest temp_x_dest(dxbc::Dest::R(temp, 0b0001));
@@ -2174,6 +2282,8 @@ void DxbcShaderTranslator::CompletePixelShader_WriteToROV() {
 
   // system_temp_rov_params_.y (the depth / stencil sample address) is not
   // needed anymore, can be used for color writing.
+
+  ROV_AddPassedMSAASamplesToZPD();
 
   if (!is_depth_only_pixel_shader_) {
     // Check if any sample is still covered after depth testing and writing,
@@ -3349,6 +3459,73 @@ void DxbcShaderTranslator::CompletePixelShader() {
     CompletePixelShader_WriteToRTVs();
     CompletePixelShader_DSV_DepthTo24Bit();
   }
+}
+
+void DxbcShaderTranslator::Float32ToF16ExtendedRange(uint32_t reg,
+                                                     uint32_t components) {
+  uint32_t original_temp = PushSystemTemp();
+  uint32_t mask_temp = PushSystemTemp();
+  // The Xbox 360 float16 has no NaN, map it to 0 before converting. Otherwise
+  // the overflow check below reads its exponent as an overflow, and since min
+  // and max drop the NaN operand in DXBC, the clamp would turn it into
+  // +131008.
+  a_.OpNE(dxbc::Dest::R(mask_temp, components), dxbc::Src::R(reg),
+          dxbc::Src::R(reg));
+  a_.OpMovC(dxbc::Dest::R(reg, components), dxbc::Src::R(mask_temp),
+            dxbc::Src::LF(0.0f), dxbc::Src::R(reg));
+  // Keep the original float32 values for the overflow path.
+  a_.OpMov(dxbc::Dest::R(original_temp, components), dxbc::Src::R(reg));
+  // The standard conversion covers magnitudes up to 65504, anything larger
+  // becomes Inf with all five exponent bits set.
+  a_.OpF32ToF16(dxbc::Dest::R(reg, components), dxbc::Src::R(reg));
+  // Find the lanes that overflowed.
+  a_.OpAnd(dxbc::Dest::R(mask_temp, components), dxbc::Src::R(reg),
+           dxbc::Src::LU(0x7C00));
+  a_.OpIEq(dxbc::Dest::R(mask_temp, components), dxbc::Src::R(mask_temp),
+           dxbc::Src::LU(0x7C00));
+  // Encode the overflowed lanes into exponent 31, which the Xbox 360 treats
+  // as finite. Clamp to the 131008 limit, halve so the exponent lands at 30
+  // or below, convert, then add one to the exponent to undo the halving.
+  a_.OpMin(dxbc::Dest::R(original_temp, components),
+           dxbc::Src::R(original_temp), dxbc::Src::LF(131008.0f));
+  a_.OpMax(dxbc::Dest::R(original_temp, components),
+           dxbc::Src::R(original_temp), dxbc::Src::LF(-131008.0f));
+  a_.OpMul(dxbc::Dest::R(original_temp, components),
+           dxbc::Src::R(original_temp), dxbc::Src::LF(0.5f));
+  a_.OpF32ToF16(dxbc::Dest::R(original_temp, components),
+                dxbc::Src::R(original_temp));
+  a_.OpIAdd(dxbc::Dest::R(original_temp, components),
+            dxbc::Src::R(original_temp), dxbc::Src::LU(0x0400));
+  // Choose the encoded value for the overflowed lanes.
+  a_.OpMovC(dxbc::Dest::R(reg, components), dxbc::Src::R(mask_temp),
+            dxbc::Src::R(original_temp), dxbc::Src::R(reg));
+  // Release original_temp and mask_temp.
+  PopSystemTemp(2);
+}
+
+void DxbcShaderTranslator::Float16ExtendedRangeTo32(uint32_t reg,
+                                                    uint32_t components) {
+  uint32_t reduced_temp = PushSystemTemp();
+  uint32_t mask_temp = PushSystemTemp();
+  // Find the exponent 31 lanes, which hold finite values on the Xbox 360
+  // rather than Inf or NaN.
+  a_.OpAnd(dxbc::Dest::R(mask_temp, components), dxbc::Src::R(reg),
+           dxbc::Src::LU(0x7C00));
+  a_.OpIEq(dxbc::Dest::R(mask_temp, components), dxbc::Src::R(mask_temp),
+           dxbc::Src::LU(0x7C00));
+  // Lower their exponent by one so the conversion sees a normal float16, then
+  // double the result to undo it.
+  a_.OpIAdd(dxbc::Dest::R(reduced_temp, components), dxbc::Src::R(reg),
+            dxbc::Src::LI(-0x0400));
+  a_.OpMovC(dxbc::Dest::R(reg, components), dxbc::Src::R(mask_temp),
+            dxbc::Src::R(reduced_temp), dxbc::Src::R(reg));
+  a_.OpF16ToF32(dxbc::Dest::R(reg, components), dxbc::Src::R(reg));
+  a_.OpMul(dxbc::Dest::R(reduced_temp, components), dxbc::Src::R(reg),
+           dxbc::Src::LF(2.0f));
+  a_.OpMovC(dxbc::Dest::R(reg, components), dxbc::Src::R(mask_temp),
+            dxbc::Src::R(reduced_temp), dxbc::Src::R(reg));
+  // Release reduced_temp and mask_temp.
+  PopSystemTemp(2);
 }
 
 void DxbcShaderTranslator::PreClampedFloat32To7e3(

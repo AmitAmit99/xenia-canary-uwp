@@ -174,7 +174,7 @@ void CreateProfileUI::OnDraw(ImGuiIO& io) {
   }
 
   if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
-    std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
+    std::ranges::fill(gamertag_, '\0');
     ImGui::CloseCurrentPopup();
     Close();
     ImGui::EndPopup();
@@ -194,31 +194,32 @@ void CreateProfileUI::OnDraw(ImGuiIO& io) {
   }
 
   ImGui::TextUnformatted("Gamertag:");
-  ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_));
+  const bool enter_pressed =
+      ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_),
+                       ImGuiInputTextFlags_EnterReturnsTrue);
+  valid_gamertag_ = profile_manager->IsGamertagValid(std::string(gamertag_));
 
-  const std::string gamertag_string = std::string(gamertag_);
-  bool valid = profile_manager->IsGamertagValid(gamertag_string);
-
-  ImGui::BeginDisabled(!valid);
-  if (ImGui::Button("Create")) {
+  bool dialog_open = true;
+  ImGui::BeginDisabled(!valid_gamertag_);
+  if (ImGui::Button("Create") || (enter_pressed && valid_gamertag_)) {
     bool autologin = (profile_manager->GetAccountCount() == 0);
-    if (profile_manager->CreateProfile(gamertag_string, autologin,
+    if (profile_manager->CreateProfile(std::string(gamertag_), autologin,
                                        migration_) &&
         migration_) {
       emulator_->DataMigration(0xB13EBABEBABEBABE);
     }
-    std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
-    ImGui::CloseCurrentPopup();
-    Close();
-    ImGui::EndDisabled();
-    ImGui::EndPopup();
-    return;
+    std::ranges::fill(gamertag_, '\0');
+    dialog_open = false;
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
 
   if (ImGui::Button("Cancel")) {
-    std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
+    std::ranges::fill(gamertag_, '\0');
+    dialog_open = false;
+  }
+
+  if (!dialog_open) {
     ImGui::CloseCurrentPopup();
     Close();
     ImGui::EndPopup();

@@ -83,10 +83,17 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
 
   // Performs the resolve to a shared memory area according to the current
   // register values, and also clears the render targets if needed. Must be in a
-  // frame for calling.
+  // frame for calling. copy_dest_info_out, if not null, receives the
+  // destination info with the format normalized to the xenos::TextureFormat
+  // the copy was actually performed with (only meaningful when a nonzero
+  // length was written).
+  // written_scaled_out: whether the data went to the scaled resolve address
+  // space rather than shared memory (native resolves don't).
   bool Resolve(const Memory& memory, D3D12SharedMemory& shared_memory,
                D3D12TextureCache& texture_cache, uint32_t& written_address_out,
-               uint32_t& written_length_out);
+               uint32_t& written_length_out,
+               reg::RB_COPY_DEST_INFO* copy_dest_info_out = nullptr,
+               bool* written_scaled_out = nullptr);
 
   // Returns true if any downloads were submitted to the command processor.
   bool InitializeTraceSubmitDownloads();
@@ -95,8 +102,8 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
 
   // For host render targets.
 
-  bool gamma_render_target_as_srgb() const {
-    return gamma_render_target_as_srgb_;
+  bool gamma_render_target_as_unorm16() const {
+    return gamma_render_target_as_unorm16_;
   }
 
   // Using R16G16[B16A16]_SNORM, which are -1...1, not the needed -32...32.
@@ -129,6 +136,8 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
       xenos::DepthRenderTargetFormat format);
 
  protected:
+  bool IsGammaFormatHostStorageSeparate() const override;
+
   uint32_t GetMaxRenderTargetWidth() const override {
     return D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
   }
@@ -178,6 +187,7 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   //  copied to a different buffer - the same range may have ROV-owned color and
   //  host float32 depth at the same time).
   ID3D12Resource* edram_buffer_ = nullptr;
+  D3D12_GPU_VIRTUAL_ADDRESS edram_buffer_gpu_address_ = 0;
   D3D12_RESOURCE_STATES edram_buffer_state_;
   EdramBufferModificationStatus edram_buffer_modification_status_ =
       EdramBufferModificationStatus::kUnmodified;
@@ -215,6 +225,13 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
       kResolveCopyShaders[size_t(draw_util::ResolveCopyShaderIndex::kCount)];
   ID3D12PipelineState* resolve_copy_pipelines_[size_t(
       draw_util::ResolveCopyShaderIndex::kCount)] = {};
+  // Unscaled variants for fully native resolves. Only created with resolution
+  // scaling, otherwise the main set is already unscaled. A separate set because
+  // the scaled shaders can't just run at 1x1, their root constants and
+  // destination space assume the scaled resolve buffer.
+  ID3D12RootSignature* resolve_copy_native_root_signature_ = nullptr;
+  ID3D12PipelineState* resolve_copy_native_pipelines_[size_t(
+      draw_util::ResolveCopyShaderIndex::kCount)] = {};
 
   // For traces.
   ID3D12Resource* edram_snapshot_download_buffer_ = nullptr;
@@ -225,16 +242,13 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
 
   class D3D12RenderTarget final : public RenderTarget {
    public:
-    // descriptor_draw_srgb is only used for k_8_8_8_8 render targets when host
-    // sRGB (gamma_render_target_as_srgb) is used. descriptor_load is present
-    // when the DXGI formats are different for drawing and bit-exact loading
-    // (for NaN pattern preservation across EDRAM tile ownership transfers in
-    // floating-point formats, and to distinguish between two -1 representations
-    // in snorm formats).
+    // descriptor_load is present when the DXGI formats are different for
+    // drawing and bit-exact loading (for NaN pattern preservation across EDRAM
+    // tile ownership transfers in floating-point formats, and to distinguish
+    // between two -1 representations in snorm formats).
     D3D12RenderTarget(
         RenderTargetKey key, ID3D12Resource* resource,
         ui::d3d12::D3D12CpuDescriptorPool::Descriptor&& descriptor_draw,
-        ui::d3d12::D3D12CpuDescriptorPool::Descriptor&& descriptor_draw_srgb,
         ui::d3d12::D3D12CpuDescriptorPool::Descriptor&&
             descriptor_load_separate,
         ui::d3d12::D3D12CpuDescriptorPool::Descriptor&& descriptor_srv,
@@ -243,7 +257,6 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
         : RenderTarget(key),
           resource_(resource),
           descriptor_draw_(std::move(descriptor_draw)),
-          descriptor_draw_srgb_(std::move(descriptor_draw_srgb)),
           descriptor_load_separate_(std::move(descriptor_load_separate)),
           descriptor_srv_(std::move(descriptor_srv)),
           descriptor_srv_stencil_(std::move(descriptor_srv_stencil)),
@@ -253,10 +266,6 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
     const ui::d3d12::D3D12CpuDescriptorPool::Descriptor& descriptor_draw()
         const {
       return descriptor_draw_;
-    }
-    const ui::d3d12::D3D12CpuDescriptorPool::Descriptor& descriptor_draw_srgb()
-        const {
-      return descriptor_draw_srgb_;
     }
     const ui::d3d12::D3D12CpuDescriptorPool::Descriptor& descriptor_srv()
         const {
@@ -297,7 +306,6 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
    private:
     Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
     ui::d3d12::D3D12CpuDescriptorPool::Descriptor descriptor_draw_;
-    ui::d3d12::D3D12CpuDescriptorPool::Descriptor descriptor_draw_srgb_;
     ui::d3d12::D3D12CpuDescriptorPool::Descriptor descriptor_load_separate_;
     // Texture SRV non-shader-visible descriptors, to prepare shader-visible
     // descriptors faster, by copying rather than by creating every time.
@@ -437,6 +445,10 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
       // swapping of 40-sample columns as opposed to the host render target -
       // this is done only for the color source).
       uint32_t host_depth_source_is_copy : 1;
+      // Scale classes of the two sides - the shader bakes each side's tile
+      // size and the conversion between the scale spaces.
+      uint32_t dest_scale_native : 1;
+      uint32_t source_scale_native : 1;
 
       // Last bits because this affects the root signature - after sorting, only
       // change it as fewer times as possible. Depth buffers have an additional
@@ -541,6 +553,12 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
       // Last bit because this affects the root signature - after sorting, only
       // change it at most once. Depth buffers have an additional stencil SRV.
       uint32_t is_depth : 1;
+      // Dumping to the scaled EDRAM layout duplicates this native render
+      // target's guest pixels.
+      uint32_t source_scale_native : 1;
+      // source_scale_native only.
+      // Address the EDRAM buffer with the plain 1x1 tile layout.
+      uint32_t native_layout : 1;
     };
 
     DumpPipelineKey() : key(0) { static_assert_size(*this, sizeof(key)); }
@@ -617,7 +635,7 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
 
     // May be different for different sources.
     kDumpRootParameterColorPitches = kDumpRootParameterSource + 1,
-    // Only changed between 32bpp and 64bpp.
+    // Not changed.
     kDumpRootParameterColorEdram,
 
     kDumpRootParameterColorCount,
@@ -712,13 +730,15 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   ID3D12PipelineState* GetOrCreateDumpPipeline(DumpPipelineKey key);
 
   // Writes contents of host render targets within rectangles from
-  // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_.
+  // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_ - with the plain 1x1
+  // tile layout if native_layout is set.
   void DumpRenderTargets(uint32_t dump_base, uint32_t dump_row_length_used,
-                         uint32_t dump_rows, uint32_t dump_pitch);
+                         uint32_t dump_rows, uint32_t dump_pitch,
+                         bool native_layout);
 
   bool use_stencil_reference_output_ = false;
 
-  bool gamma_render_target_as_srgb_ = false;
+  bool gamma_render_target_as_unorm16_ = false;
 
   bool depth_float24_round_ = false;
   bool depth_float24_convert_in_pixel_shader_ = false;
@@ -753,7 +773,6 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
 
   const RenderTarget* const*
       current_command_list_render_targets_[1 + xenos::kMaxColorRenderTargets];
-  uint32_t are_current_command_list_render_targets_srgb_ = 0;
   bool are_current_command_list_render_targets_valid_ = false;
 
   // Temporary storage for descriptors used in PerformTransfersAndResolveClears

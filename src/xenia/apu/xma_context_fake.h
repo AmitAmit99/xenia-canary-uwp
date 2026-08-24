@@ -36,7 +36,6 @@ class XmaContextFake : public XmaContext {
   bool Work() override;
 
   void Enable() override;
-  bool Block(bool poll) override;
   void Clear() override;
   void Disable() override;
   void Release() override;

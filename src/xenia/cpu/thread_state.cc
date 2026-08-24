@@ -56,9 +56,10 @@ static void* AllocateContext() {
 }
 
 static void FreeContext(void* ctx) {
-  char* true_start_of_ctx = &reinterpret_cast<char*>(
-      ctx)[-static_cast<ptrdiff_t>(xe::memory::allocation_granularity())];
-  memory::DeallocFixed(true_start_of_ctx, 0,
+  size_t granularity = xe::memory::allocation_granularity();
+  char* true_start_of_ctx =
+      &reinterpret_cast<char*>(ctx)[-static_cast<ptrdiff_t>(granularity)];
+  memory::DeallocFixed(true_start_of_ctx, granularity + sizeof(ppc::PPCContext),
                        memory::DeallocationType::kRelease);
 }
 
@@ -92,6 +93,10 @@ ThreadState::ThreadState(Processor* processor, uint32_t thread_id,
 
   // Set initial registers.
   context_->r[1] = stack_base;
+
+  // constant register, used by hv only i think
+  context_->r[2] = 0x20000000;
+
   context_->r[13] = pcr_address;
   // VSCR - Vector Status and Control Register
   // NJ bit (bit 16) = 1: Non-Java IEEE mode (default for Xbox 360)

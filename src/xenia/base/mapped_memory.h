@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 #include "xenia/base/platform.h"
 
@@ -62,6 +63,22 @@ class MappedMemory {
  protected:
   void* data_;
   size_t size_;
+};
+
+// Read-only fallback for hosts where a real memory mapping cannot be
+// created (e.g. UWP AppContainer paths that CreateFileMapping rejects) --
+// the whole file is read into a buffer instead. Writes are not persisted,
+// so this must not be used for MappedMemory::Mode::kReadWrite.
+class BufferedMappedMemory : public MappedMemory {
+ public:
+  explicit BufferedMappedMemory(std::vector<uint8_t> buffer)
+      : MappedMemory(nullptr, 0), buffer_(std::move(buffer)) {
+    data_ = buffer_.data();
+    size_ = buffer_.size();
+  }
+
+ private:
+  std::vector<uint8_t> buffer_;
 };
 
 class ChunkedMappedMemoryWriter {

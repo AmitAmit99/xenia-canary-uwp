@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <type_traits>
 #include <unordered_map>
 
 #include "xenia/base/assert.h"
@@ -47,10 +48,10 @@ namespace gpu {
 //   However, the max level is not ignored because any mip count can be
 //   specified when creating a texture, and another texture may be placed after
 //   the last one.
-// - If the texture has a mip address, but the base address is 0 or the same as
-//   the mip address, a mipmapped texture is created, but min/max LOD is clamped
-//   to the lower bound of 1 - the game is expected to do that anyway until the
-//   largest LOD is loaded.
+// - If the texture has a mip address, but the base address is 0, a mipmapped
+//   texture is created with the minimum LOD clamped to 1.
+// - If the base and mip addresses are the same with a nonzero minimum mip
+//   level, level 0 is already excluded, so the base upload is skipped.
 // TODO(Triang3l): Attach the largest LOD to existing textures with a valid
 // mip_address but no base ever used yet (no base_address) to save memory
 // because textures are streamed this way anyway.
@@ -97,7 +98,13 @@ class TextureCache {
   virtual void BeginSubmission(uint64_t new_submission_index);
   virtual void BeginFrame();
 
-  void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled);
+  // Marks the range as containing resolved data and invalidates textures
+  // overlapping it. resolution_scaled is whether the data went to the scaled
+  // resolve address space, or to shared memory, such as resolves done at
+  // native resolution when a scale threshold is set. The latter clears the
+  // scaled state of the range.
+  void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled,
+                           bool resolution_scaled);
   // Ensures the memory backing the range in the scaled resolve address space is
   // allocated and returns whether it is.
   virtual bool EnsureScaledResolveMemoryCommitted(
@@ -137,7 +144,12 @@ class TextureCache {
         GetValidTextureBinding(fetch_constant_index);
     return binding ? binding->swizzled_signs : kSwizzledSignsUnsigned;
   }
-  bool IsActiveTextureResolved(uint32_t fetch_constant_index) const {
+  uint32_t GetActiveIntegerScaleBits(uint32_t fetch_constant_index) const {
+    const TextureBinding* binding =
+        GetValidTextureBinding(fetch_constant_index);
+    return binding ? binding->integer_scale_bits : 0;
+  }
+  bool IsActiveTextureResolutionScaled(uint32_t fetch_constant_index) const {
     const TextureBinding* binding =
         GetValidTextureBinding(fetch_constant_index);
     if (!binding) {
@@ -194,13 +206,8 @@ class TextureCache {
     uint32_t is_valid : 1;  // 98
 
     TextureKey() { MakeInvalid(); }
-    TextureKey(const TextureKey& key) {
-      std::memcpy(this, &key, sizeof(*this));
-    }
-    TextureKey& operator=(const TextureKey& key) {
-      std::memcpy(this, &key, sizeof(*this));
-      return *this;
-    }
+    TextureKey(const TextureKey&) = default;
+    TextureKey& operator=(const TextureKey&) = default;
     void MakeInvalid() {
       // Zero everything, including the padding, for a stable hash.
       std::memset(this, 0, sizeof(*this));
@@ -218,6 +225,17 @@ class TextureCache {
       return depth_or_array_size_minus_1 + 1;
     }
 
+    // Returns true if this is a wide 1D texture (> 8192 wide) mapped to 2D.
+    bool IsWide1D() const {
+      return dimension == xenos::DataDimension::k1D && height_minus_1 > 0;
+    }
+    uint32_t Get1DWidth() const {
+      if (IsWide1D()) {
+        return GetWidth() * GetHeight();
+      }
+      return GetWidth();
+    }
+
     texture_util::TextureGuestLayout GetGuestLayout() const {
       return texture_util::GetGuestTextureLayout(
           dimension, pitch, GetWidth(), GetHeight(), GetDepthOrArraySize(),
@@ -230,6 +248,10 @@ class TextureCache {
     }
     void LogAction(const char* action) const;
   };
+  static_assert(
+      std::is_trivially_copyable_v<TextureKey>,
+      "TextureKey is compared and hashed by raw bytes; a trivial copy "
+      "is required so padding is carried and stays zero.");
 
   class Texture {
    public:
@@ -263,18 +285,6 @@ class TextureCache {
     }
     uint64_t last_usage_time() const { return last_usage_time_; }
 
-    bool GetBaseResolved() const { return base_resolved_; }
-    void SetBaseResolved(bool base_resolved) {
-      assert_false(!base_resolved && key().scaled_resolve);
-      base_resolved_ = base_resolved;
-    }
-    bool GetMipsResolved() const { return mips_resolved_; }
-    void SetMipsResolved(bool mips_resolved) {
-      assert_false(!mips_resolved && key().scaled_resolve);
-      mips_resolved_ = mips_resolved;
-    }
-    bool IsResolved() const { return base_resolved_ || mips_resolved_; }
-
     bool base_outdated(const global_unique_lock_type& global_lock) const {
       return base_outdated_;
     }
@@ -286,7 +296,7 @@ class TextureCache {
     // not).
     bool base_outdated_lockless() const { return base_outdated_; }
     bool mips_outdated_lockless() const { return mips_outdated_; }
-    void MakeUpToDateAndWatch(const global_unique_lock_type& global_lock);
+    bool MakeUpToDateAndWatch(const global_unique_lock_type& global_lock);
 
     void WatchCallback(const global_unique_lock_type& global_lock, bool is_mip);
 
@@ -331,13 +341,6 @@ class TextureCache {
     // For 3D-as-2D wrappers: use 3D tiling when loading even though the host
     // texture is 2D.
     bool force_load_3d_tiling_ = false;
-
-    // Whether the most up-to-date base / mips contain pages with data from a
-    // resolve operation (rather than from the CPU or memexport), primarily for
-    // choosing between piecewise linear gamma and sRGB when the former is
-    // emulated with the latter.
-    bool base_resolved_;
-    bool mips_resolved_;
 
     // These are to be accessed within the global critical region to synchronize
     // with shared memory.
@@ -501,11 +504,6 @@ class TextureCache {
   };
 
   struct LoadShaderInfo {
-    // Log2 of the sizes, in bytes, of the elements in the source (guest) and
-    // the destination (host) buffer bindings accessed by the copying shader,
-    // since the shader may copy multiple blocks per one invocation.
-    uint32_t source_bpe_log2;
-    uint32_t dest_bpe_log2;
     // Number of bytes in a host resolution-scaled block (corresponding to a
     // guest block if not decompressing, or a host texel if decompressing)
     // written by the shader.
@@ -524,6 +522,8 @@ class TextureCache {
 
   struct TextureBinding {
     TextureKey key;
+    // Packed integer scale, 6 bits per component.
+    uint32_t integer_scale_bits;
     // Destination swizzle merged with guest to host format swizzle.
     uint32_t host_swizzle;
     // Packed TextureSign values, 2 bit per each component, with guest-side
@@ -601,6 +601,12 @@ class TextureCache {
     assert_true(load_shader_index < kLoadShaderCount);
     return load_shader_info_[load_shader_index];
   }
+  // Integer num_format on fixed textures. Returns the packed scale used by the
+  // shader to restore guest integer units from normalized host samples.
+  static uint32_t GetIntegerScaleBits(xenos::TextureFormat guest_format,
+                                      uint32_t num_format,
+                                      uint32_t guest_swizzle,
+                                      uint8_t swizzled_signs);
   bool LoadTextureData(Texture& texture);
   void LoadTexturesData(Texture** textures, uint32_t n_textures);
   // Writes the texture data (for base, mips or both - but not neither) from the
@@ -632,6 +638,19 @@ class TextureCache {
   // implementation to update the internal dependencies of the binding.
   virtual void UpdateTextureBindingsImpl(uint32_t fetch_constant_mask) {}
 
+  // Checks if there are any pages that contain scaled resolve data within the
+  // range.
+  bool IsRangeScaledResolved(uint32_t start_unscaled, uint32_t length_unscaled);
+
+  // Whether the mips of a scaled resolve texture must be generated on the host
+  // (the guest did not resolve them into scaled memory itself).
+  bool ScaledResolveMipsNeedGeneration(const Texture& texture) {
+    const TextureKey& key = texture.key();
+    return key.scaled_resolve && key.mip_max_level != 0 &&
+           !IsRangeScaledResolved(key.mip_page << 12,
+                                  texture.GetGuestMipsSize());
+  }
+
  private:
   void UpdateTexturesTotalHostMemoryUsage(uint64_t add, uint64_t subtract);
 
@@ -640,9 +659,6 @@ class TextureCache {
                             void* context, void* data, uint64_t argument,
                             bool invalidated_by_gpu);
 
-  // Checks if there are any pages that contain scaled resolve data within the
-  // range.
-  bool IsRangeScaledResolved(uint32_t start_unscaled, uint32_t length_unscaled);
   // Global shared memory invalidation callback for invalidating scaled resolved
   // texture data.
   static void ScaledResolveGlobalWatchCallbackThunk(

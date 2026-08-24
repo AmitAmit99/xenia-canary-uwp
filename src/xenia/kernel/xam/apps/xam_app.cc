@@ -63,34 +63,18 @@ X_HRESULT XamApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       }
 
       assert_true(enum_struct->magic == kXObjSignature);
-
-      XCONTENT_CROSS_TITLE_DATA cross_title_data = {};
-      uint8_t* cross_title_data_ptr =
-          reinterpret_cast<uint8_t*>(&cross_title_data);
-
-      uint32_t item_count = 0;
-      X_RESULT result = e->WriteItems(cross_title_data_ptr,
-                                      data_ptr->buffer_size, &item_count);
+      assert_true(data_ptr->buffer_size == sizeof(XCONTENT_DATA_INTERNAL));
 
       XCONTENT_DATA_INTERNAL* content_data_ptr =
           memory_->TranslateVirtual<XCONTENT_DATA_INTERNAL*>(
               data_ptr->buffer_ptr);
 
-      assert_true(data_ptr->buffer_size == sizeof(XCONTENT_DATA_INTERNAL));
-
+      uint32_t item_count = 0;
       std::memset(content_data_ptr, 0, data_ptr->buffer_size);
 
-      if (!result) {
-        content_data_ptr->device_id = cross_title_data.content_data.device_id;
-        content_data_ptr->content_type =
-            cross_title_data.content_data.content_type;
-        content_data_ptr->set_display_name(
-            cross_title_data.content_data.display_name());
-        content_data_ptr->set_file_name(
-            cross_title_data.content_data.file_name());
-        content_data_ptr->padding[0] = content_data_ptr->padding[1] = 0;
-        content_data_ptr->title_id = cross_title_data.title_id;
-      }
+      X_RESULT result =
+          e->WriteItems(reinterpret_cast<uint8_t*>(content_data_ptr),
+                        data_ptr->buffer_size, &item_count);
 
       result = X_HRESULT_FROM_WIN32(result);
 
@@ -110,6 +94,17 @@ X_HRESULT XamApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
         xe::be<uint32_t> overlapped_ptr;
       }* data = reinterpret_cast<XContentQueryVolumeDeviceType*>(buffer);
       assert_true(buffer_length == sizeof(XContentQueryVolumeDeviceType));
+
+      std::string target;
+      if (!kernel_state_->file_system()->FindSymbolicLink(
+              std::string(data->root_name) + ':', target)) {
+        return X_E_INVALIDARG;
+      }
+
+      // Only apply this check to XContent packages
+      if (!target.starts_with("\\Device\\Package_")) {
+        return X_E_INVALIDARG;
+      }
 
       xe::be<DeviceType>* device_type_ptr =
           memory_->TranslateVirtual<xe::be<DeviceType>*>(
@@ -168,6 +163,16 @@ X_HRESULT XamApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       XELOGD("XamUnk2B003({:016X}, {:016X}, {:016X}), unimplemented",
              args->unk1.get(), args->unk2.get(), args->unk3.get());
       return X_E_SUCCESS;
+    }
+    // Causes dashboard to correctly process language/region change. It does not
+    // contain any buffer.
+    case 0x8000000D: {
+      const bool is_pc_enabled =
+          (kernel_state_->xconfig()->ReadSetting<uint8_t>(
+               XCONFIG_USER_CATEGORY, XCONFIG_USER_PC_FLAGS) &
+           X_PC_FLAGS::PCEnabled) != 0;
+
+      return is_pc_enabled ? X_E_ACCESS_DENIED : X_E_SUCCESS;
     }
   }
   XELOGE(

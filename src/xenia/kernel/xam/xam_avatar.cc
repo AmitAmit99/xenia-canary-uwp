@@ -14,8 +14,8 @@
 
 DEFINE_bool(allow_avatar_initialization, false,
             "Enable Avatar Initialization\n"
-            " Only set true when testing Avatar games. Certain games may\n"
-            " require kinect implementation.",
+            "Only set true when testing Avatar games. Certain games may crash "
+            "due to requirement of full avatar implementation.",
             "Kernel");
 
 namespace xe {
@@ -292,10 +292,10 @@ DECLARE_XAM_EXPORT1(XamAvatarGetAssetBinary, kAvatars, kStub);
 
 void XamAvatarGetInstalledAssetPackageDescription_entry(
     pointer_t<X_ASSET_ID> asset_id_ptr,
-    pointer_t<XCONTENT_AGGREGATE_DATA>
+    pointer_t<XCONTENT_DATA_AGGREGATE>
         content_data_ptr  // pointer_t<XCONTENT_DATA_INTERNAL>
 ) {
-  XCONTENT_AGGREGATE_DATA content_data;
+  XCONTENT_DATA_AGGREGATE content_data;
   content_data.content_type = XContentType::kAvatarItem;
   content_data.xuid = 0;
   content_data.title_id = asset_id_ptr->title_id;

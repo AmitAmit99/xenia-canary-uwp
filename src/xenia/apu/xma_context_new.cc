@@ -20,6 +20,8 @@ extern "C" {
 #pragma warning(disable : 4101 4244 5033)
 #endif
 #include "third_party/FFmpeg/libavcodec/avcodec.h"
+#include "third_party/FFmpeg/libavutil/channel_layout.h"
+#include "third_party/FFmpeg/libavutil/error.h"
 #if XE_COMPILER_MSVC
 #pragma warning(pop)
 #endif
@@ -35,10 +37,7 @@ XmaContextNew::XmaContextNew() = default;
 
 XmaContextNew::~XmaContextNew() {
   if (av_context_) {
-    if (avcodec_is_open(av_context_)) {
-      avcodec_close(av_context_);
-    }
-    av_free(av_context_);
+    avcodec_free_context(&av_context_);
   }
   if (av_frame_) {
     av_frame_free(&av_frame_);
@@ -69,7 +68,7 @@ int XmaContextNew::Setup(uint32_t id, Memory* memory, uint32_t guest_ptr) {
   }
 
   // Initialize these to 0. They'll actually be set later.
-  av_context_->channels = 0;
+  av_context_->ch_layout = AVChannelLayout{};
   av_context_->sample_rate = 0;
 
   av_frame_ = av_frame_alloc();
@@ -139,13 +138,25 @@ bool XmaContextNew::Work() {
     Consume(&output_rb, &data);
     data.output_buffer_write_offset =
         output_rb.write_offset() / kOutputBytesPerBlock;
+
+    if (output_rb.empty()) {
+      data.output_buffer_valid = false;
+    }
     StoreContextMerged(data, initial_data, context_ptr);
     return true;
   }
 
+  // Minimum free blocks needed before attempting a decode.
+  // Use the number of subframes Consume() will actually write per iteration
+  // (= subframe_decode_count, clamped to 1) plus any headroom requested by
+  // output_buffer_padding.  Using a full-frame worth of space (the old
+  // formula) was far too restrictive: games like TGM Ace use
+  // subframe_decode_count=2 on a small ring buffer and never had 8 free
+  // blocks available, causing the decoder to permanently stall.
+  const uint32_t effective_sdc =
+      std::max(static_cast<uint32_t>(1), data.subframe_decode_count);
   const int32_t minimum_subframe_decode_count =
-      ((kBytesPerFrameChannel / kOutputBytesPerBlock) << data.is_stereo) +
-      data.output_buffer_padding;
+      static_cast<int32_t>(effective_sdc) + data.output_buffer_padding;
 
   // We don't have enough space to even make one pass
   // Waiting for decoder to return more space.
@@ -169,6 +180,9 @@ bool XmaContextNew::Work() {
         data.output_buffer_valid, data.subframe_decode_count,
         data.output_buffer_padding);
 
+    const uint32_t pre_decode_offset = data.input_buffer_read_offset;
+    const uint8_t pre_remaining_subframes = current_frame_remaining_subframes_;
+
     Decode(&data);
     Consume(&output_rb, &data);
 
@@ -178,39 +192,51 @@ bool XmaContextNew::Work() {
           id(), data.IsAnyInputBufferValid(), data.error_status);
       break;
     }
+
+    // If Decode didn't advance the read offset and produced no new frame,
+    // we can't make progress. Break to avoid spinning.
+    // Only check when there were no pending subframes — if we entered this
+    // iteration with subframes remaining, Decode() intentionally skipped
+    // (offset unchanged) while Consume() drained the frame.
+    if (pre_remaining_subframes == 0 &&
+        data.input_buffer_read_offset == pre_decode_offset &&
+        current_frame_remaining_subframes_ == 0) {
+      XELOGAPU(
+          "XmaContext {}: Decode stalled at offset {} (no progress), "
+          "waiting for next buffer",
+          id(), pre_decode_offset);
+      break;
+    }
   }
 
-  data.output_buffer_write_offset =
-      output_rb.write_offset() / kOutputBytesPerBlock;
+  if (initial_data.IsAnyInputBufferValid()) {
+    data.output_buffer_write_offset =
+        output_rb.write_offset() / kOutputBytesPerBlock;
 
-  XELOGAPU("XmaContext {}: Read Output: {} Write Output: {}", id(),
-           data.output_buffer_read_offset, data.output_buffer_write_offset);
+  } else {
+    // NFS: Carbon and NFS: MW use write_offset as a stall detector
+    // make sure that they are equal if we're starved on input.
+    if (data.output_buffer_write_offset != data.output_buffer_read_offset) {
+      data.output_buffer_write_offset = data.output_buffer_read_offset;
+      data.output_buffer_valid = 0;
+    }
+  }
 
-  // That's a bit misleading due to nature of ringbuffer
-  // when write and read offset matches it might mean that we wrote nothing
-  // or we fully saturated allocated space.
-  if (output_rb.empty()) {
-    XELOGAPU("XmaContext {}: Output ring buffer empty, invalidating output",
+  // Signal the game that the output buffer is full
+  if (remaining_subframe_blocks_in_output_buffer_ == 0 && output_rb.empty()) {
+    XELOGAPU("XmaContext {}: Output ring buffer is full, invalidating output",
              id());
     data.output_buffer_valid = 0;
   }
+
+  XELOGAPU("XmaContext {}: Read Output: {} Write Output: {}", id(),
+           data.output_buffer_read_offset, data.output_buffer_write_offset);
 
   StoreContextMerged(data, initial_data, context_ptr);
   return true;
 }
 
 void XmaContextNew::Enable() { set_is_enabled(true); }
-
-bool XmaContextNew::Block(bool poll) {
-  if (!lock_.try_lock()) {
-    if (poll) {
-      return false;
-    }
-    lock_.lock();
-  }
-  lock_.unlock();
-  return true;
-}
 
 void XmaContextNew::Clear() {
   std::lock_guard<xe_mutex> lock(lock_);
@@ -440,9 +466,11 @@ void XmaContextNew::Decode(XMA_CONTEXT_DATA* data) {
   if (skip_count == 0xFF) {
     XELOGAPU("XmaContext {}: Full packet skip (0xFF) at packet {}/{}", id(),
              packet_index, current_input_packet_count);
+    const uint32_t next_packet_index_skip = packet_index + 1;
     uint32_t next_input_offset = GetNextPacketReadOffset(
-        current_input_buffer, packet_index + 1, current_input_packet_count);
-    if (next_input_offset == kBitsPerPacketHeader) {
+        data, next_packet_index_skip, current_input_packet_count);
+    if (next_packet_index_skip >= current_input_packet_count ||
+        next_input_offset == kBitsPerPacketHeader) {
       SwapInputBuffer(data);
     }
     data->input_buffer_read_offset = next_input_offset;
@@ -612,10 +640,14 @@ void XmaContextNew::Decode(XMA_CONTEXT_DATA* data) {
   }
 
   uint32_t next_input_offset = GetNextPacketReadOffset(
-      current_input_buffer, next_packet_index, current_input_packet_count);
+      data, next_packet_index, current_input_packet_count);
+
+  if (next_packet_index >= current_input_packet_count ||
+      next_input_offset == kBitsPerPacketHeader) {
+    SwapInputBuffer(data);
+  }
 
   if (next_input_offset == kBitsPerPacketHeader) {
-    SwapInputBuffer(data);
     // We're at start of next buffer
     // If it have any frame in this packet decoder should go to first frame in
     // packet If it doesn't have any frame then it should immediatelly go to
@@ -666,33 +698,61 @@ void XmaContextNew::UpdateLoopStatus(XMA_CONTEXT_DATA* data) {
   }
 }
 
+kPacketHandle XmaContextNew::GetPacketHandle(
+    XMA_CONTEXT_DATA* data, uint32_t buffer_index, uint32_t packet_index,
+    uint32_t current_input_packet_count) {
+  kPacketHandle result{};
+  bool is_packet_in_next_buffer = packet_index >= current_input_packet_count;
+  if (is_packet_in_next_buffer) {
+    buffer_index = buffer_index ^ 1;
+    packet_index = packet_index - current_input_packet_count;
+  }
+
+  if (!data->IsInputBufferValid(buffer_index)) {
+    return result;
+  }
+
+  const uint32_t next_buffer_address =
+      data->GetInputBufferAddress(buffer_index);
+  if (!next_buffer_address) {
+    // This should never occur but there is always a chance
+    XELOGE(
+        "XmaContext {}: the packet is expected to be in the {} buffer, "
+        "but the buffer marked valid is null pointer!",
+        id(), is_packet_in_next_buffer ? "next" : "current");
+    return result;
+  }
+
+  const uint32_t next_buffer_packet_count =
+      data->GetInputBufferPacketCount(buffer_index);
+  if (packet_index >= next_buffer_packet_count) {
+    XELOGE(
+        "XmaContext {}: the packet is expected to be in the {} buffer, "
+        "but the buffer is too short to contain this packet!",
+        id(), is_packet_in_next_buffer ? "next" : "current");
+    return result;
+  }
+
+  result.buffer_index_ = buffer_index;
+  result.packet_index_ = packet_index;
+  result.is_valid_ = true;
+  return result;
+}
+
 const uint8_t* XmaContextNew::GetNextPacket(
     XMA_CONTEXT_DATA* data, uint32_t next_packet_index,
     uint32_t current_input_packet_count) {
-  if (next_packet_index < current_input_packet_count) {
-    return memory()->TranslatePhysical(data->GetCurrentInputBufferAddress()) +
-           next_packet_index * kBytesPerPacket;
-  }
-
-  const uint8_t next_buffer_index = data->current_buffer ^ 1;
-
-  if (!data->IsInputBufferValid(next_buffer_index)) {
+  kPacketHandle packet_handle =
+      GetPacketHandle(data, data->current_buffer, next_packet_index,
+                      current_input_packet_count);
+  if (!packet_handle.is_valid_) {
     return nullptr;
   }
 
   const uint32_t next_buffer_address =
-      data->GetInputBufferAddress(next_buffer_index);
-
-  if (!next_buffer_address) {
-    // This should never occur but there is always a chance
-    XELOGE(
-        "XmaContext {}: Buffer is marked as valid, but doesn't have valid "
-        "pointer!",
-        id());
-    return nullptr;
-  }
-
-  return memory()->TranslatePhysical(next_buffer_address);
+      data->GetInputBufferAddress(packet_handle.buffer_index_);
+  return memory()->TranslatePhysical(next_buffer_address) +
+         packet_handle.packet_index_ * kBytesPerPacket;
 }
 
 const uint32_t XmaContextNew::GetNextPacketReadOffset(
@@ -712,10 +772,36 @@ const uint32_t XmaContextNew::GetNextPacketReadOffset(
                next_packet_index, current_input_packet_count);
       return new_input_buffer_offset;
     }
-    next_packet_index++;
+
+    // No frame *starts* in this packet, it is entirely the continuation of
+    // a frame split across the packet boundary.  Follow this packet's own
+    // skip count to the next packet of the same sub-stream.
+    const uint8_t next_skip = xma::GetPacketSkipCount(next_packet);
+    if (next_skip == 0xFF) {
+      break;
+    }
+    next_packet_index += next_skip + 1;
   }
 
   return kBitsPerPacketHeader;
+}
+
+const uint32_t XmaContextNew::GetNextPacketReadOffset(
+    XMA_CONTEXT_DATA* data, uint32_t next_packet_index,
+    uint32_t current_input_packet_count) {
+  kPacketHandle packet_handle =
+      GetPacketHandle(data, data->current_buffer, next_packet_index,
+                      current_input_packet_count);
+  if (!packet_handle.is_valid_) {
+    return kBitsPerPacketHeader;
+  }
+
+  const uint32_t next_buffer_address =
+      data->GetInputBufferAddress(packet_handle.buffer_index_);
+  return GetNextPacketReadOffset(
+      memory()->TranslatePhysical(next_buffer_address),
+      packet_handle.packet_index_,
+      data->GetInputBufferPacketCount(packet_handle.buffer_index_));
 }
 
 const uint32_t XmaContextNew::GetAmountOfBitsToRead(
@@ -818,16 +904,18 @@ int XmaContextNew::PrepareDecoder(int sample_rate, bool is_two_channel) {
   // Re-initialize the context with new sample rate and channels.
   uint32_t channels = is_two_channel ? 2 : 1;
   if (av_context_->sample_rate != sample_rate ||
-      av_context_->channels != channels) {
+      av_context_->ch_layout.nb_channels != (int)channels) {
     XELOGAPU("XmaContext {}: Codec reinit: rate {} -> {}, channels {} -> {}",
-             id(), av_context_->sample_rate, sample_rate, av_context_->channels,
-             channels);
-    // We have to reopen the codec so it'll realloc whatever data it needs.
-    // TODO(DrChat): Find a better way.
-    avcodec_close(av_context_);
+             id(), av_context_->sample_rate, sample_rate,
+             av_context_->ch_layout.nb_channels, channels);
+    // We have to recreate the codec context so it'll realloc whatever data it
+    // needs.
+    avcodec_free_context(&av_context_);
+    av_context_ = avcodec_alloc_context3(av_codec_);
 
     av_context_->sample_rate = sample_rate;
-    av_context_->channels = channels;
+    av_channel_layout_default(&av_context_->ch_layout, channels);
+    av_context_->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
 
     if (avcodec_open2(av_context_, av_codec_, NULL) < 0) {
       XELOGE("XmaContext: Failed to reopen FFmpeg context");
@@ -854,19 +942,22 @@ bool XmaContextNew::DecodePacket(AVCodecContext* av_context,
                                  const AVPacket* av_packet, AVFrame* av_frame) {
   auto ret = avcodec_send_packet(av_context, av_packet);
   if (ret < 0) {
-    XELOGE("XmaContext {}: Error sending packet for decoding", id());
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    av_strerror(ret, errbuf, sizeof(errbuf));
+    XELOGE("XmaContext {}: Error sending packet for decoding: {} ({})", id(),
+           errbuf, ret);
     return false;
   }
   ret = avcodec_receive_frame(av_context, av_frame);
 
   if (ret == AVERROR(EAGAIN)) {
     // Codec needs more input before producing output (e.g. first frame warmup).
-    XELOGAPU("XmaContext {}: EAGAIN - codec needs more input (warmup frame)",
-             id());
     return false;
   }
   if (ret < 0) {
-    XELOGE("XmaContext {}: Error during decoding", id());
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    av_strerror(ret, errbuf, sizeof(errbuf));
+    XELOGE("XmaContext {}: Error during decoding: {} ({})", id(), errbuf, ret);
     return false;
   }
   return true;

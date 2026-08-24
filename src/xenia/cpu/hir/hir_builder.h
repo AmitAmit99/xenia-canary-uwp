@@ -24,6 +24,11 @@
 #include "xenia/cpu/hir/value.h"
 #include "xenia/cpu/mmio_handler.h"
 
+#if defined(XE_COMPILER_MSVC) && defined(XE_ARCH_ARM64)
+// winnt.h defines `MemoryBarrier` as a macro on ARM-MSVC
+#undef MemoryBarrier
+#endif
+
 namespace xe {
 namespace cpu {
 namespace hir {
@@ -292,7 +297,6 @@ class HIRBuilder {
   Value* Pack(Value* value1, Value* value2, uint32_t pack_flags = 0);
   Value* Unpack(Value* value, uint32_t pack_flags = 0);
 
-  Value* AtomicExchange(Value* address, Value* new_value);
   Value* AtomicCompareExchange(Value* address, Value* old_value,
                                Value* new_value);
   Value* AtomicAdd(Value* address, Value* value);

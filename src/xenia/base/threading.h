@@ -83,8 +83,8 @@ class Fence {
   std::mutex mutex_;
   std::condition_variable cond_;
   // Use the highest bit (sign bit) as the signal flag and the rest to count
-  // waiting threads.
-  volatile state_t_ signal_state_;
+  // waiting threads. Protected by mutex_.
+  state_t_ signal_state_;
 };
 
 // Returns the total number of logical processors in the host system.
@@ -116,6 +116,10 @@ void SyncMemory();
 // Sleeps the current thread for at least as long as the given duration.
 void Sleep(std::chrono::microseconds duration);
 void NanoSleep(int64_t ns);
+// Like NanoSleep but trades a brief busy-wait tail for sub-millisecond
+// precision. Use only where wake-up jitter would miss a frame budget; the
+// spin costs CPU.
+void NanoSleepPrecise(int64_t ns);
 template <typename Rep, typename Period>
 void Sleep(std::chrono::duration<Rep, Period> duration) {
   Sleep(std::chrono::duration_cast<std::chrono::microseconds>(duration));

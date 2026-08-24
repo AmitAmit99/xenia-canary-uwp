@@ -10,19 +10,30 @@
 #ifndef XENIA_GPU_VULKAN_VULKAN_PIPELINE_STATE_CACHE_H_
 #define XENIA_GPU_VULKAN_VULKAN_PIPELINE_STATE_CACHE_H_
 
+#include <atomic>
+#include <condition_variable>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
+#include <deque>
+#include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <queue>
+#include <set>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "xenia/base/hash.h"
 #include "xenia/base/platform.h"
+#include "xenia/base/threading.h"
 #include "xenia/base/xxhash.h"
 #include "xenia/gpu/primitive_processor.h"
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/registers.h"
+#include "xenia/gpu/shader_storage.h"
 #include "xenia/gpu/spirv_shader_translator.h"
 #include "xenia/gpu/vulkan/vulkan_render_target_cache.h"
 #include "xenia/gpu/vulkan/vulkan_shader.h"
@@ -39,8 +50,6 @@ class VulkanCommandProcessor;
 // implementations.
 class VulkanPipelineCache {
  public:
-  static constexpr size_t kLayoutUIDEmpty = 0;
-
   class PipelineLayoutProvider {
    public:
     virtual ~PipelineLayoutProvider() {}
@@ -50,6 +59,43 @@ class VulkanPipelineCache {
     PipelineLayoutProvider() = default;
   };
 
+  struct Pipeline {
+    std::atomic<VkPipeline> pipeline{VK_NULL_HANDLE};
+    // The layouts are owned by the VulkanCommandProcessor, and must not be
+    // destroyed by it while the pipeline cache is active.
+    const PipelineLayoutProvider* pipeline_layout;
+
+    // Placeholder pipeline support for reduced stutter.
+    // When true, the current pipeline uses a placeholder pixel shader and
+    // the real pipeline is being compiled in the background.
+    std::atomic<bool> is_placeholder{false};
+
+    Pipeline(const PipelineLayoutProvider* pipeline_layout_provider)
+        : pipeline_layout(pipeline_layout_provider) {}
+
+    // Copy constructor needed for unordered_map
+    Pipeline(const Pipeline& other)
+        : pipeline(other.pipeline.load(std::memory_order_acquire)),
+          pipeline_layout(other.pipeline_layout),
+          is_placeholder(other.is_placeholder.load(std::memory_order_acquire)) {
+    }
+
+    // Move constructor
+    Pipeline(Pipeline&& other) noexcept
+        : pipeline(other.pipeline.load(std::memory_order_acquire)),
+          pipeline_layout(other.pipeline_layout),
+          is_placeholder(other.is_placeholder.load(std::memory_order_acquire)) {
+    }
+
+    // Deleted copy assignment to prevent accidental copying
+    Pipeline& operator=(const Pipeline&) = delete;
+
+    // Deleted move assignment
+    Pipeline& operator=(Pipeline&&) = delete;
+  };
+
+  static constexpr size_t kLayoutUIDEmpty = 0;
+
   VulkanPipelineCache(VulkanCommandProcessor& command_processor,
                       const RegisterFile& register_file,
                       VulkanRenderTargetCache& render_target_cache,
@@ -58,6 +104,19 @@ class VulkanPipelineCache {
 
   bool Initialize();
   void Shutdown();
+
+  // Shader and pipeline storage.
+  void InitializeShaderStorage(
+      const std::filesystem::path& cache_root, uint32_t title_id, bool blocking,
+      std::function<void()> completion_callback = nullptr);
+  void ShutdownShaderStorage();
+
+  void EndSubmission();
+  bool IsCreatingPipelines();
+  // Waits for any pipeline creation needed by the current draw path to finish
+  // before state is consumed. This was added so strict ZPD query paths stop
+  // racing pipeline compilation and then blocking work on incomplete state.
+  void AwaitPipelineCompletion();
 
   VulkanShader* LoadShader(xenos::ShaderType shader_type,
                            const uint32_t* host_address, uint32_t dword_count);
@@ -73,12 +132,13 @@ class VulkanPipelineCache {
       Shader::HostVertexShaderType host_vertex_shader_type,
       uint32_t interpolator_mask, bool ps_param_gen_used) const;
   SpirvShaderTranslator::Modification GetCurrentPixelShaderModification(
-      const Shader& shader, uint32_t interpolator_mask,
-      uint32_t param_gen_pos) const;
+      const Shader& shader, uint32_t interpolator_mask, uint32_t param_gen_pos,
+      reg::RB_DEPTHCONTROL normalized_depth_control,
+      uint32_t normalized_color_mask,
+      bool apply_polygon_offset_in_shader) const;
 
   bool EnsureShadersTranslated(VulkanShader::VulkanTranslation* vertex_shader,
                                VulkanShader::VulkanTranslation* pixel_shader);
-  // TODO(Triang3l): Return a deferred creation handle.
   bool ConfigurePipeline(
       VulkanShader::VulkanTranslation* vertex_shader,
       VulkanShader::VulkanTranslation* pixel_shader,
@@ -86,8 +146,7 @@ class VulkanPipelineCache {
       reg::RB_DEPTHCONTROL normalized_depth_control,
       uint32_t normalized_color_mask,
       VulkanRenderTargetCache::RenderPassKey render_pass_key,
-      VkPipeline& pipeline_out,
-      const PipelineLayoutProvider*& pipeline_layout_out);
+      Pipeline** pipeline_out);
 
  private:
   enum class PipelineGeometryShader : uint32_t {
@@ -216,28 +275,41 @@ class VulkanPipelineCache {
         return size_t(description.GetHash());
       }
     };
+
+    static constexpr uint32_t kVersion = 0x20250118;
   });
 
-  struct Pipeline {
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    // The layouts are owned by the VulkanCommandProcessor, and must not be
-    // destroyed by it while the pipeline cache is active.
-    const PipelineLayoutProvider* pipeline_layout;
-    Pipeline(const PipelineLayoutProvider* pipeline_layout_provider)
-        : pipeline_layout(pipeline_layout_provider) {}
-  };
+  // Pipeline storage constants.
+  static constexpr uint32_t kPipelineStorageVersionWithoutAPI = 0x20201219;
+  static constexpr uint32_t kPipelineStorageAPIMagicVulkan = 'VLKN';
 
-  // Description that can be passed from the command processor thread to the
+  // Pipeline storage description.
+  XEPACKEDSTRUCT(PipelineStoredDescription, {
+    uint64_t description_hash;
+    PipelineDescription description;
+  });
+
   // creation threads, with everything needed from caches pre-looked-up.
   struct PipelineCreationArguments {
     std::pair<const PipelineDescription, Pipeline>* pipeline;
-    const VulkanShader::VulkanTranslation* vertex_shader;
-    const VulkanShader::VulkanTranslation* pixel_shader;
+    VulkanShader::VulkanTranslation* vertex_shader;
+    VulkanShader::VulkanTranslation* pixel_shader;
     VkShaderModule geometry_shader;
     // Tessellation shaders (only used when tessellation is active).
     VkShaderModule tessellation_vertex_shader;   // VS for passing data to TCS.
     VkShaderModule tessellation_control_shader;  // TCS (hull shader).
     VkRenderPass render_pass;
+    // Priority for async compilation (higher = compiled sooner).
+    // Pipelines that write to visible render targets get higher priority.
+    uint8_t priority = 0;
+  };
+
+  // Comparator for priority queue - higher priority first.
+  struct PipelineCreationPriorityCompare {
+    bool operator()(const PipelineCreationArguments& a,
+                    const PipelineCreationArguments& b) const {
+      return a.priority < b.priority;  // max-heap: lower priority at bottom
+    }
   };
 
   union GeometryShaderKey {
@@ -246,6 +318,7 @@ class VulkanPipelineCache {
       PipelineGeometryShader type : 2;
       uint32_t interpolator_count : 5;
       uint32_t has_user_clip_planes : 1;
+      uint32_t user_clip_plane_cull : 1;
       uint32_t has_vertex_kill_and : 1;
       uint32_t has_point_size : 1;
       uint32_t has_point_coordinates : 1;
@@ -269,6 +342,11 @@ class VulkanPipelineCache {
   // Can be called from multiple threads.
   bool TranslateAnalyzedShader(SpirvShaderTranslator& translator,
                                VulkanShader::VulkanTranslation& translation);
+
+  // Translates shaders in parallel for storage loading.
+  void TranslateShadersForStorage(
+      const std::set<std::pair<uint64_t, uint64_t>>& translations_needed,
+      bool edram_fsi_used);
 
   void WritePipelineRenderTargetDescription(
       reg::RB_BLENDCONTROL blend_control, uint32_t write_mask,
@@ -304,13 +382,30 @@ class VulkanPipelineCache {
   // Can be called from creation threads - all needed data must be fully set up
   // at the point of the call: shaders must be translated, pipeline layout and
   // render pass objects must be available.
+  // If fragment_shader_override is not VK_NULL_HANDLE, it is used instead of
+  // the pixel shader from creation_arguments (for placeholder pipelines).
   bool EnsurePipelineCreated(
-      const PipelineCreationArguments& creation_arguments);
+      const PipelineCreationArguments& creation_arguments,
+      VkShaderModule fragment_shader_override = VK_NULL_HANDLE);
+
+  // Creates a placeholder pipeline using the placeholder pixel shader.
+  // Used for pipeline hot-swap to reduce stutter.
+  bool EnsurePipelineCreatedWithPlaceholder(
+      const PipelineCreationArguments& creation_arguments) {
+    return EnsurePipelineCreated(creation_arguments, placeholder_pixel_shader_);
+  }
 
   VulkanCommandProcessor& command_processor_;
   const RegisterFile& register_file_;
   VulkanRenderTargetCache& render_target_cache_;
   VkShaderStageFlags guest_shader_vertex_stages_;
+
+  // Cached device float control features for geometry shader creation, so the
+  // built-in geometry shaders run under the same float semantics as the guest
+  // vertex and pixel shaders.
+  bool signed_zero_inf_nan_preserve_float32_ = false;
+  bool denorm_flush_to_zero_float32_ = false;
+  bool rounding_mode_rte_float32_ = false;
 
   // Temporary storage for AnalyzeUcode calls on the processor thread.
   StringBuffer ucode_disasm_buffer_;
@@ -347,6 +442,17 @@ class VulkanPipelineCache {
   // shader interlock when no Xenos pixel shader provided.
   VkShaderModule depth_only_fragment_shader_ = VK_NULL_HANDLE;
 
+  // Substitute depth-only pixel shaders that perform float24 conversion of the
+  // rasterizer's depth, bound for guest depth-only draws when in-PS float24
+  // conversion is active and the depth buffer is D24FS8. Mirrors the DXBC
+  // backend's float24_{truncate,round}_ps.
+  VkShaderModule float24_truncate_fragment_shader_ = VK_NULL_HANDLE;
+  VkShaderModule float24_round_fragment_shader_ = VK_NULL_HANDLE;
+
+  // Placeholder pixel shader for pipeline hot-swap to reduce stutter.
+  // Outputs transparent black while the real shader compiles in background.
+  VkShaderModule placeholder_pixel_shader_ = VK_NULL_HANDLE;
+
   // Tessellation shaders.
   // Vertex shaders for tessellation - pass indices/factors to TCS.
   VkShaderModule tessellation_indexed_vs_ = VK_NULL_HANDLE;
@@ -374,8 +480,52 @@ class VulkanPipelineCache {
       pipelines_;
 
   // Previously used pipeline, to avoid lookups if the state wasn't changed.
-  const std::pair<const PipelineDescription, Pipeline>* last_pipeline_ =
-      nullptr;
+  std::pair<const PipelineDescription, Pipeline>* last_pipeline_ = nullptr;
+
+  void CreationThread();
+
+  // For asynchronous creation.
+  std::vector<std::unique_ptr<xe::threading::Thread>> creation_threads_;
+  std::atomic<bool> creation_threads_shutdown_{false};
+  std::atomic<size_t> creation_threads_busy_{0};
+  // Priority queue contains pointers to map entries. Pipelines are never
+  // evicted as games have a finite set that should all remain cached for
+  // performance. Higher priority pipelines (those writing to visible RTs)
+  // are compiled first.
+  std::priority_queue<PipelineCreationArguments,
+                      std::vector<PipelineCreationArguments>,
+                      PipelineCreationPriorityCompare>
+      creation_queue_;
+  std::mutex creation_request_lock_;
+  std::condition_variable creation_request_cond_;
+  std::unique_ptr<xe::threading::Event> creation_completion_event_ = nullptr;
+  std::atomic<bool> creation_completion_set_event_{false};
+  std::function<void()> creation_completion_callback_;
+  // During startup loading, don't block on pipeline creation to allow game
+  // boot.
+  bool startup_loading_ = false;
+
+  // Deferred destruction of replaced shader modules and pipelines.
+  // Pipelines are only destroyed after the GPU submission that might reference
+  // them has completed (tracked via submission numbers from command processor).
+  void ProcessDeferredDestructions();
+  std::vector<VkShaderModule> deferred_destroy_shader_modules_;
+  // Pipelines pending destruction, paired with the submission number they were
+  // last potentially used in. Only destroyed when that submission completes.
+  std::vector<std::pair<VkPipeline, uint64_t>> deferred_destroy_pipelines_;
+  std::mutex deferred_destroy_mutex_;
+
+  // Shader and pipeline storage.
+  uint32_t shader_storage_title_id_ = 0;
+  std::atomic<bool> shader_storage_file_flush_needed_{false};
+  std::atomic<bool> pipeline_storage_file_flush_needed_{false};
+
+  // Storage writer for shaders and pipelines (owns file handles and storage
+  // index).
+  ShaderStorageWriter<PipelineStoredDescription> storage_writer_;
+
+  // VkPipelineCache persistence path.
+  std::filesystem::path vk_pipeline_cache_path_;
 };
 
 }  // namespace vulkan

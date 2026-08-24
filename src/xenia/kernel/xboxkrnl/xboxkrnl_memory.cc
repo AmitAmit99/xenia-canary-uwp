@@ -76,7 +76,14 @@ dword_result_t NtAllocateVirtualMemory_entry(lpdword_t base_addr_ptr,
   assert_not_null(region_size_ptr);
 
   // Set to TRUE when allocation is from devkit memory area.
-  assert_true(debug_memory == 0);
+  // We don't support separate devkit memory, so just ignore this flag.
+  if (debug_memory) {
+    XELOGW(
+        "Game is attempting to allocate devkit debug memory (base: {:08X}, "
+        "size: {:08X}). Ignoring debug flag and using normal allocation.",
+        base_addr_ptr ? uint32_t(*base_addr_ptr) : 0,
+        region_size_ptr ? uint32_t(*region_size_ptr) : 0);
+  }
 
   // This allocates memory from the kernel heap, which is initialized on startup
   // and shared by both the kernel implementation and user code.
@@ -669,7 +676,7 @@ struct X_POOL_ALLOC_HEADER {
 };
 
 uint32_t xeAllocatePoolTypeWithTag(PPCContext* context, uint32_t size,
-                                   uint32_t tag, uint32_t zero) {
+                                   uint32_t tag, uint32_t pool_selector) {
   if (size <= 0xFD8) {
     uint32_t adjusted_size = size + sizeof(X_POOL_ALLOC_HEADER);
 
@@ -687,9 +694,9 @@ uint32_t xeAllocatePoolTypeWithTag(PPCContext* context, uint32_t size,
 }
 
 dword_result_t ExAllocatePoolTypeWithTag_entry(dword_t size, dword_t tag,
-                                               dword_t zero,
+                                               dword_t pool_selector,
                                                const ppc_context_t& context) {
-  return xeAllocatePoolTypeWithTag(context, size, tag, zero);
+  return xeAllocatePoolTypeWithTag(context, size, tag, pool_selector);
 }
 DECLARE_XBOXKRNL_EXPORT1(ExAllocatePoolTypeWithTag, kMemory, kImplemented);
 
@@ -740,6 +747,11 @@ dword_result_t KeGetImagePageTableEntry_entry(dword_t address,
 
   if (image_heap->page_size() < 65536) {
     returned_value |= 0x40000000;
+
+    // TODO(Gliniak): Verify if 1 is set when page is marked as read-only. For
+    // now there is not enough data, but dashboard 14xxx and above requires that
+    // return from this call will have bit 0 set.
+    returned_value |= 1;
   }
 
   return returned_value & 0x400FFFFF;  // this is actually the mask it applies

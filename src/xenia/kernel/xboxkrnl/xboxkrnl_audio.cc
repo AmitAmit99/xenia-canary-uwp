@@ -21,7 +21,9 @@ namespace kernel {
 namespace xboxkrnl {
 
 dword_result_t XAudioGetSpeakerConfig_entry(lpdword_t config_ptr) {
-  *config_ptr = cvars::audio_flag;
+  kernel_state()->xconfig()->ReadSetting(
+      XCONFIG_USER_CATEGORY,
+      XCONFIG_USER_CATEGORY_ENTRIES::XCONFIG_USER_AUDIO_FLAGS, config_ptr);
   return X_ERROR_SUCCESS;
 }
 DECLARE_XBOXKRNL_EXPORT1(XAudioGetSpeakerConfig, kAudio, kImplemented);
@@ -30,7 +32,7 @@ dword_result_t XAudioGetVoiceCategoryVolumeChangeMask_entry(
     lpunknown_t driver_ptr, lpdword_t out_ptr) {
   assert_true((driver_ptr.guest_address() & 0xFFFF0000) == 0x41550000);
 
-  xe::threading::NanoSleep(1000);
+  xe::threading::MaybeYield();
 
   // Checking these bits to see if any voice volume changed.
   // I think.

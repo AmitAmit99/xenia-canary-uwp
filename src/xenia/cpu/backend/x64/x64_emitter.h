@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "xenia/base/arena.h"
+#include "xenia/cpu/backend/code_cache_base.h"
 #include "xenia/cpu/function.h"
 #include "xenia/cpu/function_trace_data.h"
 #include "xenia/cpu/hir/hir_builder.h"
@@ -37,8 +38,6 @@ namespace x64 {
 using namespace amd64;
 class X64Backend;
 class X64CodeCache;
-
-struct EmitFunctionInfo;
 
 enum RegisterFlags {
   REG_DEST = (1 << 0),
@@ -152,6 +151,7 @@ enum XmmConst {
   XMMInt127,
   XMM2To32,
   XMMFloatInf,
+  XMMDoubleInf,
   XMMIntsToBytes,
   XMMShortsToBytes,
   XMMLVSLTableBase,
@@ -312,7 +312,6 @@ class X64Emitter : public Xbyak::CodeGenerator {
   FunctionDebugInfo* debug_info() const { return debug_info_; }
 
   size_t stack_size() const { return stack_size_; }
-  Xbyak::RegExp GetLocalsBase() const;
   SimdDomain DeduceSimdDomain(const hir::Value* for_value);
 
   void ForgetMxcsrMode() { mxcsr_mode_ = MXCSRMode::Unknown; }
@@ -401,7 +400,6 @@ class X64Emitter : public Xbyak::CodeGenerator {
   XbyakAllocator* allocator_ = nullptr;
   XexModule* guest_module_ = nullptr;
   bool synchronize_stack_on_next_instruction_ = false;
-  int locals_page_delta_ = 0;
   Xbyak::util::Cpu cpu_;
   uint64_t feature_flags_ = 0;
   uint32_t current_guest_function_ = 0;

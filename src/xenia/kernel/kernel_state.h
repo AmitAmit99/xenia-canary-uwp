@@ -24,12 +24,14 @@
 #include "xenia/kernel/util/kernel_fwd.h"
 #include "xenia/kernel/util/native_list.h"
 #include "xenia/kernel/util/object_table.h"
+#include "xenia/kernel/util/xmp_volume_patch.h"
 #include "xenia/kernel/xam/achievement_manager.h"
 #include "xenia/kernel/xam/app_manager.h"
 #include "xenia/kernel/xam/content_manager.h"
 #include "xenia/kernel/xam/user_profile.h"
 #include "xenia/kernel/xam/xam_state.h"
 #include "xenia/kernel/xam/xdbf/spa_info.h"
+#include "xenia/kernel/xconfig.h"
 #include "xenia/kernel/xevent.h"
 #include "xenia/vfs/virtual_file_system.h"
 
@@ -65,10 +67,10 @@ struct X_KPROCESS {
   // so it sets this ptr to 0x1C0000
   xe::be<uint32_t> clrdataa_masked_ptr;
   xe::be<uint32_t> thread_count;
-  uint8_t unk_18;
-  uint8_t unk_19;
-  uint8_t unk_1A;
-  uint8_t unk_1B;
+  uint8_t process_priority_class;
+  uint8_t default_thread_priority;
+  uint8_t max_dynamic_priority;
+  uint8_t disable_quantum_decay;
   xe::be<uint32_t> kernel_stack_size;
   xe::be<uint32_t> tls_static_data_address;
   xe::be<uint32_t> tls_data_size;
@@ -79,7 +81,7 @@ struct X_KPROCESS {
   uint8_t is_terminating;
   // one of X_PROCTYPE_
   uint8_t process_type;
-  xe::be<uint32_t> bitmap[8];
+  xe::be<uint32_t> tls_slot_bitmap[8];
   xe::be<uint32_t> unk_50;
   X_LIST_ENTRY unk_54;
   xe::be<uint32_t> unk_5C;
@@ -95,21 +97,13 @@ struct TerminateNotification {
 // a bit like the timers on KUSER_SHARED on normal win32
 // https://www.geoffchappell.com/studies/windows/km/ntoskrnl/inc/api/ntexapi_x/kuser_shared_data/index.htm
 struct X_TIME_STAMP_BUNDLE {
+  // according to Nukernl these are BE
   uint64_t interrupt_time;
   // i assume system_time is in 100 ns intervals like on win32
   uint64_t system_time;
   uint32_t tick_count;
   uint32_t padding;
 };
-struct X_UNKNOWN_TYPE_REFED {
-  xe::be<uint32_t> field0;
-  xe::be<uint32_t> field4;
-  // this is definitely a LIST_ENTRY?
-  xe::be<uint32_t> points_to_self;  // this field points to itself
-  xe::be<uint32_t>
-      points_to_prior;  // points to the previous field, which points to itself
-};
-static_assert_size(X_UNKNOWN_TYPE_REFED, 16);
 
 struct KernelGuestGlobals {
   X_OBJECT_TYPE ExThreadObjectType;
@@ -124,7 +118,7 @@ struct KernelGuestGlobals {
   X_OBJECT_TYPE ObSymbolicLinkObjectType;
   // a constant buffer that some object types' "unknown_size_or_object" field
   // points to
-  X_UNKNOWN_TYPE_REFED OddObj;
+  X_DISPATCH_HEADER XboxKernelDefaultObject;
   X_KPROCESS idle_process;    // X_PROCTYPE_IDLE. runs in interrupt contexts. is
                               // also the context the kernel starts in?
   X_KPROCESS title_process;   // X_PROCTYPE_TITLE
@@ -139,6 +133,7 @@ struct KernelGuestGlobals {
   // this lock is only used in some Ob functions. It's odd that it is used at
   // all, as each table already has its own spinlock.
   X_KSPINLOCK ob_lock;
+  X_KSPINLOCK tls_lock;  // protects per-process TLS bitmap allocations
 
   // if LLE emulating Xam, this is needed or you get an immediate freeze
   X_KEVENT UsbdBootEnumerationDoneEvent;
@@ -179,7 +174,9 @@ class KernelState {
   cpu::Processor* processor() const { return processor_; }
   vfs::VirtualFileSystem* file_system() const { return file_system_; }
 
+  xex2_opt_execution_info* GetExecutionInfo() const;
   uint32_t title_id() const;
+  bool is_title_open() const;
   const std::unique_ptr<xam::SpaInfo> title_xdbf() const;
   const std::unique_ptr<xam::SpaInfo> module_xdbf(
       object_ref<UserModule> exec_module) const;
@@ -195,6 +192,11 @@ class KernelState {
   xam::ContentManager* content_manager() const {
     return xam_state()->content_manager();
   }
+
+  XmpVolumePatch* xmp_volume_patch() const { return xmp_volume_patch_.get(); }
+  void InitXmpVolumePatch();
+
+  XConfig* xconfig() const { return xconfig_.get(); }
 
   std::bitset<4> GetConnectedUsers() const;
 
@@ -215,8 +217,8 @@ class KernelState {
     return kernel_guest_globals_ + offsetof(KernelGuestGlobals, idle_process);
   }
 
-  uint32_t AllocateTLS();
-  void FreeTLS(uint32_t slot);
+  uint32_t AllocateTLS(cpu::ppc::PPCContext* context);
+  void FreeTLS(cpu::ppc::PPCContext* context, uint32_t slot);
 
   void RegisterTitleTerminateNotification(uint32_t routine, uint32_t priority);
   void RemoveTitleTerminateNotification(uint32_t routine);
@@ -328,16 +330,17 @@ class KernelState {
 
  private:
   void LoadKernelModule(object_ref<KernelModule> kernel_module);
-  void InitializeProcess(X_KPROCESS* process, uint32_t type, char unk_18,
-                         char unk_19, char unk_1A);
+  void InitializeProcess(X_KPROCESS* process, uint32_t type,
+                         char priority_class, char default_priority,
+                         char max_dynamic_priority);
   void SetProcessTLSVars(X_KPROCESS* process, int num_slots, int tls_data_size,
                          int tls_static_data_address);
   void InitializeKernelGuestGlobals();
 
-  std::vector<xam::XCONTENT_AGGREGATE_DATA> FindTitleUpdate(
+  std::vector<xam::XCONTENT_DATA_INTERNAL> FindTitleUpdate(
       const uint32_t title_id) const;
   const object_ref<UserModule> LoadTitleUpdate(
-      const xam::XCONTENT_AGGREGATE_DATA* title_update,
+      const xam::XCONTENT_DATA_INTERNAL* title_update,
       const object_ref<UserModule> module);
   bool IsPatchSignatureProper(const object_ref<UserModule> title_module,
                               const object_ref<UserModule> patch_module) const;
@@ -351,6 +354,8 @@ class KernelState {
   vfs::VirtualFileSystem* file_system_;
   std::unique_ptr<xam::XamState> xam_state_;
   std::unique_ptr<SystemManagementController> smc_;
+  std::unique_ptr<XmpVolumePatch> xmp_volume_patch_;
+  std::unique_ptr<XConfig> xconfig_;
 
   KernelVersion kernel_version_;
 
@@ -376,9 +381,9 @@ class KernelState {
   std::condition_variable_any dispatch_cond_;
   std::list<std::function<void()>> dispatch_queue_;
 
-  BitMap tls_bitmap_;
   uint32_t ke_timestamp_bundle_ptr_ = 0;
   std::unique_ptr<xe::threading::HighResolutionTimer> timestamp_timer_;
+  uint32_t quantum_timer_counter_ = 0;
   cpu::backend::GuestTrampolineGroup kernel_trampoline_group_;
   // fixed address referenced by dashboards. Data is currently unknown
   uint32_t strange_hardcoded_page_ = 0x8E038634 & (~0xFFFF);

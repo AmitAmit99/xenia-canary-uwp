@@ -28,6 +28,15 @@ DEFINE_bool(
     "is necessary for certain games to display the scene graphics).",
     "GPU");
 
+DEFINE_bool(
+    depth_bias_shader_offset, false,
+    "Route decal host render target draws with polygon offset through shader "
+    "depth. This avoids Z-fighting in games that rely on tiny depth bias "
+    "values that host fixed function depth bias cannot reproduce reliably."
+    "This likely causes some minor performance penalty, but the cost should "
+    "be minimal if only a small portion of the scene is affected.",
+    "GPU");
+
 namespace xe {
 namespace gpu {
 namespace draw_util {
@@ -76,6 +85,57 @@ reg::RB_DEPTHCONTROL GetNormalizedDepthControl(const RegisterFile& regs) {
   // Stencil is more complex and is expected to be usually enabled explicitly
   // when needed.
   return depthcontrol;
+}
+
+bool GetHostDepthPolygonOffsetIfNeeded(
+    const RegisterFile& regs, bool primitive_polygonal,
+    reg::RB_DEPTHCONTROL normalized_depth_control,
+    uint32_t normalized_color_mask,
+    HostDepthPolygonOffset& polygon_offset_out) {
+  polygon_offset_out = {};
+  if (!cvars::depth_bias_shader_offset) {
+    return false;
+  }
+
+  const xenos::CompareFunction zfunc = normalized_depth_control.zfunc;
+  // Keep this on the decal-style redraws that need it. Larger use of shader
+  // depth changes early-Z and coverage behavior in places like hair, foliage,
+  // and stencil masked effects.
+  if (!primitive_polygonal || !normalized_depth_control.z_enable ||
+      !(zfunc == xenos::CompareFunction::kLessEqual ||
+        zfunc == xenos::CompareFunction::kGreaterEqual) ||
+      !normalized_color_mask || normalized_depth_control.stencil_enable ||
+      regs.Get<reg::RB_COLORCONTROL>().alpha_to_mask_enable) {
+    return false;
+  }
+
+  auto pa_su_sc_mode_cntl = regs.Get<reg::PA_SU_SC_MODE_CNTL>();
+  if (pa_su_sc_mode_cntl.poly_offset_front_enable) {
+    polygon_offset_out.front_scale =
+        regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_SCALE);
+    polygon_offset_out.front_offset =
+        regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_OFFSET);
+  }
+  if (pa_su_sc_mode_cntl.poly_offset_back_enable) {
+    polygon_offset_out.back_scale =
+        regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_BACK_SCALE);
+    polygon_offset_out.back_offset =
+        regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_BACK_OFFSET);
+  }
+
+  if (!polygon_offset_out.front_scale && !polygon_offset_out.front_offset &&
+      !polygon_offset_out.back_scale && !polygon_offset_out.back_offset) {
+    return false;
+  }
+
+  polygon_offset_out.front_scale *= xenos::kPolygonOffsetScaleSubpixelUnit;
+  polygon_offset_out.back_scale *= xenos::kPolygonOffsetScaleSubpixelUnit;
+  if (regs.Get<reg::RB_DEPTH_INFO>().depth_format ==
+      xenos::DepthRenderTargetFormat::kD24FS8) {
+    polygon_offset_out.front_offset *= 0.5f;
+    polygon_offset_out.back_offset *= 0.5f;
+  }
+  return true;
 }
 
 // https://docs.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_standard_multisample_quality_levels
@@ -912,15 +972,15 @@ void GetResolveEdramTileSpan(ResolveEdramInfo edram_info,
 
 constexpr ResolveCopyShaderInfo
     resolve_copy_shader_info[size_t(ResolveCopyShaderIndex::kCount)] = {
-        {"Resolve Copy Fast 32bpp 1x/2xMSAA", false, 4, 4, 6, 3},
-        {"Resolve Copy Fast 32bpp 4xMSAA", false, 4, 4, 6, 3},
-        {"Resolve Copy Fast 64bpp 1x/2xMSAA", false, 4, 4, 5, 3},
-        {"Resolve Copy Fast 64bpp 4xMSAA", false, 3, 4, 5, 3},
-        {"Resolve Copy Full 8bpp", true, 2, 3, 6, 3},
-        {"Resolve Copy Full 16bpp", true, 2, 3, 5, 3},
-        {"Resolve Copy Full 32bpp", true, 2, 4, 5, 3},
-        {"Resolve Copy Full 64bpp", true, 2, 4, 5, 3},
-        {"Resolve Copy Full 128bpp", true, 2, 4, 4, 3},
+        {"Resolve Copy Fast 32bpp 1x/2xMSAA", 6, 3},
+        {"Resolve Copy Fast 32bpp 4xMSAA", 6, 3},
+        {"Resolve Copy Fast 64bpp 1x/2xMSAA", 5, 3},
+        {"Resolve Copy Fast 64bpp 4xMSAA", 5, 3},
+        {"Resolve Copy Full 8bpp", 6, 3},
+        {"Resolve Copy Full 16bpp", 5, 3},
+        {"Resolve Copy Full 32bpp", 5, 3},
+        {"Resolve Copy Full 64bpp", 5, 3},
+        {"Resolve Copy Full 128bpp", 4, 3},
 };
 XE_MSVC_OPTIMIZE_SMALL()
 bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
@@ -1269,6 +1329,7 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
     color_edram_info.format = uint32_t(color_info.color_format);
     color_edram_info.format_is_64bpp = is_64bpp;
     color_edram_info.fill_half_pixel_offset = uint32_t(fill_half_pixel_offset);
+    color_edram_info.decode_pwl_gamma = 1;
     if ((fixed_rg16_truncated_to_minus_1_to_1 &&
          color_info.color_format == xenos::ColorRenderTargetFormat::k_16_16) ||
         (fixed_rgba16_truncated_to_minus_1_to_1 &&
@@ -1317,6 +1378,27 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
   return true;
 }
 XE_MSVC_OPTIMIZE_REVERT()
+
+// Raw resolve is only safe when the destination would read the same bits the
+// active EDRAM view already stores. Canonical fixed colors are unsigned
+// fractions and float colors are floats; signed/integer destinations need full
+// resolve so copy_dest_number can actually repack them.
+static constexpr bool ColorResolveNumberFormatMatches(
+    xenos::ColorFormat color_format, xenos::SurfaceNumberFormat num_format) {
+  switch (color_format) {
+    case xenos::ColorFormat::k_16_FLOAT:
+    case xenos::ColorFormat::k_16_16_FLOAT:
+    case xenos::ColorFormat::k_16_16_16_16_FLOAT:
+    case xenos::ColorFormat::k_32_FLOAT:
+    case xenos::ColorFormat::k_32_32_FLOAT:
+    case xenos::ColorFormat::k_32_32_32_32_FLOAT:
+      return num_format == xenos::SurfaceNumberFormat::kFloat;
+    default:
+      return num_format ==
+             xenos::SurfaceNumberFormat::kUnsignedRepeatingFraction;
+  }
+}
+
 ResolveCopyShaderIndex ResolveInfo::GetCopyShader(
     uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y,
     ResolveCopyShaderConstants& constants_out, uint32_t& group_count_x_out,
@@ -1325,12 +1407,23 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(
   bool is_depth = IsCopyingDepth();
   ResolveEdramInfo edram_info = is_depth ? depth_edram_info : color_edram_info;
   bool source_is_64bpp = !is_depth && color_edram_info.format_is_64bpp != 0;
-  if (is_depth || (!copy_dest_info.copy_dest_exp_bias &&
-                   xenos::IsSingleCopySampleSelected(
-                       copy_dest_coordinate_info.copy_sample_select) &&
-                   xenos::IsColorResolveFormatBitwiseEquivalent(
-                       xenos::ColorRenderTargetFormat(color_edram_info.format),
-                       xenos::ColorFormat(copy_dest_info.copy_dest_format)))) {
+  // Fast color resolve is a raw copy. If copy_dest_number asks for a different
+  // target that'd be decoded to linear by a real hardware resolve, it needs the
+  // full shader conversion. Any title keeping the encoding will re-alias as
+  // 8_8_8_8 before resolving, so any gamma source is always being decoded.
+  bool gamma_decoded_source =
+      !is_depth && xenos::ColorRenderTargetFormat(color_edram_info.format) ==
+                       xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA;
+  if (is_depth ||
+      (!gamma_decoded_source && !copy_dest_info.copy_dest_exp_bias &&
+       xenos::IsSingleCopySampleSelected(
+           copy_dest_coordinate_info.copy_sample_select) &&
+       xenos::IsColorResolveFormatBitwiseEquivalent(
+           xenos::ColorRenderTargetFormat(color_edram_info.format),
+           xenos::ColorFormat(copy_dest_info.copy_dest_format)) &&
+       ColorResolveNumberFormatMatches(
+           xenos::ColorFormat(copy_dest_info.copy_dest_format),
+           copy_dest_info.copy_dest_number))) {
     if (edram_info.msaa_samples >= xenos::MsaaSamples::k4X) {
       shader = source_is_64bpp ? ResolveCopyShaderIndex::kFast64bpp4xMSAA
                                : ResolveCopyShaderIndex::kFast32bpp4xMSAA;
@@ -1388,6 +1481,16 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(
   }
 
   return shader;
+}
+
+uint32_t GetResolveDownscalePixelSizeLog2(
+    reg::RB_COPY_DEST_INFO copy_dest_info) {
+  // copy_dest_format holds a xenos::TextureFormat normalized by
+  // GetResolveInfo, and this is the same size derivation that was used for
+  // the destination extent calculation there.
+  const FormatInfo& dest_format_info = *FormatInfo::Get(
+      xenos::TextureFormat(uint32_t(copy_dest_info.copy_dest_format)));
+  return xe::log2_floor(dest_format_info.bits_per_pixel >> 3);
 }
 
 }  // namespace draw_util

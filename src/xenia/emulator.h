@@ -201,6 +201,10 @@ class Emulator {
                      const std::string_view mount_path);
 
   enum class FileSignatureType {
+    XEX0,
+    XEXQ,
+    XEXH,
+    XEX25,
     XEX1,
     XEX2,
     ELF,
@@ -208,6 +212,7 @@ class Emulator {
     LIVE,
     PIRS,
     XISO,
+    XBE,
     ZAR,
     EXE,
     Unknown
@@ -249,6 +254,7 @@ class Emulator {
 
     std::string name_{};
     std::filesystem::path path_;
+    std::filesystem::path filename_;
     std::filesystem::path data_installation_path_;
     std::filesystem::path header_installation_path_;
 
@@ -270,6 +276,9 @@ class Emulator {
   X_STATUS ProcessContentPackageHeader(const std::filesystem::path& path,
                                      ContentInstallEntry& installation_info);
   X_STATUS InstallContentPackage(const std::filesystem::path& path,
+                                 ContentInstallEntry& installation_info);
+
+  X_STATUS ExtractContentPackage(const std::filesystem::path& path,
                                  ContentInstallEntry& installation_info);
 
   // Extract content of zar package to desired directory.

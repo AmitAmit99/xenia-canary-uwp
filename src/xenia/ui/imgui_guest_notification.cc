@@ -113,9 +113,9 @@ void AchievementNotificationWindow::OnDraw(ImGuiIO& io) {
     return;
   }
 
-  const std::string longest_notification_text_line =
-      GetTitle().size() > GetDescription().size() ? GetTitle().c_str()
-                                                  : GetDescription().c_str();
+  const std::string_view longest_notification_text_line =
+      GetTitle().size() > GetDescription().size() ? GetTitle()
+                                                  : GetDescription();
 
   const ImVec2 screen_size = io.DisplaySize;
   const float window_scale =
@@ -124,7 +124,7 @@ void AchievementNotificationWindow::OnDraw(ImGuiIO& io) {
   const float font_scale = default_font_size / io.Fonts->Fonts[0]->FontSize;
   const ImVec2 text_size = io.Fonts->Fonts[0]->CalcTextSizeA(
       default_font_size * default_notification_text_scale * window_scale,
-      FLT_MAX, -1.0f, longest_notification_text_line.c_str());
+      FLT_MAX, -1.0f, longest_notification_text_line.data());
 
   const ImVec2 final_notification_size =
       CalculateNotificationSize(text_size, window_scale);
@@ -169,7 +169,7 @@ void AchievementNotificationWindow::OnDraw(ImGuiIO& io) {
 
     ImGui::SameLine();
     if (notification_draw_progress_ > 0.5f) {
-      ImGui::TextColored(white_color, "%s", GetNotificationText().c_str());
+      ImGui::TextColored(white_color, "%s", GetNotificationText().data());
     }
   }
   // Restore previous style
@@ -187,9 +187,9 @@ void XNotifyWindow::OnDraw(ImGuiIO& io) {
     return;
   }
 
-  const std::string longest_notification_text_line =
-      GetTitle().size() > GetDescription().size() ? GetTitle().c_str()
-                                                  : GetDescription().c_str();
+  const std::string_view longest_notification_text_line =
+      GetTitle().size() > GetDescription().size() ? GetTitle()
+                                                  : GetDescription();
 
   const ImVec2 screen_size = io.DisplaySize;
   const float window_scale =
@@ -198,7 +198,7 @@ void XNotifyWindow::OnDraw(ImGuiIO& io) {
   const float font_scale = default_font_size / io.Fonts->Fonts[0]->FontSize;
   const ImVec2 text_size = io.Fonts->Fonts[0]->CalcTextSizeA(
       default_font_size * default_notification_text_scale * window_scale,
-      FLT_MAX, -1.0f, longest_notification_text_line.c_str());
+      FLT_MAX, -1.0f, longest_notification_text_line.data());
 
   const ImVec2 final_notification_size =
       CalculateNotificationSize(text_size, window_scale);
@@ -247,7 +247,7 @@ void XNotifyWindow::OnDraw(ImGuiIO& io) {
 
     ImGui::SameLine();
     if (notification_draw_progress_ > 0.5f) {
-      ImGui::TextColored(white_color, "%s", GetDescription().c_str());
+      ImGui::TextColored(white_color, "%s", GetDescription().data());
     }
   }
   // Restore previous style

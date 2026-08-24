@@ -23,10 +23,11 @@
 // NOTE: must be included last as it expects windows.h to already be included.
 #define _WINSOCK_DEPRECATED_NO_WARNINGS  // inet_addr
 #include <winsock2.h>                    // NOLINT(build/include_order)
-#elif XE_PLATFORM_LINUX
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #endif
 
@@ -97,6 +98,13 @@ struct X_WSADATA {
   xe::be<uint32_t> vendor_info_ptr;
 };
 static_assert_size(X_WSADATA, 0x190);
+
+struct XAUTH_SETTINGS {
+  xe::be<uint32_t> SizeOfStruct;
+  xe::be<uint32_t> Flags;
+  xe::be<uint32_t> title_buffer;
+};
+static_assert_size(XAUTH_SETTINGS, 0xC);
 
 struct XWSABUF {
   xe::be<uint32_t> len;
@@ -215,6 +223,13 @@ dword_result_t NetDll_XNetCleanup_entry(dword_t caller, lpvoid_t params) {
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetCleanup, kNetworking, kImplemented);
+
+dword_result_t XNetLogonGetMachineID_entry(lpqword_t machine_id_ptr) {
+  // See Netplay
+  *machine_id_ptr = 0;
+  return 0x80151802;  // X_ERROR_LOGON_NOT_LOGGED_ON;
+}
+DECLARE_XAM_EXPORT1(XNetLogonGetMachineID, kNetworking, kStub);
 
 dword_result_t NetDll_XNetGetOpt_entry(dword_t one, dword_t option_id,
                                        lpvoid_t buffer_ptr,
@@ -645,6 +660,37 @@ dword_result_t NetDll_inet_addr_entry(lpstring_t addr_ptr) {
   return xe::byte_swap(addr);
 }
 DECLARE_XAM_EXPORT1(NetDll_inet_addr, kNetworking, kImplemented);
+
+dword_result_t XampXAuthStartup_entry(pointer_t<XAUTH_SETTINGS> setttings) {
+  // TODO: save setttings for use later, save current count of setttings, use
+  // ExRegisterTitleTerminateNotification with priority = 0x6c000001 and
+  // notification_routine set to some xam function and create true. call again
+  // with create false and set registor values to zero after. also checks a pre
+  // set overlapped if result = X_ERROR_IO_PENDING and if true call
+  // XMsgCancelIORequest for that overlap with wait true
+  if (setttings->SizeOfStruct != 8) {
+    return 0x80158401;
+  }
+
+  return 0x80158406;
+}
+DECLARE_XAM_EXPORT1(XampXAuthStartup, kNetworking, kStub);
+
+void XampXAuthShutdown_entry(lpdword_t xauth_count_ptr) {
+  // reduce xauth_count by 1 and return current count. if xauth_count = 0 then
+  // check a pre set overlapped if result = X_ERROR_IO_PENDING and if true call
+  // XMsgCancelIORequest for that overlap with wait true, next call
+  // ExRegisterTitleTerminateNotification with same registor as XampXAuthStartup
+  // with create set false
+  *xauth_count_ptr = 0;
+}
+DECLARE_XAM_EXPORT1(XampXAuthShutdown, kNetworking, kStub);
+
+dword_result_t XampXAuthGetTitleBuffer_entry() {
+  // returns title buffer set by XampXAuthStartup, non-zero causes crash
+  return 0;
+}
+DECLARE_XAM_EXPORT1(XampXAuthGetTitleBuffer, kNetworking, kStub);
 
 dword_result_t NetDll_socket_entry(dword_t caller, dword_t af, dword_t type,
                                    dword_t protocol) {

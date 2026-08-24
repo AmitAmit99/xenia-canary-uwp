@@ -463,6 +463,12 @@ bool D3D12Provider::Initialize() {
     unaligned_block_textures_supported_ =
         bool(options8.UnalignedBlockTexturesSupported);
   }
+  alpha_blend_factor_supported_ = false;
+  D3D12_FEATURE_DATA_D3D12_OPTIONS13 options13 = {};
+  if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS13,
+                                            &options13, sizeof(options13)))) {
+    alpha_blend_factor_supported_ = bool(options13.AlphaBlendFactorSupported);
+  }
   virtual_address_bits_per_resource_ = 0;
   D3D12_FEATURE_DATA_GPU_VIRTUAL_ADDRESS_SUPPORT virtual_address_support;
   if (SUCCEEDED(device->CheckFeatureSupport(
@@ -478,6 +484,7 @@ bool D3D12Provider::Initialize() {
       "* Pixel-shader-specified stencil reference: {}\n"
       "* Programmable sample positions: tier {}\n"
       "* Rasterizer-ordered views: {}\n"
+      "* Scalar alpha blend factor: {}\n"
       "* Resource binding: tier {}\n"
       "* Tiled resources: tier {}\n"
       "* Unaligned block-compressed textures: {}",
@@ -487,6 +494,7 @@ bool D3D12Provider::Initialize() {
       ps_specified_stencil_reference_supported_ ? "yes" : "no",
       uint32_t(programmable_sample_positions_tier_),
       rasterizer_ordered_views_supported_ ? "yes" : "no",
+      alpha_blend_factor_supported_ ? "yes" : "no",
       uint32_t(resource_binding_tier_), uint32_t(tiled_resources_tier_),
       unaligned_block_textures_supported_ ? "yes" : "no");
 
@@ -518,6 +526,65 @@ std::unique_ptr<Presenter> D3D12Provider::CreatePresenter(
 
 std::unique_ptr<ImmediateDrawer> D3D12Provider::CreateImmediateDrawer() {
   return D3D12ImmediateDrawer::Create(*this);
+}
+
+void D3D12Provider::LogD3D12DebugMessages() const {
+  if (!device_) {
+    return;
+  }
+
+  ID3D12InfoQueue* info_queue = nullptr;
+  if (FAILED(device_->QueryInterface(IID_PPV_ARGS(&info_queue)))) {
+    return;
+  }
+
+  UINT64 message_count = info_queue->GetNumStoredMessages();
+  for (UINT64 i = 0; i < message_count; ++i) {
+    SIZE_T message_size = 0;
+    if (FAILED(info_queue->GetMessage(i, nullptr, &message_size))) {
+      continue;
+    }
+
+    D3D12_MESSAGE* message =
+        reinterpret_cast<D3D12_MESSAGE*>(alloca(message_size));
+    if (FAILED(info_queue->GetMessage(i, message, &message_size))) {
+      continue;
+    }
+
+    const char* severity_str = "INFO";
+    switch (message->Severity) {
+      case D3D12_MESSAGE_SEVERITY_CORRUPTION:
+        severity_str = "CORRUPTION";
+        break;
+      case D3D12_MESSAGE_SEVERITY_ERROR:
+        severity_str = "ERROR";
+        break;
+      case D3D12_MESSAGE_SEVERITY_WARNING:
+        severity_str = "WARNING";
+        break;
+      case D3D12_MESSAGE_SEVERITY_INFO:
+        severity_str = "INFO";
+        break;
+      case D3D12_MESSAGE_SEVERITY_MESSAGE:
+        severity_str = "MESSAGE";
+        break;
+    }
+
+    if (message->Severity == D3D12_MESSAGE_SEVERITY_ERROR ||
+        message->Severity == D3D12_MESSAGE_SEVERITY_CORRUPTION) {
+      XELOGE("D3D12 {}: [ID {}] {}", severity_str,
+             static_cast<int>(message->ID), message->pDescription);
+    } else if (message->Severity == D3D12_MESSAGE_SEVERITY_WARNING) {
+      XELOGW("D3D12 {}: [ID {}] {}", severity_str,
+             static_cast<int>(message->ID), message->pDescription);
+    } else {
+      XELOGI("D3D12 {}: [ID {}] {}", severity_str,
+             static_cast<int>(message->ID), message->pDescription);
+    }
+  }
+
+  info_queue->ClearStoredMessages();
+  info_queue->Release();
 }
 
 }  // namespace d3d12

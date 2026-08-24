@@ -23,7 +23,7 @@ XEvent::~XEvent() = default;
 void XEvent::Initialize(bool manual_reset, bool initial_state) {
   assert_false(event_);
 
-  this->CreateNative<X_KEVENT>();
+  CreateNative<X_KEVENT>();
 
   if (manual_reset) {
     event_ = xe::threading::Event::CreateManualResetEvent(initial_state);
@@ -33,14 +33,15 @@ void XEvent::Initialize(bool manual_reset, bool initial_state) {
   assert_not_null(event_);
 }
 
-void XEvent::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
+void XEvent::InitializeNative(void* native_ptr,
+                              const X_DISPATCH_HEADER* header) {
   assert_false(event_);
 
   switch (header->type) {
-    case 0x00:  // EventNotificationObject (manual reset)
+    case X_OBJECT_TYPES::EventNotificationObject:
       manual_reset_ = true;
       break;
-    case 0x01:  // EventSynchronizationObject (auto reset)
+    case X_OBJECT_TYPES::EventSynchronizationObject:
       manual_reset_ = false;
       break;
     default:
@@ -58,11 +59,13 @@ void XEvent::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
 }
 
 int32_t XEvent::Set(uint32_t priority_increment, bool wait) {
+  set_priority_increment(priority_increment);
   event_->Set();
   return 1;
 }
 
 int32_t XEvent::Pulse(uint32_t priority_increment, bool wait) {
+  set_priority_increment(priority_increment);
   event_->Pulse();
   return 1;
 }

@@ -34,7 +34,11 @@
 #include "xenia/cpu/xex_module.h"
 
 // TODO(benvanik): based on compiler support
+#if XE_ARCH_AMD64
 #include "xenia/cpu/backend/x64/x64_backend.h"
+#elif XE_ARCH_ARM64
+#include "xenia/cpu/backend/a64/a64_backend.h"
+#endif
 
 #if 0 && DEBUG
 #define DEFAULT_DEBUG_FLAG true
@@ -178,11 +182,11 @@ bool Processor::AddModule(std::unique_ptr<Module> module) {
 void Processor::RemoveModule(const std::string_view name) {
   auto global_lock = global_critical_region_.Acquire();
 
-  auto itr =
-      std::find_if(modules_.cbegin(), modules_.cend(),
-                   [name](std::unique_ptr<xe::cpu::Module> const& module) {
-                     return module->name() == name;
-                   });
+  auto itr = std::ranges::find_if(
+      std::as_const(modules_),
+      [name](std::unique_ptr<xe::cpu::Module> const& module) {
+        return module->name() == name;
+      });
 
   if (itr != modules_.cend()) {
     const std::vector<uint32_t> addressed_functions =
@@ -259,12 +263,12 @@ Function* Processor::ResolveFunction(uint32_t address) {
     auto function = LookupFunction(address);
 
     if (!function) {
-      entry->status = Entry::STATUS_FAILED;
+      entry_table_.MarkFailed(entry);
       return nullptr;
     }
 
     if (!DemandFunction(function)) {
-      entry->status = Entry::STATUS_FAILED;
+      entry_table_.MarkFailed(entry);
       return nullptr;
     }
     // only add it to the list of resolved functions if resolving succeeded
@@ -278,9 +282,8 @@ Function* Processor::ResolveFunction(uint32_t address) {
       }
     }
 
-    entry->function = function;
-    entry->end_address = function->end_address();
-    status = entry->status = Entry::STATUS_READY;
+    entry_table_.MarkReady(entry, function, function->end_address());
+    status = Entry::STATUS_READY;
   }
   if (status == Entry::STATUS_READY) {
     // Ready to use.
@@ -562,7 +565,7 @@ void Processor::RemoveBreakpoint(Breakpoint* breakpoint) {
   }
 
   // Remove from breakpoint map.
-  auto it = std::find(breakpoints_.begin(), breakpoints_.end(), breakpoint);
+  auto it = std::ranges::find(breakpoints_, breakpoint);
   breakpoints_.erase(it);
 }
 

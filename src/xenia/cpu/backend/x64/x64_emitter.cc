@@ -208,36 +208,8 @@ bool X64Emitter::Emit(HIRBuilder* builder, EmitFunctionInfo& func_info) {
   // IMPORTANT: any changes to the prolog must be kept in sync with
   //     X64CodeCache, which dynamically generates exception information.
   //     Adding or changing anything here must be matched!
-
-  /*
-    pick a page to use as the local base as close to the commonly accessed page
-    that contains most backend fields the sizes that are checked are chosen
-    based on PTE coalescing sizes. zen does 16k or 32k
-  */
-  size_t stack_size = StackLayout::GUEST_STACK_SIZE;
-  if (stack_offset < (4096 - sizeof(X64BackendContext))) {
-    locals_page_delta_ = 4096;
-  } else if (stack_offset <
-             (16384 - sizeof(X64BackendContext))) {  // 16k PTE coalescing
-    locals_page_delta_ = 16384;
-  } else if (stack_offset < (32768 - sizeof(X64BackendContext))) {
-    locals_page_delta_ = 32768;
-  } else if (stack_offset < (65536 - sizeof(X64BackendContext))) {
-    locals_page_delta_ = 65536;
-  } else {
-    // extremely unlikely, fall back to stack
-    stack_size =
-        xe::align<size_t>(StackLayout::GUEST_STACK_SIZE + stack_offset, 16);
-    locals_page_delta_ = 0;
-  }
-
-  // Ensure that after we SUB the stack_size, RSP is 16-byte aligned.
-  // On function entry, RSP is misaligned by 8 (due to CALL pushing return
-  // address). So we need stack_size to be 8 mod 16, not 0 mod 16.
-  if ((stack_size % 16) == 0) {
-    stack_size += 8;  // Make it 8 mod 16
-  }
-  assert_true((stack_size % 16) == 8);  // Should be 8 mod 16 for alignment
+  const size_t stack_size = StackLayout::GUEST_STACK_SIZE + stack_offset;
+  assert_true((stack_size + 8) % 16 == 0);
   func_info.stack_size = stack_size;
   stack_size_ = stack_size;
 
@@ -437,15 +409,22 @@ uint64_t TrapDebugPrint(void* raw_context, uint64_t address) {
   auto thread_state =
       reinterpret_cast<ppc::PPCContext_s*>(raw_context)->thread_state;
   uint32_t str_ptr = uint32_t(thread_state->context()->r[3]);
-  // uint16_t str_len = uint16_t(thread_state->context()->r[4]);
+  uint32_t str_length = uint32_t(thread_state->context()->r[4]);
+
   auto str = thread_state->memory()->TranslateVirtual<const char*>(str_ptr);
-  // TODO(benvanik): truncate to length?
-  XELOGD("(DebugPrint) {}", str);
+
+  // Allocate temporary buffer and null-terminate to respect length parameter
+  char* string_tmp = new char[str_length + 1];
+  std::memcpy(string_tmp, str, str_length);
+  string_tmp[str_length] = 0;
+
+  XELOGD("(DebugPrint) {}", string_tmp);
 
   if (cvars::debugprint_trap_log) {
-    debugging::DebugPrint("(DebugPrint) {}", str);
+    debugging::DebugPrint("(DebugPrint) {}", string_tmp);
   }
 
+  delete[] string_tmp;
   return 0;
 }
 
@@ -886,12 +865,13 @@ void X64Emitter::SetReturnAddress(uint64_t value) {
 }
 
 Xbyak::Reg64 X64Emitter::GetNativeParam(uint32_t param) {
-  if (param == 0)
+  if (param == 0) {
     return rdx;
-  else if (param == 1)
+  } else if (param == 1) {
     return r8;
-  else if (param == 2)
+  } else if (param == 2) {
     return r9;
+  }
 
   assert_always();
   return r9;
@@ -1133,6 +1113,8 @@ static const vec128_t xmm_consts[] = {
     /* XMMInt127              */ vec128i(0x7Fu),
     /* XMM2To32               */ vec128f(0x1.0p32f),
     /* XMMFloatInf */ vec128i(0x7f800000),
+    /* XMMDoubleInf */
+    vec128i(0x00000000u, 0x7FF00000u, 0x00000000u, 0x7FF00000u),
 
     /* XMMIntsToBytes*/
     v128_setr_bytes(0, 4, 8, 12, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
@@ -1291,7 +1273,8 @@ uintptr_t X64Emitter::PlaceConstData() {
 }
 
 void X64Emitter::FreeConstData(uintptr_t data) {
-  memory::DeallocFixed(reinterpret_cast<void*>(data), 0,
+  memory::DeallocFixed(reinterpret_cast<void*>(data),
+                       xe::round_up(kConstDataSize, memory::page_size()),
                        memory::DeallocationType::kRelease);
 }
 
@@ -1333,6 +1316,12 @@ void X64Emitter::LoadConstantXmm(Xbyak::Xmm dest, const vec128_t& v) {
       }
 
       if (all_equal_bytes) {
+        if (IsFeatureEnabled(kX64EmitGFNI)) {
+          vpxor(dest, dest);
+          vgf2p8affineqb(dest, dest, dest, firstbyte);
+          return;
+        }
+
         void* bval = FindByteConstantOffset(firstbyte);
 
         if (bval) {
@@ -1622,9 +1611,7 @@ SimdDomain X64Emitter::DeduceSimdDomain(const hir::Value* for_value) {
 
   return SimdDomain::DONTCARE;
 }
-Xbyak::RegExp X64Emitter::GetLocalsBase() const {
-  return !locals_page_delta_ ? rsp : GetContextReg() - locals_page_delta_;
-}
+
 Xbyak::Address X64Emitter::GetBackendCtxPtr(int offset_in_x64backendctx) const {
   /*
     index context ptr negatively to get to backend ctx field

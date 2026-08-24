@@ -19,10 +19,13 @@
 #include <string_view>
 #include <vector>
 
+#include "xenia/base/literals.h"
 #include "xenia/base/platform.h"
 #include "xenia/base/string.h"
 
 namespace xe {
+
+using namespace xe::literals;
 
 std::string path_to_utf8(const std::filesystem::path& path);
 std::u16string path_to_utf16(const std::filesystem::path& path);
@@ -66,6 +69,12 @@ int64_t Tell(FILE* file);
 // clamped. If this returns false, the size of the file and the file pointer are
 // undefined.
 bool TruncateStdioFile(FILE* file, uint64_t length);
+
+// Copy file from source to destination in defined chunks and optional progress
+// tracking.
+bool Copy(const std::filesystem::path& source,
+          const std::filesystem::path& destination, uint64_t& progress,
+          size_t copy_chunk = 5_MiB);
 
 struct FileAccess {
   // Implies kFileReadData.
@@ -133,6 +142,9 @@ std::vector<FileInfo> ListFiles(const std::filesystem::path& path);
 std::vector<FileInfo> ListDirectories(const std::filesystem::path& path);
 std::vector<FileInfo> FilterByName(const std::vector<FileInfo>& files,
                                    const std::regex pattern);
+std::vector<FileInfo> FindFileWithName(const std::filesystem::path& path,
+                                       std::string_view name,
+                                       bool recursive = false);
 
 bool SetAttributes(const std::filesystem::path& path, uint64_t attributes);
 

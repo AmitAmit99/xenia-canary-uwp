@@ -76,7 +76,8 @@ class Win32Window : public Window {
 
   void ApplyFullscreenEntry(WindowDestructionReceiver& destruction_receiver);
 
-  void HandleSizeUpdate(WindowDestructionReceiver& destruction_receiver);
+  void HandleSizeUpdate(WindowDestructionReceiver& destruction_receiver,
+                        DWORD cause_action);
   // For updating multiple factors that may influence the window size at once,
   // without handling WM_SIZE multiple times (that may not only result in wasted
   // handling, but also in the state potentially changed to an inconsistent one
@@ -151,6 +152,8 @@ class Win32Window : public Window {
   // Whether the cursor has been hidden after the expiration of the timer, and
   // hasn't been revealed yet.
   bool cursor_currently_auto_hidden_ = false;
+
+  HDEVNOTIFY usb_device_notify_ = nullptr;
 };
 
 class Win32MenuItem : public MenuItem {

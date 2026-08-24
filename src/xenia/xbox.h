@@ -10,6 +10,7 @@
 #ifndef XENIA_XBOX_H_
 #define XENIA_XBOX_H_
 
+#include <cstdint>
 #include <map>
 #include <string>
 
@@ -57,8 +58,10 @@ typedef uint32_t X_STATUS;
 #define X_STATUS_OBJECT_NAME_INVALID                    ((X_STATUS)0xC0000033L)
 #define X_STATUS_OBJECT_NAME_NOT_FOUND                  ((X_STATUS)0xC0000034L)
 #define X_STATUS_OBJECT_NAME_COLLISION                  ((X_STATUS)0xC0000035L)
+#define X_STATUS_OBJECT_PATH_NOT_FOUND                  ((X_STATUS)0xC000003AL)
 #define X_STATUS_INVALID_PAGE_PROTECTION                ((X_STATUS)0xC0000045L)
 #define X_STATUS_MUTANT_NOT_OWNED                       ((X_STATUS)0xC0000046L)
+#define X_STATUS_SEMAPHORE_LIMIT_EXCEEDED               ((X_STATUS)0xC0000047L)
 #define X_STATUS_THREAD_IS_TERMINATING                  ((X_STATUS)0xC000004BL)
 #define X_STATUS_PROCEDURE_NOT_FOUND                    ((X_STATUS)0xC000007AL)
 #define X_STATUS_INVALID_IMAGE_FORMAT                   ((X_STATUS)0xC000007BL)
@@ -70,6 +73,7 @@ typedef uint32_t X_STATUS;
 #define X_STATUS_INVALID_PARAMETER_1                    ((X_STATUS)0xC00000EFL)
 #define X_STATUS_INVALID_PARAMETER_2                    ((X_STATUS)0xC00000F0L)
 #define X_STATUS_INVALID_PARAMETER_3                    ((X_STATUS)0xC00000F1L)
+#define X_STATUS_NOT_A_DIRECTORY                        ((X_STATUS)0xC0000103L)
 #define X_STATUS_PROCESS_IS_TERMINATING                 ((X_STATUS)0xC000010AL)
 #define X_STATUS_DLL_NOT_FOUND                          ((X_STATUS)0xC0000135L)
 #define X_STATUS_ENTRYPOINT_NOT_FOUND                   ((X_STATUS)0xC0000139L)
@@ -121,6 +125,7 @@ typedef uint32_t X_HRESULT;
 #define X_E_FALSE                               static_cast<X_HRESULT>(0x80000000L)
 #define X_E_SUCCESS                             X_HRESULT_FROM_WIN32(X_ERROR_SUCCESS)
 #define X_E_ACCESS_DENIED                       X_HRESULT_FROM_WIN32(X_ERROR_ACCESS_DENIED)
+#define X_E_PENDING                             X_HRESULT_FROM_WIN32(0x8000000AL)
 #define X_E_NOT_IMPLEMENTED                     static_cast<X_HRESULT>(0x80004001L)
 #define X_E_FAIL                                static_cast<X_HRESULT>(0x80004005L)
 #define X_E_NO_MORE_FILES                       X_HRESULT_FROM_WIN32(X_ERROR_NO_MORE_FILES)
@@ -160,10 +165,10 @@ constexpr uint8_t XUserIndexAny = 0xFF;
 typedef uint32_t XNotificationID;
 
 struct X_NOTIFICATION_ID {
-  uint32_t reserved : 1;  // Always one
-  uint32_t area : 6;
-  uint32_t version : 9;
-  uint32_t message_id : 16;
+  uint32_t message_id : 16;  // 0b0 sz:16
+  uint32_t version : 9;      // 0b16 sz:9
+  uint32_t area : 6;         // 0b25 sz:6
+  uint32_t Internal : 1;     // 0b31 sz:1
 };
 static_assert_size(X_NOTIFICATION_ID, 4);
 
@@ -178,6 +183,11 @@ enum : XNotificationID {
   kXNotifyParty = 0x00000080,
   kXNotifyAll = 0x000000EF,
 
+  // Special Flags
+  kXNotificationInternal = 0x80000000,
+  kXNotificationAreaMask = 0x7e000000,
+  kXNotificationVersionMask = 0x01FF0000,
+
   // XNotification System
   /* System Notes:
      - for some functions if XamIsNuiUIActive returns false then
@@ -185,14 +195,6 @@ enum : XNotificationID {
      - XNotifyBroadcast(kXNotificationSystemNUIHardwareStatusChanged,
      device_state)
   */
-  kXNotificationSystemTitleLoad = 0x80000001,
-  kXNotificationSystemTimeZone = 0x80000002,
-  kXNotificationSystemLanguage = 0x80000003,
-  kXNotificationSystemVideoFlags = 0x80000004,
-  kXNotificationSystemAudioFlags = 0x80000005,
-  kXNotificationSystemParentalControlGames = 0x80000006,
-  kXNotificationSystemParentalControlPassword = 0x80000007,
-  kXNotificationSystemParentalControlMovies = 0x80000008,
   kXNotificationSystemUI = 0x00000009,
   kXNotificationSystemSignInChanged = 0x0000000A,
   kXNotificationSystemStorageDevicesChanged = 0x0000000B,
@@ -209,7 +211,6 @@ enum : XNotificationID {
      some funcs the third param is used with
      XNotifyBroadcast(kXNotificationSystemUnknown, unk)
   */
-  kXNotificationSystemUnknown = 0x80010014,
   kXNotificationSystemPlayerTimerNotice = 0x00030015,
   kXNotificationSystemAvatarChanged = 0x00040017,
   kXNotificationSystemNUIHardwareStatusChanged = 0x00060019,
@@ -220,23 +221,35 @@ enum : XNotificationID {
   kXNotificationSystemAudioLatencyChanged = 0x0008001E,
   kXNotificationSystemNUIChatBindingChanged = 0x0008001F,
   kXNotificationSystemInputActivityChanged = 0x00090020,
+  kXNotificationSystemProfileSettingChanged = 0x0000000E,
+  // XNotification System Internal
+  kXNotificationSystemTitleLoad = 0x80000001,
+  kXNotificationSystemTimeZone = 0x80000002,
+  kXNotificationSystemLanguage = 0x80000003,
+  kXNotificationSystemVideoFlags = 0x80000004,
+  kXNotificationSystemAudioFlags = 0x80000005,
+  kXNotificationSystemParentalControlGames = 0x80000006,
+  kXNotificationSystemParentalControlPassword = 0x80000007,
+  kXNotificationSystemParentalControlMovies = 0x80000008,
   kXNotificationSystemDashContextChanged = 0x8000000C,
   kXNotificationSystemTrayStateChanged = 0x8000000D,
-  kXNotificationSystemProfileSettingChanged = 0x0000000E,
   kXNotificationSystemThemeChanged = 0x8000000F,
   kXNotificationSystemSystemUpdateChanged = 0x80000010,
+  kXNotificationSystemUnknown = 0x80010014,
+  kXNotificationSystemDashboard = 0x80040016,
 
   // XNotification Live
   kXNotificationLiveConnectionChanged = 0x02000001,
   kXNotificationLiveInviteAccepted = 0x02000002,
   kXNotificationLiveLinkStateChanged = 0x02000003,
-  kXNotificationLiveInvitedRecieved = 0x82000004,
-  kXNotificationLiveInvitedAnswerRecieved = 0x82000005,
-  kXNotificationLiveMessageListChanged = 0x82000006,
   kXNotificationLiveContentInstalled = 0x02000007,
   kXNotificationLiveMembershipPurchased = 0x02000008,
   kXNotificationLiveVoicechatAway = 0x02000009,
   kXNotificationLivePresenceChanged = 0x0200000A,
+  // XNotification Live Internal
+  kXNotificationLiveInvitedRecieved = 0x82000004,
+  kXNotificationLiveInvitedAnswerRecieved = 0x82000005,
+  kXNotificationLiveMessageListChanged = 0x82000006,
   kXNotificationLivePointsBalanceChanged = 0x8200000B,
   kXNotificationLivePlayerListChanged = 0x8200000C,
   kXNotificationLiveItemPurchased = 0x8200000D,
@@ -245,6 +258,7 @@ enum : XNotificationID {
   kXNotificationFriendsPresenceChanged = 0x04000001,
   kXNotificationFriendsFriendAdded = 0x04000002,
   kXNotificationFriendsFriendRemoved = 0x04000003,
+  // XNotification Friends Internal
   kXNotificationFriendsFriendRequestReceived = 0x84000004,
   kXNotificationFriendsFriendAnswerReceived = 0x84000005,
   kXNotificationFriendsFriendRequestResult = 0x84000006,
@@ -257,11 +271,12 @@ enum : XNotificationID {
   kXNotificationXmpStateChanged = 0x0A000001,
   kXNotificationXmpPlaybackBehaviorChanged = 0x0A000002,
   kXNotificationXmpPlaybackControllerChanged = 0x0A000003,
+  // XNotification XMP Internal
   kXNotificationXmpMediaSourceConnectionChanged = 0x8A000004,
   kXNotificationXmpTitlePlayListContentChanged = 0x8A000005,
   kXNotificationXmpLocalMediaContentChanged = 0x8A000006,
   kXNotificationXmpDashNowPlayingQueueModeChanged = 0x8A000007,
-  kXNotificationXmpDashInItChanged = 0x8A000009,
+  kXNotificationXmpDashInitChanged = 0x8A000009,
   kXNotificationXmpPlaybackBehaviorChangedEx = 0x8A00000A,
 
   // XNotification Party
@@ -297,11 +312,16 @@ enum class XLanguage : uint32_t {
   kKorean = 7,
   kTChinese = 8,
   kPortuguese = 9,
-  kSChinese = 10,
+  kMaxBaseLanguages = 10,
   kPolish = 11,
   kRussian = 12,
+  kSwedish = 13,
+  kTurkish = 14,
+  kNorwegian = 15,
+  kDutch = 16,
+  kSChinese = 17,
   // STFS headers can't support any more languages than these
-  kMaxLanguages = 13
+  kMaxLanguages = 18
 };
 
 enum class XOnlineCountry : uint32_t {
@@ -416,7 +436,7 @@ enum class XOnlineCountry : uint32_t {
 };
 
 enum class XContentType : uint32_t {
-  kFolder = 0xffffffff,
+  kAll = 0xFFFFFFFF,  // Iterate all types
   kInvalid = 0x00000000,
   kSavedGame = 0x00000001,
   kMarketplaceContent = 0x00000002,
@@ -455,7 +475,7 @@ enum class XContentType : uint32_t {
 };
 
 inline const std::map<XContentType, std::string> XContentTypeMap = {
-    {XContentType::kFolder, "Folder"},
+    {XContentType::kAll, "All"},
     {XContentType::kSavedGame, "Saved Game"},
     {XContentType::kMarketplaceContent, "Marketplace Content"},
     {XContentType::kPublisher, "Publisher"},

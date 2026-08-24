@@ -51,7 +51,10 @@ class ObjectTable {
   object_ref<T> LookupObject(X_HANDLE handle, bool already_locked = false) {
     auto object = LookupObject(handle, already_locked);
     if (object) {
-      assert_true(object->type() == T::kObjectType);
+      if (object->type() != T::kObjectType) {
+        object->Release();
+        return object_ref<T>();
+      }
     }
     auto result = object_ref<T>(reinterpret_cast<T*>(object));
     return result;

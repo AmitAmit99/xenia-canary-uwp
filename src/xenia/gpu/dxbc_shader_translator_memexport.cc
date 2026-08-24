@@ -195,8 +195,9 @@ void DxbcShaderTranslator::ExportToMemory(uint8_t export_eM) {
         while (xe::bit_scan_forward(eM_remaining, &eM_index)) {
           eM_remaining &= ~(uint8_t(1) << eM_index);
           uint32_t eM = system_temps_memexport_data_[eM_index];
-          a_.OpBFI(dxbc::Dest::R(eM, components), dxbc::Src::LU(31),
-                   dxbc::Src::LU(0), dxbc::Src::LF(0.5f), dxbc::Src::R(eM));
+          a_.OpBFI(dxbc::Dest::R(round_bias_temp, components),
+                   dxbc::Src::LU(31), dxbc::Src::LU(0), dxbc::Src::LF(0.5f),
+                   dxbc::Src::R(eM));
           a_.OpAdd(dxbc::Dest::R(eM, components), dxbc::Src::R(eM),
                    dxbc::Src::R(round_bias_temp));
           a_.OpFToI(dxbc::Dest::R(eM, components), dxbc::Src::R(eM));
@@ -421,8 +422,8 @@ void DxbcShaderTranslator::ExportToMemory(uint8_t export_eM) {
         while (xe::bit_scan_forward(eM_remaining, &eM_index)) {
           eM_remaining &= ~(uint8_t(1) << eM_index);
           uint32_t eM = system_temps_memexport_data_[eM_index];
-          a_.OpBFI(dxbc::Dest::R(eM), dxbc::Src::LU(31), dxbc::Src::LU(0),
-                   dxbc::Src::LF(0.5f), dxbc::Src::R(eM));
+          a_.OpBFI(dxbc::Dest::R(round_bias_temp), dxbc::Src::LU(31),
+                   dxbc::Src::LU(0), dxbc::Src::LF(0.5f), dxbc::Src::R(eM));
           a_.OpAdd(dxbc::Dest::R(eM), dxbc::Src::R(eM),
                    dxbc::Src::R(round_bias_temp));
           a_.OpFToI(dxbc::Dest::R(eM), dxbc::Src::R(eM));
@@ -486,28 +487,32 @@ void DxbcShaderTranslator::ExportToMemory(uint8_t export_eM) {
     }
     a_.OpBreak();
 
+    // Convert to extended-range float16 with the helper shared with the ROV
+    // render target packing.
+    auto f32_to_f16_extended_range = [&](uint32_t components) {
+      uint8_t eM_remaining_ext = export_eM;
+      uint32_t eM_index_ext;
+      while (xe::bit_scan_forward(eM_remaining_ext, &eM_index_ext)) {
+        eM_remaining_ext &= ~(uint8_t(1) << eM_index_ext);
+        Float32ToF16ExtendedRange(system_temps_memexport_data_[eM_index_ext],
+                                  components);
+      }
+    };
+
     a_.OpCase(dxbc::Src::LU(uint32_t(xenos::ColorFormat::k_16_FLOAT)));
     {
-      // TODO(Triang3l): Use extended range conversion.
-      eM_remaining = export_eM;
-      while (xe::bit_scan_forward(eM_remaining, &eM_index)) {
-        eM_remaining &= ~(uint8_t(1) << eM_index);
-        uint32_t eM = system_temps_memexport_data_[eM_index];
-        a_.OpF32ToF16(dxbc::Dest::R(eM, 0b0001),
-                      dxbc::Src::R(eM, dxbc::Src::kXXXX));
-      }
+      f32_to_f16_extended_range(0b0001);
       a_.OpMov(element_size_dest, dxbc::Src::LU(1));
     }
     a_.OpBreak();
 
     a_.OpCase(dxbc::Src::LU(uint32_t(xenos::ColorFormat::k_16_16_FLOAT)));
     {
-      // TODO(Triang3l): Use extended range conversion.
+      f32_to_f16_extended_range(0b0011);
       eM_remaining = export_eM;
       while (xe::bit_scan_forward(eM_remaining, &eM_index)) {
         eM_remaining &= ~(uint8_t(1) << eM_index);
         uint32_t eM = system_temps_memexport_data_[eM_index];
-        a_.OpF32ToF16(dxbc::Dest::R(eM, 0b0011), dxbc::Src::R(eM));
         a_.OpBFI(dxbc::Dest::R(eM, 0b0001), dxbc::Src::LU(16),
                  dxbc::Src::LU(16), dxbc::Src::R(eM, dxbc::Src::kYYYY),
                  dxbc::Src::R(eM, dxbc::Src::kXXXX));
@@ -518,12 +523,11 @@ void DxbcShaderTranslator::ExportToMemory(uint8_t export_eM) {
 
     a_.OpCase(dxbc::Src::LU(uint32_t(xenos::ColorFormat::k_16_16_16_16_FLOAT)));
     {
-      // TODO(Triang3l): Use extended range conversion.
+      f32_to_f16_extended_range(0b1111);
       eM_remaining = export_eM;
       while (xe::bit_scan_forward(eM_remaining, &eM_index)) {
         eM_remaining &= ~(uint8_t(1) << eM_index);
         uint32_t eM = system_temps_memexport_data_[eM_index];
-        a_.OpF32ToF16(dxbc::Dest::R(eM), dxbc::Src::R(eM));
         a_.OpBFI(dxbc::Dest::R(eM, 0b0011), dxbc::Src::LU(16),
                  dxbc::Src::LU(16), dxbc::Src::R(eM, 0b1101),
                  dxbc::Src::R(eM, 0b1000));

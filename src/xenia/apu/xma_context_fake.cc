@@ -139,17 +139,6 @@ void XmaContextFake::Enable() {
   set_is_enabled(true);
 }
 
-bool XmaContextFake::Block(bool poll) {
-  if (!lock_.try_lock()) {
-    if (poll) {
-      return false;
-    }
-    lock_.lock();
-  }
-  lock_.unlock();
-  return true;
-}
-
 void XmaContextFake::Clear() {
   std::lock_guard<xe_mutex> lock(lock_);
   XELOGAPU("XmaContextFake: reset context {}", id());

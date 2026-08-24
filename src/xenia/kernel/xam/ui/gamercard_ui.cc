@@ -911,8 +911,9 @@ void GamercardUI::OnDraw(ImGuiIO& io) {
     dialog_open = false;
   }
   if (!is_valid_gamertag) {
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) {
       ImGui::SetTooltip("Saving disabled! Invalid gamertag provided.");
+    }
   }
 
   ImGui::EndDisabled();

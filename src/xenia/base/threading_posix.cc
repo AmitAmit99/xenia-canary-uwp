@@ -16,7 +16,9 @@
 
 #include <pthread.h>
 #include <sched.h>
+#include <semaphore.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <array>
@@ -111,19 +113,25 @@ SignalType GetSystemSignalType(int num) {
   return static_cast<SignalType>(num - SIGRTMIN);
 }
 
-thread_local std::array<bool, static_cast<size_t>(SignalType::k_Count)>
+std::array<std::atomic<bool>, static_cast<size_t>(SignalType::k_Count)>
     signal_handler_installed = {};
 
 static void signal_handler(int signal, siginfo_t* info, void* context);
 
 void install_signal_handler(SignalType type) {
-  if (signal_handler_installed[static_cast<size_t>(type)]) return;
+  bool expected = false;
+  if (!signal_handler_installed[static_cast<size_t>(type)]
+           .compare_exchange_strong(expected, true)) {
+    return;  // Already installed
+  }
   struct sigaction action{};
-  action.sa_flags = SA_SIGINFO;
+  action.sa_flags = SA_SIGINFO | SA_RESTART;
   action.sa_sigaction = signal_handler;
   sigemptyset(&action.sa_mask);
-  if (sigaction(GetSystemSignal(type), &action, nullptr) == -1)
-    signal_handler_installed[static_cast<size_t>(type)] = true;
+  if (sigaction(GetSystemSignal(type), &action, nullptr) != 0) {
+    // Failed to install, reset the flag
+    signal_handler_installed[static_cast<size_t>(type)] = false;
+  }
 }
 
 // TODO(dougvj)
@@ -158,6 +166,36 @@ void Sleep(std::chrono::microseconds duration) {
 
 void NanoSleep(int64_t duration) { Sleep(std::chrono::nanoseconds(duration)); }
 
+void NanoSleepPrecise(int64_t ns) {
+#if XE_PLATFORM_MAC
+  // Darwin's nanosleep can oversleep by 100-500us under load. Land precisely
+  // on the deadline by using mach_wait_until for the bulk of the wait and
+  // busy-waiting the last ~200us.
+  if (ns <= 0) {
+    return;
+  }
+  static const mach_timebase_info_data_t tb = [] {
+    mach_timebase_info_data_t i;
+    mach_timebase_info(&i);
+    return i;
+  }();
+  constexpr uint64_t kSpinTailNs = 200'000;
+  const uint64_t deadline =
+      mach_absolute_time() +
+      static_cast<uint64_t>((static_cast<__uint128_t>(ns) * tb.denom) /
+                            tb.numer);
+  const uint64_t spin_tail = static_cast<uint64_t>(
+      (static_cast<__uint128_t>(kSpinTailNs) * tb.denom) / tb.numer);
+  if (deadline > mach_absolute_time() + spin_tail) {
+    mach_wait_until(deadline - spin_tail);
+  }
+  while (mach_absolute_time() < deadline) {
+  }
+#else
+  NanoSleep(ns);
+#endif
+}
+
 // TODO(bwrsandman) Implement by allowing alert interrupts from IO operations
 thread_local bool alertable_state_ = false;
 SleepResult AlertableSleep(std::chrono::microseconds duration) {
@@ -187,13 +225,38 @@ bool SetTlsValue(TlsHandle handle, uintptr_t value) {
 
 class PosixConditionBase {
  public:
+  PosixConditionBase() {
+    // Initialize as robust mutex to handle thread termination gracefully
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);
+
+    // Get the native handle and set it as robust
+    auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
+    pthread_mutex_destroy(native_mutex);      // Destroy default mutex
+    pthread_mutex_init(native_mutex, &attr);  // Reinit as robust
+    pthread_mutexattr_destroy(&attr);
+  }
+
   virtual ~PosixConditionBase() = default;
   virtual bool Signal() = 0;
 
   WaitResult Wait(std::chrono::milliseconds timeout) {
     bool executed;
     auto predicate = [this] { return this->signaled(); };
-    auto lock = std::unique_lock(mutex_);
+
+    // Handle robust mutex locking
+    auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
+    int lock_result = pthread_mutex_lock(native_mutex);
+    if (lock_result == EOWNERDEAD) {
+      // Recover from dead owner
+      pthread_mutex_consistent(native_mutex);
+    } else if (lock_result != 0) {
+      return WaitResult::kFailed;
+    }
+
+    std::unique_lock<std::mutex> lock(mutex_, std::adopt_lock);
+
     if (predicate()) {
       executed = true;
     } else {
@@ -216,63 +279,122 @@ class PosixConditionBase {
       std::chrono::milliseconds timeout) {
     assert_true(!handles.empty());
 
-    // Construct a condition for all or any depending on wait_all
-    std::function<bool()> predicate;
-    {
-      using iter_t = std::vector<PosixConditionBase*>::const_iterator;
-      const auto predicate_inner = [](auto h) { return h->signaled(); };
-      const auto operation =
-          wait_all ? std::all_of<iter_t, decltype(predicate_inner)>
-                   : std::any_of<iter_t, decltype(predicate_inner)>;
-      predicate = [&handles, operation, predicate_inner] {
-        return operation(handles.cbegin(), handles.cend(), predicate_inner);
-      };
+    // For single handle, just use the normal Wait path
+    if (handles.size() == 1) {
+      auto result = handles[0]->Wait(timeout);
+      return std::make_pair(result, 0);
     }
 
-    // TODO(bwrsandman, Triang3l) This is controversial, see issue #1677
-    // This will probably cause a deadlock on the next thread doing any waiting
-    // if the thread is suspended between locking and waiting
-    std::unique_lock lock(mutex_);
+    // For multiple handles, we need to poll since we can't wait on multiple
+    // condition variables simultaneously. This is a limitation of the POSIX
+    // condition variable API.
+    auto start_time = std::chrono::steady_clock::now();
+    auto end_time = (timeout == std::chrono::milliseconds::max())
+                        ? std::chrono::steady_clock::time_point::max()
+                        : start_time + timeout;
 
-    bool wait_success = true;
-    // If the timeout is infinite, wait without timeout.
-    // The predicate will be checked before beginning the wait
-    if (timeout == std::chrono::milliseconds::max()) {
-      cond_.wait(lock, predicate);
-    } else {
-      // Wait with timeout.
-      wait_success = cond_.wait_for(lock, timeout, predicate);
-    }
-    if (wait_success) {
-      auto first_signaled = std::numeric_limits<size_t>::max();
-      for (auto i = 0u; i < handles.size(); ++i) {
-        if (handles[i]->signaled()) {
-          if (first_signaled > i) {
-            first_signaled = i;
+    while (true) {
+      // Check all handles to see if any/all are signaled
+      // Use try_lock to avoid deadlocks from lock ordering issues
+      size_t first_signaled = std::numeric_limits<size_t>::max();
+      bool condition_met = false;
+
+      // Try to acquire all locks without blocking
+      std::vector<std::unique_lock<std::mutex>> locks;
+      locks.reserve(handles.size());
+      bool all_locked = true;
+
+      for (size_t i = 0; i < handles.size(); ++i) {
+        // Try to lock, handling robust mutex EOWNERDEAD case
+        auto native_mutex =
+            static_cast<pthread_mutex_t*>(handles[i]->mutex_.native_handle());
+        int result = pthread_mutex_trylock(native_mutex);
+
+        if (result == 0 || result == EOWNERDEAD) {
+          // Successfully acquired lock or recovered from dead owner
+          if (result == EOWNERDEAD) {
+            // Make mutex consistent after previous owner died
+            pthread_mutex_consistent(native_mutex);
           }
-          handles[i]->post_execution();
-          if (!wait_all) break;
+          locks.emplace_back(handles[i]->mutex_, std::adopt_lock);
+        } else {
+          // Couldn't acquire lock
+          all_locked = false;
+          break;
         }
       }
-      assert_true(std::numeric_limits<size_t>::max() != first_signaled);
-      return std::make_pair(WaitResult::kSuccess, first_signaled);
+
+      // If we couldn't acquire all locks, release what we have and retry
+      if (!all_locked) {
+        locks.clear();
+        std::this_thread::yield();
+        continue;
+      }
+
+      // Now we have all locks, check the condition
+      if (wait_all) {
+        // For wait_all, check if ALL are signaled
+        bool all_signaled = true;
+        for (size_t i = 0; i < handles.size(); ++i) {
+          if (!handles[i]->signaled()) {
+            all_signaled = false;
+            break;
+          }
+          if (first_signaled == std::numeric_limits<size_t>::max()) {
+            first_signaled = i;
+          }
+        }
+        condition_met = all_signaled;
+      } else {
+        // For wait_any, check if ANY is signaled
+        for (size_t i = 0; i < handles.size(); ++i) {
+          if (handles[i]->signaled()) {
+            first_signaled = i;
+            condition_met = true;
+            break;
+          }
+        }
+      }
+
+      if (condition_met) {
+        // Execute post_execution for the signaled handle(s)
+        if (wait_all) {
+          for (size_t i = 0; i < handles.size(); ++i) {
+            handles[i]->post_execution();
+          }
+        } else {
+          handles[first_signaled]->post_execution();
+        }
+        return std::make_pair(WaitResult::kSuccess, first_signaled);
+      }
+
+      // Release locks before sleeping
+      locks.clear();
+
+      // Check timeout
+      auto now = std::chrono::steady_clock::now();
+      if (now >= end_time) {
+        return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
+      }
+
+      // Sleep for a short time before polling again
+      auto remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);
+      auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));
+      std::this_thread::sleep_for(sleep_time);
     }
-    return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
   }
 
   [[nodiscard]] virtual void* native_handle() const {
-    return cond_.native_handle();
+    return const_cast<std::condition_variable&>(cond_).native_handle();
   }
 
  protected:
   [[nodiscard]] inline virtual bool signaled() const = 0;
   inline virtual void post_execution() = 0;
-  static std::condition_variable cond_;
-  static std::mutex mutex_;
+  std::condition_variable cond_;
+  std::mutex mutex_;
 };
-
-std::condition_variable PosixConditionBase::cond_;
-std::mutex PosixConditionBase::mutex_;
 
 // There really is no native POSIX handle for a single wait/signal construct
 // pthreads is at a lower level with more handles for such a mechanism.
@@ -320,14 +442,17 @@ class PosixCondition<Semaphore> final : public PosixConditionBase {
   bool Signal() override { return Release(1, nullptr); }
 
   bool Release(uint32_t release_count, int* out_previous_count) {
-    if (maximum_count_ - count_ >= release_count) {
-      auto lock = std::unique_lock(mutex_);
-      if (out_previous_count) *out_previous_count = count_;
-      count_ += release_count;
-      cond_.notify_all();
-      return true;
+    auto lock = std::unique_lock(mutex_);
+    // Validate that releasing would not exceed the maximum count
+    if (count_ + release_count > maximum_count_) {
+      return false;
     }
-    return false;
+    if (out_previous_count) {
+      *out_previous_count = count_;
+    }
+    count_ += release_count;
+    cond_.notify_all();
+    return true;
   }
 
  private:
@@ -366,7 +491,7 @@ class PosixCondition<Mutant> final : public PosixConditionBase {
   }
 
   [[nodiscard]] void* native_handle() const override {
-    return mutex_.native_handle();
+    return const_cast<std::mutex&>(mutex_).native_handle();
   }
 
  private:
@@ -455,7 +580,7 @@ class PosixCondition<Timer> final : public PosixConditionBase {
   }
   std::weak_ptr<TimerQueueWaitItem> wait_item_;
   std::function<void()> callback_;
-  volatile bool signal_;
+  bool signal_;  // Protected by mutex_
   const bool manual_reset_;
 };
 
@@ -481,6 +606,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
         exit_code_(0),
         state_(State::kUninitialized),
         suspend_count_(0) {
+    sem_init(&suspend_sem_, 0, 0);
 #if XE_PLATFORM_ANDROID
     android_pre_api_26_name_[0] = '\0';
 #endif
@@ -489,7 +615,9 @@ class PosixCondition<Thread> final : public PosixConditionBase {
                   ThreadStartData* start_data) {
     start_data->create_suspended = params.create_suspended;
     pthread_attr_t attr;
-    if (pthread_attr_init(&attr) != 0) return false;
+    if (pthread_attr_init(&attr) != 0) {
+      return false;
+    }
     if (pthread_attr_setstacksize(&attr, params.stack_size) != 0) {
       pthread_attr_destroy(&attr);
       return false;
@@ -518,10 +646,12 @@ class PosixCondition<Thread> final : public PosixConditionBase {
   /// Thread::GetCurrentThread() on the main thread
   explicit PosixCondition(pthread_t thread)
       : thread_(thread),
+        tid_(static_cast<pid_t>(syscall(SYS_gettid))),
         signaled_(false),
         exit_code_(0),
         state_(State::kRunning),
         suspend_count_(0) {
+    sem_init(&suspend_sem_, 0, 0);
 #if XE_PLATFORM_ANDROID
     android_pre_api_26_name_[0] = '\0';
 #endif
@@ -648,31 +778,52 @@ class PosixCondition<Thread> final : public PosixConditionBase {
 
   int priority() const {
     WaitStarted();
-    int policy;
-    sched_param param{};
-    int ret = pthread_getschedparam(thread_, &policy, &param);
-    if (ret != 0) {
-      return -1;
+    if (!fifo_failed_) {
+      int policy;
+      sched_param param{};
+      int ret = pthread_getschedparam(thread_, &policy, &param);
+      if (ret != 0) {
+        return -1;
+      }
+      return param.sched_priority;
     }
-
-    return param.sched_priority;
+    // When using nice values, map back to the SCHED_FIFO range (1-32)
+    // so callers see a consistent priority space.
+    int nice_val = getpriority(PRIO_PROCESS, tid_);
+    // nice -19..19 → fifo 32..1
+    return 16 - nice_val;
   }
 
   void set_priority(int new_priority) const {
     WaitStarted();
-    sched_param param{};
-    param.sched_priority = new_priority;
-    int res = pthread_setschedparam(thread_, SCHED_FIFO, &param);
-    if (res != 0) {
-      switch (res) {
-        case EPERM:
-          XELOGW("Permission denied while setting priority");
-          break;
-        case EINVAL:
-          assert_always();
-        default:
-          XELOGW("Unknown error while setting priority");
+    if (!fifo_failed_) {
+      // Try real-time SCHED_FIFO for best priority control.
+      sched_param param{};
+      param.sched_priority = new_priority;
+      int res = pthread_setschedparam(thread_, SCHED_FIFO, &param);
+      if (res == 0) {
+        return;
       }
+      if (res == EPERM) {
+        fifo_failed_ = true;
+      } else {
+        XELOGW("Unexpected error {} while setting SCHED_FIFO priority", res);
+        fifo_failed_ = true;
+      }
+    }
+    // Fall back to nice values under SCHED_OTHER.
+    // Map SCHED_FIFO range (1-32) to nice range (19 to -19).
+    // Center: fifo 16 → nice 0.
+    int nice_val = 16 - new_priority;
+    // Clamp to valid nice range.
+    if (nice_val < -20) {
+      nice_val = -20;
+    }
+    if (nice_val > 19) {
+      nice_val = 19;
+    }
+    if (tid_ > 0) {
+      setpriority(PRIO_PROCESS, tid_, nice_val);
     }
   }
 
@@ -702,11 +853,23 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     }
     WaitStarted();
     std::unique_lock lock(state_mutex_);
-    if (state_ != State::kSuspended) return false;
+    // Check if thread has any suspend count (Windows allows resume even if
+    // running)
+    if (suspend_count_ == 0) {
+      return false;
+    }
     if (out_previous_suspend_count) {
       *out_previous_suspend_count = suspend_count_;
     }
     --suspend_count_;
+    // If suspend count reaches 0, transition to running and wake the thread
+    if (suspend_count_ == 0 && state_ == State::kSuspended) {
+      state_ = State::kRunning;
+      // Post to the semaphore to wake the thread from WaitSuspended.
+      // sem_post is async-signal-safe, so this is safe even if called
+      // from unusual contexts.
+      sem_post(&suspend_sem_);
+    }
     state_signal_.notify_all();
     return true;
   }
@@ -716,13 +879,37 @@ class PosixCondition<Thread> final : public PosixConditionBase {
       *out_previous_suspend_count = 0;
     }
     WaitStarted();
+
+    // Check if we're trying to suspend ourselves
+    bool is_current_thread = pthread_self() == thread_;
+    bool already_suspended = false;
+
     {
+      std::unique_lock lock(state_mutex_);
       if (out_previous_suspend_count) {
         *out_previous_suspend_count = suspend_count_;
       }
+      already_suspended = (state_ == State::kSuspended);
       state_ = State::kSuspended;
       ++suspend_count_;
     }
+
+    // If already suspended, just increment the count — don't send another
+    // signal. A second pthread_kill while the thread is in sem_wait would
+    // nest signal handlers and create multiple outstanding sem_waits, but
+    // Resume only posts once when count reaches 0.
+    if (already_suspended) {
+      return true;
+    }
+
+    if (is_current_thread) {
+      // Self-suspension: Instead of sending a signal, directly call
+      // WaitSuspended. This avoids the signal handler complexity for the
+      // self-suspend case.
+      WaitSuspended();
+      return true;
+    }
+
     int result =
         pthread_kill(thread_, GetSystemSignal(SignalType::kThreadSuspend));
     return result == 0;
@@ -774,11 +961,16 @@ class PosixCondition<Thread> final : public PosixConditionBase {
                        [this] { return state_ != State::kUninitialized; });
   }
 
-  /// Set state to suspended and wait until it reset by another thread
+  /// Set state to suspended and wait until it is reset by another thread.
+  /// Uses sem_wait which is async-signal-safe, allowing this to be called
+  /// from a signal handler (e.g., the SIGRTMIN suspend signal handler)
+  /// without risking deadlock or heap corruption from non-reentrant
+  /// mutex/condvar operations.
   void WaitSuspended() {
-    std::unique_lock lock(state_mutex_);
-    state_signal_.wait(lock, [this] { return suspend_count_ == 0; });
-    state_ = State::kRunning;
+    int ret;
+    do {
+      ret = sem_wait(&suspend_sem_);
+    } while (ret == -1 && errno == EINTR);
   }
 
   void* native_handle() const override {
@@ -792,12 +984,16 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     if (thread_) {
       pthread_join(thread_, nullptr);
     }
+    sem_destroy(&suspend_sem_);
   }
   pthread_t thread_;
+  pid_t tid_ = 0;                     // Kernel TID for setpriority() fallback
+  mutable bool fifo_failed_ = false;  // True after SCHED_FIFO was rejected
   bool signaled_;
   int exit_code_;
-  volatile State state_;
-  volatile uint32_t suspend_count_;
+  State state_;             // Protected by state_mutex_
+  uint32_t suspend_count_;  // Protected by state_mutex_
+  sem_t suspend_sem_;       // Async-signal-safe suspend/resume semaphore
   mutable std::mutex state_mutex_;
   mutable std::mutex callback_mutex_;
   mutable std::condition_variable state_signal_;
@@ -812,9 +1008,12 @@ class PosixCondition<Thread> final : public PosixConditionBase {
 
 class PosixWaitHandle {
  public:
-  virtual ~PosixWaitHandle() = default;
+  virtual ~PosixWaitHandle();
   virtual PosixConditionBase& condition() = 0;
 };
+
+// Out-of-line destructor to ensure proper RTTI/vtable emission
+PosixWaitHandle::~PosixWaitHandle() = default;
 
 // This wraps a condition object as our handle because posix has no single
 // native handle for higher level concurrency constructs such as semaphores
@@ -866,9 +1065,13 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable,
   if (posix_wait_handle == nullptr) {
     return WaitResult::kFailed;
   }
-  if (is_alertable) alertable_state_ = true;
+  if (is_alertable) {
+    alertable_state_ = true;
+  }
   auto result = posix_wait_handle->condition().Wait(timeout);
-  if (is_alertable) alertable_state_ = false;
+  if (is_alertable) {
+    alertable_state_ = false;
+  }
   return result;
 }
 
@@ -884,11 +1087,15 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal,
       posix_wait_handle_to_wait_on == nullptr) {
     return WaitResult::kFailed;
   }
-  if (is_alertable) alertable_state_ = true;
+  if (is_alertable) {
+    alertable_state_ = true;
+  }
   if (posix_wait_handle_to_signal->condition().Signal()) {
     result = posix_wait_handle_to_wait_on->condition().Wait(timeout);
   }
-  if (is_alertable) alertable_state_ = false;
+  if (is_alertable) {
+    alertable_state_ = false;
+  }
   return result;
 }
 
@@ -905,10 +1112,14 @@ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[],
     }
     conditions.push_back(&handle->condition());
   }
-  if (is_alertable) alertable_state_ = true;
+  if (is_alertable) {
+    alertable_state_ = true;
+  }
   auto result = PosixConditionBase::WaitMultiple(std::move(conditions),
                                                  wait_all, timeout);
-  if (is_alertable) alertable_state_ = false;
+  if (is_alertable) {
+    alertable_state_ = false;
+  }
   return result;
 }
 
@@ -1103,6 +1314,7 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   delete start_data;
 
   current_thread_ = thread;
+  thread->handle_.tid_ = static_cast<pid_t>(syscall(SYS_gettid));
   {
     std::unique_lock lock(thread->handle_.state_mutex_);
     thread->handle_.state_ =
@@ -1124,10 +1336,12 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
     thread->handle_.state_ = State::kFinished;
   }
 
-  std::unique_lock lock(mutex_);
-  thread->handle_.exit_code_ = 0;
-  thread->handle_.signaled_ = true;
-  cond_.notify_all();
+  {
+    std::unique_lock lock(thread->handle_.mutex_);
+    thread->handle_.exit_code_ = 0;
+    thread->handle_.signaled_ = true;
+    thread->handle_.cond_.notify_all();
+  }
 
   current_thread_ = nullptr;
   return nullptr;
@@ -1141,7 +1355,9 @@ std::unique_ptr<Thread> Thread::Create(CreationParameters params,
   install_signal_handler(SignalType::kThreadTerminate);
 #endif
   auto thread = std::make_unique<PosixThread>();
-  if (!thread->Initialize(params, std::move(start_routine))) return nullptr;
+  if (!thread->Initialize(params, std::move(start_routine))) {
+    return nullptr;
+  }
   assert_not_null(thread);
   return thread;
 }
@@ -1184,10 +1400,14 @@ void set_name(const std::string_view name) {
 #endif
 }
 
-static void signal_handler(int signal, siginfo_t* info, void* /*context*/) {
+static void signal_handler(int signal, siginfo_t* info, void* context) {
   switch (GetSystemSignalType(signal)) {
     case SignalType::kThreadSuspend: {
-      assert_not_null(current_thread_);
+      if (!current_thread_) {
+        // current_thread_ is NULL - this can happen if the signal arrives
+        // before the thread has initialized or after it has exited
+        return;
+      }
       current_thread_->WaitSuspended();
     } break;
     case SignalType::kThreadUserCallback: {

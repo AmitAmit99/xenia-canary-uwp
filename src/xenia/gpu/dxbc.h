@@ -1451,6 +1451,7 @@ enum class Opcode : uint32_t {
   kRetC = 63,
   kRoundNE = 64,
   kRoundNI = 65,
+  kRoundPI = 66,
   kRoundZ = 67,
   kRSq = 68,
   kSampleL = 72,
@@ -1496,6 +1497,7 @@ enum class Opcode : uint32_t {
   kRcp = 129,
   kF32ToF16 = 130,
   kF16ToF32 = 131,
+  kCountBits = 134,
   kFirstBitHi = 135,
   kFirstBitLo = 136,
   kUBFE = 138,
@@ -1515,6 +1517,7 @@ enum class Opcode : uint32_t {
   kStoreRaw = 166,
   kAtomicAnd = 169,
   kAtomicOr = 170,
+  kAtomicIAdd = 173,
   kEvalSampleIndex = 204,
   kEvalCentroid = 205,
 };
@@ -1894,6 +1897,10 @@ class Assembler {
     EmitAluOp(Opcode::kRoundNI, 0b0, dest, src, saturate);
     ++stat_.float_instruction_count;
   }
+  void OpRoundPI(const Dest& dest, const Src& src, bool saturate = false) {
+    EmitAluOp(Opcode::kRoundPI, 0b0, dest, src, saturate);
+    ++stat_.float_instruction_count;
+  }
   void OpRoundZ(const Dest& dest, const Src& src, bool saturate = false) {
     EmitAluOp(Opcode::kRoundZ, 0b0, dest, src, saturate);
     ++stat_.float_instruction_count;
@@ -2248,6 +2255,10 @@ class Assembler {
     EmitAluOp(Opcode::kF16ToF32, 0b1, dest, src);
     ++stat_.conversion_instruction_count;
   }
+  void OpCountBits(const Dest& dest, const Src& src) {
+    EmitAluOp(Opcode::kCountBits, 0b1, dest, src);
+    ++stat_.uint_instruction_count;
+  }
   void OpFirstBitHi(const Dest& dest, const Src& src) {
     EmitAluOp(Opcode::kFirstBitHi, 0b1, dest, src);
     ++stat_.uint_instruction_count;
@@ -2410,6 +2421,10 @@ class Assembler {
   void OpAtomicOr(const Dest& dest, const Src& address,
                   uint32_t address_components, const Src& value) {
     EmitAtomicOp(Opcode::kAtomicOr, dest, address, address_components, value);
+  }
+  void OpAtomicIAdd(const Dest& dest, const Src& address,
+                    uint32_t address_components, const Src& value) {
+    EmitAtomicOp(Opcode::kAtomicIAdd, dest, address, address_components, value);
   }
   void OpEvalSampleIndex(const Dest& dest, const Src& value,
                          const Src& sample_index) {

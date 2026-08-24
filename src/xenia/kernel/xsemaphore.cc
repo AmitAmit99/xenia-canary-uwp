@@ -30,7 +30,8 @@ bool XSemaphore::Initialize(int32_t initial_count, int32_t maximum_count) {
   return !!semaphore_;
 }
 
-bool XSemaphore::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
+bool XSemaphore::InitializeNative(void* native_ptr,
+                                  const X_DISPATCH_HEADER* header) {
   assert_false(semaphore_);
 
   auto semaphore = reinterpret_cast<X_KSEMAPHORE*>(native_ptr);
@@ -40,10 +41,14 @@ bool XSemaphore::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
   return !!semaphore_;
 }
 
-int32_t XSemaphore::ReleaseSemaphore(int32_t release_count) {
+bool XSemaphore::ReleaseSemaphore(int32_t release_count,
+                                  int32_t* out_previous_count) {
   int32_t previous_count = 0;
-  semaphore_->Release(release_count, &previous_count);
-  return previous_count;
+  bool success = semaphore_->Release(release_count, &previous_count);
+  if (out_previous_count) {
+    *out_previous_count = previous_count;
+  }
+  return success;
 }
 
 bool XSemaphore::Save(ByteStream* stream) {

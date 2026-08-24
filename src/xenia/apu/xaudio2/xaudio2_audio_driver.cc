@@ -273,7 +273,9 @@ void XAudio2AudioDriver::Resume() {
 }
 
 void XAudio2AudioDriver::SetVolume(float volume) {
-  if (cvars::mute) return;
+  if (cvars::mute) {
+    return;
+  }
 
   if (api_minor_version_ >= 8) {
     objects_.api_2_8.pcm_voice->SetVolume(volume);
@@ -308,8 +310,13 @@ void XAudio2AudioDriver::Shutdown() {
 
 template <typename Objects>
 void XAudio2AudioDriver::ShutdownObjects(Objects& objects) {
+  // Stop the engine first to ensure no callbacks are in-flight before
+  // destroying voices and the callback object.
+  if (objects.audio) {
+    objects.audio->StopEngine();
+  }
+
   if (objects.pcm_voice) {
-    objects.pcm_voice->Stop();
     objects.pcm_voice->DestroyVoice();
     objects.pcm_voice = nullptr;
   }
@@ -320,7 +327,6 @@ void XAudio2AudioDriver::ShutdownObjects(Objects& objects) {
   }
 
   if (objects.audio) {
-    objects.audio->StopEngine();
     objects.audio->Release();
     objects.audio = nullptr;
   }

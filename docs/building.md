@@ -9,11 +9,13 @@ drivers.
 ### Windows
 
 * Windows 10 or later
-* [Visual Studio 2022](https://www.visualstudio.com/downloads/)
+* [Visual Studio 2022 or later](https://www.visualstudio.com/downloads/)
 * CMake 3.10+ (or C++ CMake tools for Windows)
 * Windows 11 SDK version 10.0.22000.0 (for Visual Studio 2022, this or any newer version)
-* [Python 3.10+ 64-bit](https://www.python.org/downloads/)
+* [Python 3.6+ 64-bit](https://www.python.org/downloads/)
   * Ensure Python is in PATH.
+* [Vulkan SDK](https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe)
+  * The build script will automatically detect it if installed at `C:\VulkanSDK`
 
 ```
 git clone https://github.com/xenia-canary/xenia-canary.git
@@ -110,6 +112,31 @@ sudo apt-get install build-essential mesa-vulkan-drivers valgrind libc++-dev lib
 ```
 
 In addition, you will need up to date Vulkan libraries and drivers for your hardware, which most distributions have in their standard repositories nowadays.
+
+**Vulkan SDK (for shader compilation)**
+
+The build uses `spirv-opt` and `glslangValidator` for shader compilation. Check
+if your system version is recent enough:
+
+```sh
+spirv-opt --version
+```
+
+If the version is older than 2026.1, the system `spirv-tools` package will not
+support all required options (e.g. `--canonicalize-ids`). In that case, install
+the [Vulkan SDK from LunarG](https://vulkan.lunarg.com/sdk/home) and set
+`VULKAN_SDK` so the build picks up the correct tools:
+
+```sh
+wget -qO vulkan-sdk.tar.xz https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz
+mkdir -p ~/vulkan-sdk
+tar -xf vulkan-sdk.tar.xz -C ~/vulkan-sdk
+rm vulkan-sdk.tar.xz
+export VULKAN_SDK=$HOME/vulkan-sdk/$(ls ~/vulkan-sdk)/x86_64
+export PATH="$VULKAN_SDK/bin:$PATH"
+```
+
+Add the `export` lines to your shell profile to persist them across sessions.
 
 ## Running
 

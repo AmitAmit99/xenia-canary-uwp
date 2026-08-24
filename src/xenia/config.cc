@@ -37,9 +37,15 @@ std::filesystem::path config_path;
 std::string game_config_suffix = ".config.toml";
 
 bool sortCvar(cvar::IConfigVar* a, cvar::IConfigVar* b) {
-  if (a->category() < b->category()) return true;
-  if (a->category() > b->category()) return false;
-  if (a->name() < b->name()) return true;
+  if (a->category() < b->category()) {
+    return true;
+  }
+  if (a->category() > b->category()) {
+    return false;
+  }
+  if (a->name() < b->name()) {
+    return true;
+  }
   return false;
 }
 
@@ -73,7 +79,7 @@ void PrintConfigToLog(const std::filesystem::path& file_path) {
     }
 
     // Check if remaining part of line is empty.
-    if (std::all_of(config_line.cbegin(), config_line.cend(), isspace)) {
+    if (std::ranges::all_of(std::as_const(config_line), isspace)) {
       continue;
     }
     // Check if line is a category mark. If it is add new line on start for
@@ -178,10 +184,16 @@ void SaveConfig() {
       vars.push_back(s.second);
     }
   }
-  std::sort(vars.begin(), vars.end(), [](auto a, auto b) {
-    if (a->category() < b->category()) return true;
-    if (a->category() > b->category()) return false;
-    if (a->name() < b->name()) return true;
+  std::ranges::sort(vars, [](auto a, auto b) {
+    if (a->category() < b->category()) {
+      return true;
+    }
+    if (a->category() > b->category()) {
+      return false;
+    }
+    if (a->name() < b->name()) {
+      return true;
+    }
     return false;
   });
 

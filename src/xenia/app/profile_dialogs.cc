@@ -386,7 +386,7 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
   
   // Profile list with proper rendering
   for (auto& [xuid, account] : *profiles) {
-      ImGui::PushID(static_cast<int>(xuid));
+    ImGui::PushID(fmt::format("{:016X}", xuid).c_str());
 
       const uint8_t user_index =
           profile_manager->GetUserIndexAssignedToProfile(xuid);
@@ -396,7 +396,7 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
                                     : nullptr;
 
       bool selected = (selected_xuid_ == xuid);
-    
+
     // Start with selectable that spans the full width
     const float item_height = 60.0f * ImGui::GetIO().DisplayFramebufferScale.y;
     // Adjust position to center with buttons (account for reduced width)

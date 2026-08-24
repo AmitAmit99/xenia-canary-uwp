@@ -15,10 +15,6 @@
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
 
-#ifdef XE_PLATFORM_WIN32
-#include "xenia/base/platform_win.h"  // for bcrypt.h
-#endif
-
 #include "third_party/crypto/TinySHA1.hpp"
 #include "third_party/crypto/des/des.cpp"
 #include "third_party/crypto/des/des.h"
@@ -26,6 +22,7 @@
 #include "third_party/crypto/des/descbc.h"
 #include "third_party/crypto/sha256.cpp"
 #include "third_party/crypto/sha256.h"
+#include "xenia/kernel/xboxkrnl/xecrypt_rsa.h"
 
 extern "C" {
 #include "third_party/FFmpeg/libavutil/md5.h"
@@ -50,6 +47,11 @@ struct XECRYPT_SHA_STATE {
   uint8_t buffer[64];         // 0x18
 };
 static_assert_size(XECRYPT_SHA_STATE, 0x58);
+
+struct XECRYPT_HMACSHA_STATE {
+  XECRYPT_SHA_STATE sha_state[2];
+};
+static_assert_size(XECRYPT_HMACSHA_STATE, 0xB0);
 
 // TODO: Size of this struct hasn't been confirmed yet.
 struct XECRYPT_SHA256_STATE {
@@ -421,7 +423,7 @@ DECLARE_XBOXKRNL_EXPORT1(XeCryptRc4, kNone, kImplemented);
 
 void InitSha1(sha1::SHA1* sha, const XECRYPT_SHA_STATE* state) {
   uint32_t digest[5];
-  std::copy(std::begin(state->state), std::end(state->state), digest);
+  std::ranges::copy(state->state, digest);
 
   sha->init(digest, state->buffer, state->count);
 }
@@ -492,6 +494,48 @@ void XeCryptSha_entry(lpvoid_t input_1, dword_t input_1_size, lpvoid_t input_2,
 }
 DECLARE_XBOXKRNL_EXPORT1(XeCryptSha, kNone, kImplemented);
 
+void XeCryptHmacShaInit_entry(pointer_t<XECRYPT_HMACSHA_STATE> sha_state_ptr,
+                              lpvoid_t key_ptr, dword_t key_size) {
+  sha_state_ptr.Zero();
+
+  const uint8_t* key_data_ptr = key_ptr.as<uint8_t*>();
+  const uint32_t key_size_ = key_size > 64 ? 64 : key_size.value();
+
+  XeCryptShaInit_entry(sha_state_ptr->sha_state);
+  XeCryptShaInit_entry(&sha_state_ptr->sha_state[1]);
+
+  std::array<uint8_t, 64> key_1 = {};
+  std::array<uint8_t, 64> key_2 = {};
+
+  std::copy_n(key_data_ptr, key_size_, key_1.begin());
+  std::copy_n(key_data_ptr, key_size_, key_2.begin());
+
+  for (uint8_t i = 0; i < key_size_; i += 1) {
+    key_1[i] ^= 0x5C5C5C5Cu;
+    key_2[i] ^= 0x36363636u;
+  }
+
+  XeCryptShaUpdate_entry(sha_state_ptr->sha_state, key_2.data(), key_size_);
+  XeCryptShaUpdate_entry(&sha_state_ptr->sha_state[1], key_1.data(), key_size_);
+}
+DECLARE_XBOXKRNL_EXPORT1(XeCryptHmacShaInit, kNone, kImplemented);
+
+void XeCryptHmacShaUpdate_entry(pointer_t<XECRYPT_HMACSHA_STATE> sha_state_ptr,
+                                lpvoid_t input, dword_t input_size) {
+  XeCryptShaUpdate_entry(sha_state_ptr->sha_state, input, input_size);
+}
+DECLARE_XBOXKRNL_EXPORT1(XeCryptHmacShaUpdate, kNone, kImplemented);
+
+void XeCryptHmacShaFinal_entry(pointer_t<XECRYPT_HMACSHA_STATE> sha_state_ptr,
+                               pointer_t<uint8_t> out, dword_t out_size) {
+  XeCryptShaFinal_entry(sha_state_ptr->sha_state, 0, 0);
+  XeCryptShaUpdate_entry(&sha_state_ptr->sha_state[1],
+                         sha_state_ptr->sha_state->state,
+                         sizeof(XECRYPT_SHA_STATE::state));
+  XeCryptShaFinal_entry(&sha_state_ptr->sha_state[1], out, out_size);
+}
+DECLARE_XBOXKRNL_EXPORT1(XeCryptHmacShaFinal, kNone, kImplemented);
+
 void XeCryptMd5_entry(lpvoid_t input_1, dword_t input_1_size, lpvoid_t input_2,
                       dword_t input_2_size, lpvoid_t input_3,
                       dword_t input_3_size, lpvoid_t output,
@@ -536,10 +580,8 @@ DECLARE_XBOXKRNL_EXPORT1(XeCryptSha256Init, kNone, kImplemented);
 void XeCryptSha256Update_entry(pointer_t<XECRYPT_SHA256_STATE> sha_state,
                                lpvoid_t input, dword_t input_size) {
   sha256::SHA256 sha;
-  std::copy(std::begin(sha_state->state), std::end(sha_state->state),
-            sha.getHashValues());
-  std::copy(std::begin(sha_state->buffer), std::end(sha_state->buffer),
-            sha.getBuffer());
+  std::ranges::copy(sha_state->state, sha.getHashValues());
+  std::ranges::copy(sha_state->buffer, sha.getBuffer());
   sha.setTotalSize(sha_state->count);
 
   sha.add(input, input_size);
@@ -555,10 +597,8 @@ DECLARE_XBOXKRNL_EXPORT1(XeCryptSha256Update, kNone, kImplemented);
 void XeCryptSha256Final_entry(pointer_t<XECRYPT_SHA256_STATE> sha_state,
                               pointer_t<uint8_t> out, dword_t out_size) {
   sha256::SHA256 sha;
-  std::copy(std::begin(sha_state->state), std::end(sha_state->state),
-            sha.getHashValues());
-  std::copy(std::begin(sha_state->buffer), std::end(sha_state->buffer),
-            sha.getBuffer());
+  std::ranges::copy(sha_state->state, sha.getHashValues());
+  std::ranges::copy(sha_state->buffer, sha.getBuffer());
   sha.setTotalSize(sha_state->count);
 
   uint8_t hash[32];
@@ -566,7 +606,7 @@ void XeCryptSha256Final_entry(pointer_t<XECRYPT_SHA256_STATE> sha_state,
 
   std::copy_n(hash, std::min<size_t>(xe::countof(hash), out_size),
               static_cast<uint8_t*>(out));
-  std::copy(std::begin(hash), std::end(hash), sha_state->buffer);
+  std::ranges::copy(hash, sha_state->buffer);
 }
 DECLARE_XBOXKRNL_EXPORT1(XeCryptSha256Final, kNone, kImplemented);
 
@@ -591,10 +631,8 @@ void XeCryptSha512Update_entry(pointer_t<XECRYPT_SHA512_STATE> sha_state,
 
   // Trick to make similar implementation as SHA256
   SHA512_STATE* sha2 = reinterpret_cast<SHA512_STATE*>(sha);
-  std::copy(std::begin(sha_state->state), std::end(sha_state->state),
-            sha2->state);
-  std::copy(std::begin(sha_state->buffer), std::end(sha_state->buffer),
-            sha2->buffer);
+  std::ranges::copy(sha_state->state, sha2->state);
+  std::ranges::copy(sha_state->buffer, sha2->buffer);
   sha2->count = sha_state->count;
 
   // Add new entry from input
@@ -614,10 +652,8 @@ void XeCryptSha512Final_entry(pointer_t<XECRYPT_SHA256_STATE> sha_state,
 
   // Trick to make similar implementation as SHA256
   SHA512_STATE* sha2 = reinterpret_cast<SHA512_STATE*>(sha);
-  std::copy(std::begin(sha_state->state), std::end(sha_state->state),
-            sha2->state);
-  std::copy(std::begin(sha_state->buffer), std::end(sha_state->buffer),
-            sha2->buffer);
+  std::ranges::copy(sha_state->state, sha2->state);
+  std::ranges::copy(sha_state->buffer, sha2->buffer);
   sha2->count = sha_state->count;
 
   uint8_t hash[64];
@@ -625,7 +661,7 @@ void XeCryptSha512Final_entry(pointer_t<XECRYPT_SHA256_STATE> sha_state,
 
   std::copy_n(hash, std::min<size_t>(xe::countof(hash), out_size),
               static_cast<uint8_t*>(out));
-  std::copy(std::begin(hash), std::end(hash), sha_state->buffer);
+  std::ranges::copy(hash, sha_state->buffer);
 }
 DECLARE_XBOXKRNL_EXPORT1(XeCryptSha512Final, kNone, kImplemented);
 
@@ -647,10 +683,8 @@ void XeCryptMd5Update_entry(pointer_t<XECRYPT_MD5_STATE> md5_state,
 
   // Trick to make similar implementation as SHA256
   MD5_STATE* md5InternalState = reinterpret_cast<MD5_STATE*>(md5);
-  std::copy(std::begin(md5_state->state), std::end(md5_state->state),
-            md5InternalState->ABCD);
-  std::copy(std::begin(md5_state->buffer), std::end(md5_state->buffer),
-            md5InternalState->block);
+  std::ranges::copy(md5_state->state, md5InternalState->ABCD);
+  std::ranges::copy(md5_state->buffer, md5InternalState->block);
   md5InternalState->len = md5_state->count;
 
   // Add new entry from input
@@ -672,10 +706,8 @@ void XeCryptMd5Final_entry(pointer_t<XECRYPT_MD5_STATE> md5_state,
 
   // Trick to make similar implementation as SHA256
   MD5_STATE* md5InternalState = reinterpret_cast<MD5_STATE*>(md5);
-  std::copy(std::begin(md5_state->state), std::end(md5_state->state),
-            md5InternalState->ABCD);
-  std::copy(std::begin(md5_state->buffer), std::end(md5_state->buffer),
-            md5InternalState->block);
+  std::ranges::copy(md5_state->state, md5InternalState->ABCD);
+  std::ranges::copy(md5_state->buffer, md5InternalState->block);
   md5InternalState->len = md5_state->count;
 
   uint8_t hash[16];
@@ -683,7 +715,7 @@ void XeCryptMd5Final_entry(pointer_t<XECRYPT_MD5_STATE> md5_state,
 
   std::copy_n(hash, std::min<size_t>(xe::countof(hash), out_size),
               static_cast<uint8_t*>(out));
-  std::copy(std::begin(hash), std::end(hash), md5_state->buffer);
+  std::ranges::copy(hash, md5_state->buffer);
 }
 DECLARE_XBOXKRNL_EXPORT1(XeCryptMd5Final, kNone, kImplemented);
 
@@ -697,105 +729,17 @@ DECLARE_XBOXKRNL_EXPORT1(XeCryptBnQw_SwapDwQwLeBe, kNone, kImplemented);
 dword_result_t XeCryptBnQwNeRsaPubCrypt_entry(pointer_t<uint64_t> qw_a,
                                               pointer_t<uint64_t> qw_b,
                                               pointer_t<XECRYPT_RSA> rsa) {
-  // 0 indicates failure (but not a BOOL return value)
-#ifndef XE_PLATFORM_WIN32
-  XELOGE(
-      "XeCryptBnQwNeRsaPubCrypt called but no implementation available for "
-      "this platform!");
-  assert_always();
-  return 1;
-#else
-  uint32_t modulus_size = rsa->size * 8;
+  uint32_t num_qwords = rsa->size;
+  uint32_t exponent = rsa->public_exponent;
+  const uint8_t* input_bytes = reinterpret_cast<const uint8_t*>(&qw_a[0]);
+  uint8_t* output_bytes = reinterpret_cast<uint8_t*>(&qw_b[0]);
+  const uint8_t* mod_bytes =
+      reinterpret_cast<const uint8_t*>(&rsa[1]);  // modulus follows header
 
-  // Convert XECRYPT blob into BCrypt format
-  ULONG key_size = sizeof(BCRYPT_RSAKEY_BLOB) + sizeof(uint32_t) + modulus_size;
-  auto key_buf = std::make_unique<uint8_t[]>(key_size);
-  auto* key_header = reinterpret_cast<BCRYPT_RSAKEY_BLOB*>(key_buf.get());
-
-  key_header->Magic = BCRYPT_RSAPUBLIC_MAGIC;
-  key_header->BitLength = modulus_size * 8;
-  key_header->cbPublicExp = sizeof(uint32_t);
-  key_header->cbModulus = modulus_size;
-  key_header->cbPrime1 = key_header->cbPrime2 = 0;
-
-  // Copy in exponent/modulus, luckily these are BE inside BCrypt blob
-  uint32_t* key_exponent = reinterpret_cast<uint32_t*>(&key_header[1]);
-  *key_exponent = rsa->public_exponent.value;
-
-  // ...except modulus needs to be reversed in 64-bit chunks for BCrypt to make
-  // use of it properly for some reason
-  uint64_t* key_modulus = reinterpret_cast<uint64_t*>(&key_exponent[1]);
-  uint64_t* xecrypt_modulus = reinterpret_cast<uint64_t*>(&rsa[1]);
-  std::reverse_copy(xecrypt_modulus, xecrypt_modulus + rsa->size, key_modulus);
-
-  BCRYPT_ALG_HANDLE hAlgorithm = NULL;
-  NTSTATUS status = BCryptOpenAlgorithmProvider(
-      &hAlgorithm, BCRYPT_RSA_ALGORITHM, MS_PRIMITIVE_PROVIDER, 0);
-
-  if (!BCRYPT_SUCCESS(status)) {
-    XELOGE(
-        "XeCryptBnQwNeRsaPubCrypt: BCryptOpenAlgorithmProvider failed with "
-        "status {:#X}!",
-        status);
-    return 0;
-  }
-
-  BCRYPT_KEY_HANDLE hKey = NULL;
-  status = BCryptImportKeyPair(hAlgorithm, NULL, BCRYPT_RSAPUBLIC_BLOB, &hKey,
-                               key_buf.get(), key_size, 0);
-
-  if (!BCRYPT_SUCCESS(status)) {
-    XELOGE(
-        "XeCryptBnQwNeRsaPubCrypt: BCryptImportKeyPair failed with status "
-        "{:#X}!",
-        status);
-
-    if (hAlgorithm) {
-      BCryptCloseAlgorithmProvider(hAlgorithm, 0);
-    }
-
-    return 0;
-  }
-
-  // Byteswap & reverse the input into output, as BCrypt wants MSB first
-  uint64_t* output = qw_b;
-  uint8_t* output_bytes = reinterpret_cast<uint8_t*>(output);
-  xe::copy_and_swap<uint64_t>(output, qw_a, rsa->size);
-  std::reverse(output_bytes, output_bytes + modulus_size);
-
-  // BCryptDecrypt only works with private keys, fortunately BCryptEncrypt
-  // performs the right actions needed for us to decrypt the input
-  ULONG result_size = 0;
-  status =
-      BCryptEncrypt(hKey, output_bytes, modulus_size, nullptr, nullptr, 0,
-                    output_bytes, modulus_size, &result_size, BCRYPT_PAD_NONE);
-
-  assert(result_size == modulus_size);
-
-  if (!BCRYPT_SUCCESS(status)) {
-    XELOGE("XeCryptBnQwNeRsaPubCrypt: BCryptEncrypt failed with status {:#X}!",
-           status);
-  } else {
-    // Reverse data & byteswap again so data is as game expects
-    std::reverse(output_bytes, output_bytes + modulus_size);
-    xe::copy_and_swap(output, output, rsa->size);
-  }
-
-  if (hKey) {
-    BCryptDestroyKey(hKey);
-  }
-  if (hAlgorithm) {
-    BCryptCloseAlgorithmProvider(hAlgorithm, 0);
-  }
-
-  return BCRYPT_SUCCESS(status) ? 1 : 0;
-#endif
+  return XeCryptBnQwNeRsaPubCrypt(input_bytes, output_bytes, mod_bytes,
+                                  num_qwords, exponent);
 }
-#ifdef XE_PLATFORM_WIN32
 DECLARE_XBOXKRNL_EXPORT1(XeCryptBnQwNeRsaPubCrypt, kNone, kImplemented);
-#else
-DECLARE_XBOXKRNL_EXPORT1(XeCryptBnQwNeRsaPubCrypt, kNone, kStub);
-#endif
 
 dword_result_t XeCryptBnQwBeSigVerify_entry(pointer_t<XECRYPT_SIG> sig,
                                             lpvoid_t hash, lpstring_t salt,

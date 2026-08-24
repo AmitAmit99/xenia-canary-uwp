@@ -12,11 +12,17 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <algorithm>
+#include <cerrno>
 #include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <sstream>
 
+#include "xenia/base/cvar.h"
+#include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/platform.h"
 #include "xenia/base/string.h"
@@ -29,6 +35,19 @@
 
 #include "xenia/base/main_android.h"
 #endif
+
+#if XE_PLATFORM_GNU_LINUX
+#ifndef MFD_EXEC
+#define MFD_EXEC 0x0010U
+#endif
+
+DEFINE_bool(use_shm_open, false,
+            "Back guest memory and the code cache with a /dev/shm file instead "
+            "of memfd.\n"
+            "Exposes both as named files that other processes can open to "
+            "inspect guest memory or JIT output while a title runs.",
+            "Linux");
+#endif  // XE_PLATFORM_GNU_LINUX
 
 namespace xe {
 namespace memory {
@@ -108,6 +127,29 @@ struct MappedFileRange {
 std::vector<MappedFileRange> mapped_file_ranges;
 std::mutex g_mapped_file_ranges_mutex;
 
+// Track shm file names for cleanup on exit
+std::vector<std::string> g_shm_file_names;
+std::mutex g_shm_file_names_mutex;
+static bool g_cleanup_handlers_installed = false;
+
+#if !XE_PLATFORM_ANDROID
+static void CleanupAtExit() {
+  for (const auto& name : g_shm_file_names) {
+    shm_unlink(name.c_str());
+  }
+}
+
+static void InstallCleanupHandlers() {
+  if (g_cleanup_handlers_installed) {
+    return;
+  }
+  g_cleanup_handlers_installed = true;
+
+  std::atexit(CleanupAtExit);
+  std::at_quick_exit(CleanupAtExit);
+}
+#endif  // !XE_PLATFORM_ANDROID
+
 void* AllocFixed(void* base_address, size_t length,
                  AllocationType allocation_type, PageAccess access) {
   // mmap does not support reserve / commit, so ignore allocation_type.
@@ -121,7 +163,9 @@ void* AllocFixed(void* base_address, size_t length,
       }
       return nullptr;
     }
+#ifdef MAP_FIXED_NOREPLACE
     flags |= MAP_FIXED_NOREPLACE;
+#endif
   }
 
   void* result = mmap(base_address, length, prot, flags, -1, 0);
@@ -146,7 +190,7 @@ bool DeallocFixed(void* base_address, size_t length,
         case DeallocationType::kDecommit:
           return Protect(base_address, length, PageAccess::kNoAccess);
         case DeallocationType::kRelease:
-          assert_always("Error: Tried to release mapped memory!");
+          return false;
         default:
           assert_unhandled_case(deallocation_type);
       }
@@ -184,7 +228,8 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
   while (std::getline(memory_maps, maps_entry_string)) {
     std::stringstream entry_stream(maps_entry_string);
     uintptr_t map_region_begin, map_region_end;
-    char separator, protection[4];
+    char separator;
+    char protection[5];  // 4 chars (e.g., "r-xp") + null terminator
 
     entry_stream >> std::hex >> map_region_begin >> separator >>
         map_region_end >> protection;
@@ -199,7 +244,7 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
       while (std::getline(memory_maps, maps_entry_string)) {
         std::stringstream next_entry_stream(maps_entry_string);
         uintptr_t next_map_region_begin, next_map_region_end;
-        char next_protection[4];
+        char next_protection[5];  // 4 chars (e.g., "r-xp") + null terminator
 
         next_entry_stream >> std::hex >> next_map_region_begin >> separator >>
             next_map_region_end >> next_protection;
@@ -266,11 +311,48 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path,
   }
   oflag |= O_CREAT;
   auto full_path = "/" / path;
+#if XE_PLATFORM_GNU_LINUX
+  // memfd is unaffected by noexec /dev/shm and needs no cleanup on exit.
+  if (!cvars::use_shm_open) {
+    const bool needs_exec = access == PageAccess::kExecuteReadOnly ||
+                            access == PageAccess::kExecuteReadWrite;
+    int memfd =
+        memfd_create(path.c_str(), MFD_CLOEXEC | (needs_exec ? MFD_EXEC : 0u));
+    if (memfd < 0 && needs_exec && errno == EINVAL) {
+      memfd = memfd_create(path.c_str(), MFD_CLOEXEC);
+    }
+    if (memfd >= 0) {
+      if (ftruncate(memfd, length) < 0) {
+        XELOGE("ftruncate(memfd {}, 0x{:X}) failed: {} ({})", path.string(),
+               length, strerror(errno), errno);
+        close(memfd);
+        return kFileMappingHandleInvalid;
+      }
+      return memfd;
+    }
+    XELOGW("memfd_create({}) failed: {} ({}), falling back to shm_open",
+           path.string(), strerror(errno), errno);
+  }
+#endif  // XE_PLATFORM_GNU_LINUX
   int ret = shm_open(full_path.c_str(), oflag, 0777);
   if (ret < 0) {
+    XELOGE("shm_open({}) failed: {} ({})", full_path.string(), strerror(errno),
+           errno);
     return kFileMappingHandleInvalid;
   }
-  ftruncate64(ret, length);
+  if (ftruncate(ret, length) < 0) {
+    XELOGE("ftruncate({}, 0x{:X}) failed: {} ({})", full_path.string(), length,
+           strerror(errno), errno);
+    close(ret);
+    shm_unlink(full_path.c_str());
+    return kFileMappingHandleInvalid;
+  }
+  // Track for cleanup on abnormal exit and install cleanup handlers
+  {
+    std::lock_guard guard(g_shm_file_names_mutex);
+    g_shm_file_names.push_back(full_path.string());
+  }
+  InstallCleanupHandlers();
   return ret;
 #endif
 }
@@ -280,7 +362,19 @@ void CloseFileMappingHandle(FileMappingHandle handle,
   close(handle);
 #if !XE_PLATFORM_ANDROID
   auto full_path = "/" / path;
-  shm_unlink(full_path.c_str());
+  // Only shm_open handles are tracked and need unlinking.
+  bool tracked = false;
+  {
+    std::lock_guard guard(g_shm_file_names_mutex);
+    auto it = std::ranges::find(g_shm_file_names, full_path.string());
+    if (it != g_shm_file_names.end()) {
+      g_shm_file_names.erase(it);
+      tracked = true;
+    }
+  }
+  if (tracked) {
+    shm_unlink(full_path.c_str());
+  }
 #endif
 }
 
@@ -290,7 +384,9 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length,
 
   int flags = MAP_SHARED;
   if (base_address != nullptr) {
+#ifdef MAP_FIXED_NOREPLACE
     flags |= MAP_FIXED_NOREPLACE;
+#endif
   }
 
   void* result = mmap(base_address, length, prot, flags, handle, file_offset);

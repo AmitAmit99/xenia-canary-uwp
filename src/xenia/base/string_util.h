@@ -159,7 +159,7 @@ inline std::string trim(const std::string& value) {
 
 inline std::string remove_eol(const std::string& value) {
   std::string result = value;
-  result.erase(std::remove(result.begin(), result.end(), '\n'), result.cend());
+  result.erase(std::ranges::remove(result, '\n').begin(), result.cend());
   return result;
 }
 
@@ -271,18 +271,8 @@ inline T fpfs(const std::string_view value, bool force_hex) {
     }
     std::memcpy(&result, &pun, sizeof(PUN));
   } else {
-#if XE_COMPILER_CLANG || XE_COMPILER_GNUC
     auto temp = std::string(range);
-    result = std::strtod(temp.c_str(), nullptr);
-#else
-    auto [p, error] = std::from_chars(range.data(), range.data() + range.size(),
-                                      result, std::chars_format::general);
-    // TODO(gibbed): do something more with errors?
-    if (error != std::errc()) {
-      assert_always();
-      return T();
-    }
-#endif
+    result = static_cast<T>(std::strtod(temp.c_str(), nullptr));
     if (is_negative) {
       result = -result;
     }

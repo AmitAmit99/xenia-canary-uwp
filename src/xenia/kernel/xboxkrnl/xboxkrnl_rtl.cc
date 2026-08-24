@@ -229,8 +229,8 @@ void RtlInitAnsiString_entry(pointer_t<X_ANSI_STRING> destination,
 DECLARE_XBOXKRNL_EXPORT1(RtlInitAnsiString, kNone, kImplemented);
 // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlupcaseunicodechar
 dword_result_t RtlUpcaseUnicodeChar_entry(dword_t SourceCharacter) {
-  return std::use_facet<std::ctype<char16_t>>(std::locale())
-      .toupper(SourceCharacter);
+  return static_cast<uint32_t>(std::towupper(
+      static_cast<wint_t>(static_cast<uint32_t>(SourceCharacter))));
 }
 DECLARE_XBOXKRNL_EXPORT1(RtlUpcaseUnicodeChar, kNone, kImplemented);
 
@@ -535,16 +535,16 @@ DECLARE_XBOXKRNL_EXPORT1(RtlImageXexHeaderField, kNone, kImplemented);
 #pragma pack(push, 1)
 struct X_RTL_CRITICAL_SECTION {
   X_DISPATCH_HEADER header;
-  int32_t lock_count;               // 0x10 -1 -> 0 on first lock
-  xe::be<int32_t> recursion_count;  // 0x14  0 -> 1 on first lock
-  xe::be<uint32_t> owning_thread;   // 0x18 PKTHREAD 0 unless locked
+  int32_t lock_count;                          // 0x10 -1 -> 0 on first lock
+  xe::be<int32_t> recursion_count;             // 0x14  0 -> 1 on first lock
+  TypedGuestPointer<X_KTHREAD> owning_thread;  // 0x18 PKTHREAD 0 unless locked
 };
 #pragma pack(pop)
 static_assert_size(X_RTL_CRITICAL_SECTION, 28);
 
 void xeRtlInitializeCriticalSection(X_RTL_CRITICAL_SECTION* cs,
                                     uint32_t cs_ptr) {
-  cs->header.type = 1;      // EventSynchronizationObject (auto reset)
+  cs->header.type = X_OBJECT_TYPES::EventSynchronizationObject;
   cs->header.absolute = 0;  // spin count div 256
   cs->header.signal_state = 0;
   cs->lock_count = -1;
@@ -567,7 +567,7 @@ X_STATUS xeRtlInitializeCriticalSectionAndSpinCount(X_RTL_CRITICAL_SECTION* cs,
     spin_count_div_256 = 255;
   }
 
-  cs->header.type = 1;  // EventSynchronizationObject (auto reset)
+  cs->header.type = X_OBJECT_TYPES::EventSynchronizationObject;
   cs->header.absolute = spin_count_div_256;
   cs->header.signal_state = 0;
   cs->lock_count = -1;
@@ -582,8 +582,8 @@ dword_result_t RtlInitializeCriticalSectionAndSpinCount_entry(
   return xeRtlInitializeCriticalSectionAndSpinCount(cs, cs.guest_address(),
                                                     spin_count);
 }
-DECLARE_XBOXKRNL_EXPORT1(RtlInitializeCriticalSectionAndSpinCount, kNone,
-                         kImplemented);
+DECLARE_XBOXKRNL_EXPORT2(RtlInitializeCriticalSectionAndSpinCount, kNone,
+                         kImplemented, kHighFrequency);
 
 static void CriticalSectionPrefetchW(const void* vp) {
 #if XE_ARCH_AMD64 == 1

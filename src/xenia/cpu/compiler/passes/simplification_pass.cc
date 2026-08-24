@@ -67,7 +67,9 @@ static bool IsScalarBasicCmp(Opcode op) {
 }
 
 static bool SameValueOrEqualConstant(hir::Value* x, hir::Value* y) {
-  if (x == y) return true;
+  if (x == y) {
+    return true;
+  }
 
   if (x->IsConstant() && y->IsConstant()) {
     return x->AsUint64() == y->AsUint64();
@@ -82,12 +84,18 @@ static bool CompareDefsHaveSameOpnds(hir::Value* cmp1, hir::Value* cmp2,
                                      Opcode* out_r_op) {
   auto df1 = cmp1->def;
   auto df2 = cmp2->def;
-  if (!df1 || !df2) return false;
-  if (df1->src1.value != df2->src1.value) return false;
+  if (!df1 || !df2) {
+    return false;
+  }
+  if (df1->src1.value != df2->src1.value) {
+    return false;
+  }
 
   Opcode lop = df1->opcode->num, rop = df2->opcode->num;
 
-  if (!IsScalarBasicCmp(lop) || !IsScalarBasicCmp(rop)) return false;
+  if (!IsScalarBasicCmp(lop) || !IsScalarBasicCmp(rop)) {
+    return false;
+  }
 
   if (!SameValueOrEqualConstant(df1->src2.value, df2->src2.value)) {
     return false;
@@ -101,7 +109,9 @@ static bool CompareDefsHaveSameOpnds(hir::Value* cmp1, hir::Value* cmp2,
 }
 
 bool SimplificationPass::CheckOr(hir::Instr* i, hir::HIRBuilder* builder) {
-  if (CheckOrXorZero(i)) return true;
+  if (CheckOrXorZero(i)) {
+    return true;
+  }
 
   if (i->src1.value == i->src2.value) {
     auto old1 = i->src1.value;
@@ -228,7 +238,9 @@ bool SimplificationPass::CheckXor(hir::Instr* i, hir::HIRBuilder* builder) {
 
     uint64_t type_mask = GetScalarTypeMask(i->dest->type);
 
-    if (!constant_value) return false;
+    if (!constant_value) {
+      return false;
+    }
 
     if (constant_value->AsUint64() == type_mask) {
       i->Replace(&OPCODE_NOT_info, 0);
@@ -568,6 +580,10 @@ bool SimplificationPass::TryHandleANDROLORSHLSeq(hir::Instr* i,
 bool SimplificationPass::CheckAnd(hir::Instr* i, hir::HIRBuilder* builder) {
 retry_and_simplification:
 
+  if (SimplifyAndNot(i, builder)) {
+    return true;
+  }
+
   auto [constant_value, variable_value] = i->BinaryValueArrangeAsConstAndVar();
   if (!constant_value) {
     // added this for srawi
@@ -725,7 +741,9 @@ bool SimplificationPass::CheckSelect(hir::Instr* i, hir::HIRBuilder* builder) {
 
 bool SimplificationPass::CheckScalarConstCmp(hir::Instr* i,
                                              hir::HIRBuilder* builder) {
-  if (!IsScalarIntegralType(i->src1.value->type)) return false;
+  if (!IsScalarIntegralType(i->src1.value->type)) {
+    return false;
+  }
   auto [constant_value, variable] = i->BinaryValueArrangeAsConstAndVar();
 
   if (!constant_value) {
@@ -965,7 +983,9 @@ bool SimplificationPass::CheckSHRByConst(hir::Instr* i,
 bool SimplificationPass::CheckSHR(hir::Instr* i, hir::HIRBuilder* builder) {
   Value* shr_lhs = i->src1.value;
   Value* shr_rhs = i->src2.value;
-  if (!shr_lhs || !shr_rhs) return false;
+  if (!shr_lhs || !shr_rhs) {
+    return false;
+  }
   if (shr_rhs->IsConstant()) {
     return CheckSHRByConst(i, builder, shr_lhs, shr_rhs->AsUint32());
   }
@@ -1244,6 +1264,40 @@ bool SimplificationPass::SimplifyAddArith(hir::Instr* i,
   if (SimplifyAddToSelf(i, builder)) {
     return true;
   }
+  return false;
+}
+
+bool SimplificationPass::SimplifyAndNot(hir::Instr* i,
+                                        hir::HIRBuilder* builder) {
+  // check if either of the 2 AND operands has just used NOT and fold into
+  // an AND_NOT opcode
+  Value* src1 = i->src1.value;
+  Value* src2 = i->src2.value;
+
+  Instr* def1 = src1->def;
+  Instr* def2 = src2->def;
+  if (!def1 || !def2) {
+    return false;
+  }
+
+  // Bypass the NOT from an incoming operand and combine it into AND_NOT.
+  // If the original NOT does not have any further uses, then the
+  // dead-code-elimination pass will delete it. Otherwise, if it still has uses,
+  // then there will still be a NOT operation.
+  if (def2->opcode == &OPCODE_NOT_info) {
+    // Fold src2's NOT into AND_NOT
+    i->Replace(&OPCODE_AND_NOT_info, 0);
+    i->set_src1(src1);
+    i->set_src2(def2->src1.value);
+    return true;
+  } else if (def1->opcode == &OPCODE_NOT_info) {
+    // Swap operands and fold src1's NOT into AND_NOT
+    i->Replace(&OPCODE_AND_NOT_info, 0);
+    i->set_src1(src2);
+    i->set_src2(def1->src1.value);
+    return true;
+  }
+
   return false;
 }
 

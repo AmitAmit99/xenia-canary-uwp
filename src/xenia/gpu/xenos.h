@@ -129,8 +129,7 @@ enum class TextureSign : uint32_t {
 enum class TextureFilter : uint32_t {
   kPoint = 0,
   kLinear = 1,
-  // Only applicable to the mip filter - like OpenGL minification filters
-  // GL_NEAREST / GL_LINEAR without MIPMAP_NEAREST / MIPMAP_LINEAR.
+  // Only applicable to the mip filter - use the base map without mip filtering.
   kBaseMap = 2,
   kUseFetchConst = 3,
 };
@@ -616,6 +615,10 @@ constexpr bool IsColorResolveFormatBitwiseEquivalent(
   switch (render_target_format) {
     case ColorRenderTargetFormat::k_8_8_8_8:
     // Shaders fetch data copied from k_8_8_8_8_GAMMA with TextureSign::kGamma.
+    // Gamma sources are decoded to linear by real hardware resolve, so with the
+    // decode enabled, GetCopyShader separately excludes all raw copies. Any
+    // title that keeps the encoding to fetch it back with kGamma re-aliases the
+    // surface as k_8_8_8_8.
     case ColorRenderTargetFormat::k_8_8_8_8_GAMMA:
       // TODO(Triang3l): Investigate k_8_8_8_8_A.
       return color_format == ColorFormat::k_8_8_8_8 ||
@@ -1181,6 +1184,9 @@ constexpr uint32_t kTextureSubresourceAlignmentBytes =
 // Texture fetch constant size field widths.
 constexpr uint32_t kTexture1DMaxWidthLog2 = 24;
 constexpr uint32_t kTexture1DMaxWidth = 1 << kTexture1DMaxWidthLog2;
+// Limit the number of rows materialized when wide 1D textures are mapped to
+// 2D. Some games use very large widths with much less data behind them.
+constexpr uint32_t kTexture1DWideMaxRows = 32;
 constexpr uint32_t kTexture2DCubeMaxWidthHeightLog2 = 13;
 constexpr uint32_t kTexture2DCubeMaxWidthHeight =
     1 << kTexture2DCubeMaxWidthHeightLog2;

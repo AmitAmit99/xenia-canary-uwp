@@ -22,9 +22,10 @@ DECLARE_bool(debug);
 
 DEFINE_bool(force_mount_devkit, false, "Force devkit mount", "Storage");
 
-DEFINE_int32(console_type, 0,
-             "Console Type Identifier: 0 - Development Kit, 1 - Test Kit",
-             "Kernel");
+DEFINE_int32(
+    console_type, -1,
+    "Console Type Identifier: -1 - Retail, 0 - Development Kit, 1 - Test Kit",
+    "Kernel");
 
 namespace xe {
 namespace kernel {
@@ -66,7 +67,7 @@ dword_result_t DmGetConsoleType_entry(lpdword_t console_type) {
     return X_E_INVALIDARG;
   }
 
-  *console_type = CONSOLE_TYPE::DEVELOPMENT_KIT;
+  *console_type = cvars::console_type;
 
   return XBDM_SUCCESSFUL;
 }

@@ -55,6 +55,7 @@
 #if !XE_PLATFORM_MAC
 #include "xenia/gpu/vulkan/vulkan_graphics_system.h"
 #endif
+#endif  // !XE_PLATFORM_WINRT
 #if XE_PLATFORM_WIN32
 #include "xenia/gpu/d3d12/d3d12_graphics_system.h"
 #endif  // XE_PLATFORM_WIN32

@@ -498,13 +498,13 @@ Emulator::FileSignatureType GetFileSignature(
 
   switch (magic_value) {
     case xe::cpu::kXEX0Signature:
-      return FileSignatureType::XEX0;
+      return Emulator::FileSignatureType::XEX0;
     case xe::cpu::kXEXQSignature:
-      return FileSignatureType::XEXQ;
+      return Emulator::FileSignatureType::XEXQ;
     case xe::cpu::kXEXHSignature:
-      return FileSignatureType::XEXH;
+      return Emulator::FileSignatureType::XEXH;
     case xe::cpu::kXEX25Signature:
-      return FileSignatureType::XEX25;
+      return Emulator::FileSignatureType::XEX25;
     case xe::cpu::kXEX1Signature:
       return Emulator::FileSignatureType::XEX1;
     case xe::cpu::kXEX2Signature:
@@ -516,9 +516,9 @@ Emulator::FileSignatureType GetFileSignature(
     case xe::vfs::kPIRSSignature:
       return Emulator::FileSignatureType::PIRS;
     case xe::vfs::kXSFSignature:
-      return FileSignatureType::XISO;
+      return Emulator::FileSignatureType::XISO;
     case xe::cpu::kXBESignature:
-      return FileSignatureType::XBE;
+      return Emulator::FileSignatureType::XBE;
     case xe::cpu::kElfSignature:
       return Emulator::FileSignatureType::ELF;
     default:

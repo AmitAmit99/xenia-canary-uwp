@@ -56,30 +56,48 @@ int m_DPI = 96;
 bool m_ui_open = false;
 
 winrt::fire_and_forget PickGame(xe::Emulator* emu) {
-  FileOpenPicker openPicker;
-  openPicker.ViewMode(PickerViewMode::List);
-  openPicker.SuggestedStartLocation(PickerLocationId::ComputerFolder);
-  openPicker.FileTypeFilter().Append(L"*");
+  // fire_and_forget has no caller to propagate exceptions to: an
+  // unhandled one here calls std::terminate and takes the whole app down.
+  // The picker can throw for reasons that are normal on Xbox (broker
+  // access denied, no suitable location available), so this must not
+  // be allowed to escape.
+  try {
+    FileOpenPicker openPicker;
+    openPicker.ViewMode(PickerViewMode::List);
+    openPicker.SuggestedStartLocation(PickerLocationId::ComputerFolder);
+    openPicker.FileTypeFilter().Append(L"*");
 
-  auto file = co_await openPicker.PickSingleFileAsync();
-  if (file) {
-    std::string path = winrt::to_string(file.Path().data());
+    auto file = co_await openPicker.PickSingleFileAsync();
+    if (file) {
+      std::string path = winrt::to_string(file.Path().data());
 
-    emu->LaunchPath(path);
+      emu->LaunchPath(path);
+    }
+  } catch (const winrt::hresult_error& e) {
+    XELOGE("PickGame: file picker failed: {}", winrt::to_string(e.message()));
+  } catch (const std::exception& e) {
+    XELOGE("PickGame: file picker failed: {}", e.what());
   }
 }
 
 winrt::fire_and_forget PickFolderAsync(
     std::function<void(std::string)> callback) {
-  FolderPicker openPicker;
-  openPicker.ViewMode(PickerViewMode::List);
-  openPicker.SuggestedStartLocation(PickerLocationId::ComputerFolder);
-  openPicker.FileTypeFilter().Append(L"*");
-
-  auto folder = co_await openPicker.PickSingleFolderAsync();
   std::string path = "";
-  if (folder) {
-    path = winrt::to_string(folder.Path().data());
+  try {
+    FolderPicker openPicker;
+    openPicker.ViewMode(PickerViewMode::List);
+    openPicker.SuggestedStartLocation(PickerLocationId::ComputerFolder);
+    openPicker.FileTypeFilter().Append(L"*");
+
+    auto folder = co_await openPicker.PickSingleFolderAsync();
+    if (folder) {
+      path = winrt::to_string(folder.Path().data());
+    }
+  } catch (const winrt::hresult_error& e) {
+    XELOGE("PickFolderAsync: folder picker failed: {}",
+           winrt::to_string(e.message()));
+  } catch (const std::exception& e) {
+    XELOGE("PickFolderAsync: folder picker failed: {}", e.what());
   }
 
   callback(path);
@@ -87,17 +105,24 @@ winrt::fire_and_forget PickFolderAsync(
 
 winrt::fire_and_forget PickFilesAsync(
     std::function<void(std::vector<std::string>)> callback) {
-  FileOpenPicker openPicker;
-  openPicker.ViewMode(PickerViewMode::List);
-  openPicker.SuggestedStartLocation(PickerLocationId::ComputerFolder);
-  openPicker.FileTypeFilter().Append(L"*");
-
-  auto folders = co_await openPicker.PickMultipleFilesAsync();
   std::vector<std::string> paths;
-  if (folders) {
-    for (auto folder : folders) {
-      paths.push_back(winrt::to_string(folder.Path()));
+  try {
+    FileOpenPicker openPicker;
+    openPicker.ViewMode(PickerViewMode::List);
+    openPicker.SuggestedStartLocation(PickerLocationId::ComputerFolder);
+    openPicker.FileTypeFilter().Append(L"*");
+
+    auto folders = co_await openPicker.PickMultipleFilesAsync();
+    if (folders) {
+      for (auto folder : folders) {
+        paths.push_back(winrt::to_string(folder.Path()));
+      }
     }
+  } catch (const winrt::hresult_error& e) {
+    XELOGE("PickFilesAsync: file picker failed: {}",
+           winrt::to_string(e.message()));
+  } catch (const std::exception& e) {
+    XELOGE("PickFilesAsync: file picker failed: {}", e.what());
   }
 
   callback(paths);
@@ -105,15 +130,22 @@ winrt::fire_and_forget PickFilesAsync(
 
 winrt::fire_and_forget PickFileAsync(
     std::function<void(std::string)> callback) {
-  FileOpenPicker openPicker;
-  openPicker.ViewMode(PickerViewMode::List);
-  openPicker.SuggestedStartLocation(PickerLocationId::ComputerFolder);
-  openPicker.FileTypeFilter().Append(L"*");
-
-  auto folder = co_await openPicker.PickSingleFileAsync();
   std::string path = "";
-  if (folder) {
-    path = winrt::to_string(folder.Path().data());
+  try {
+    FileOpenPicker openPicker;
+    openPicker.ViewMode(PickerViewMode::List);
+    openPicker.SuggestedStartLocation(PickerLocationId::ComputerFolder);
+    openPicker.FileTypeFilter().Append(L"*");
+
+    auto folder = co_await openPicker.PickSingleFileAsync();
+    if (folder) {
+      path = winrt::to_string(folder.Path().data());
+    }
+  } catch (const winrt::hresult_error& e) {
+    XELOGE("PickFileAsync: file picker failed: {}",
+           winrt::to_string(e.message()));
+  } catch (const std::exception& e) {
+    XELOGE("PickFileAsync: file picker failed: {}", e.what());
   }
 
   callback(path);

@@ -57,6 +57,10 @@
     <PlatformToolset Condition="'$(VisualStudioVersion)' == '15.0'">v141</PlatformToolset>
     <PlatformToolset Condition="'$(VisualStudioVersion)' == '14.0'">v140</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
+    <!-- Whole-program optimization across xenia-kernel's ~81k functions
+         exhausts the default 32-bit-hosted cl.exe/link.exe's address
+         space; the x64-hosted toolchain has much more headroom. -->
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
     <UseDebugLibraries>true</UseDebugLibraries>

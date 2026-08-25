@@ -27,11 +27,13 @@ if(WIN32 AND CMAKE_GENERATOR MATCHES "Visual Studio")
     xenia-gpu-null
     xenia-hid
     xenia-hid-nop
+    xenia-hid-portal
     xenia-hid-xinput
     xenia-kernel
     xenia-patcher
     xenia-ui
     xenia-ui-d3d12
+    xenia-vfs
     aes_128
     capstone
     discord-rpc
@@ -40,9 +42,15 @@ if(WIN32 AND CMAKE_GENERATOR MATCHES "Visual Studio")
     glslang-spirv
     imgui
     libavcodec
+    libavformat
     libavutil
+    libusb
     mspack
+    pugixml
     snappy
     xxhash
+    zarchive
+    zlib-ng
+    zstd
   )
 endif()

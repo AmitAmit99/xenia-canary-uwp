@@ -312,7 +312,7 @@ void RecurseFolderForGames(std::string path) {
           for (int i = 0; i < 32; i++) {
             char c;
             in.read(&c, 2);
-            std::wctomb(&data[i], static_cast<wchar_t>(c));
+            wctomb_s(nullptr, &data[i], 1, static_cast<wchar_t>(c));
 
             if (c == 0) break;
           }

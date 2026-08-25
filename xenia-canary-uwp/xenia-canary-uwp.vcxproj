@@ -1,6 +1,5 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="..\build\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props" Condition="Exists('..\build\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props')" />
   <PropertyGroup Label="Globals">
     <CppWinRTOptimized>true</CppWinRTOptimized>
     <CppWinRTRootNamespaceAutoMerge>true</CppWinRTRootNamespaceAutoMerge>
@@ -88,20 +87,26 @@
     <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
     <PackageCertificateKeyFile>XeniaDevCert.pfx</PackageCertificateKeyFile>
     <PackageCertificatePassword>xenia123</PackageCertificatePassword>
-    <PackageCertificateThumbprint>EDA6F6AC2865A64DFFF7E29AC79FDBED3A1C9CE7</PackageCertificateThumbprint>
+    <PackageCertificateThumbprint>555FEE1247DB52910E257DA29D5DFEA74353EFCA</PackageCertificateThumbprint>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <TargetName>xeniacanary</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
+      <!-- This project uses modern header-only C++/WinRT (winrt::...), not the
+           older C++/CX language extensions (/ZW) that UWP app projects default
+           to; /ZW is incompatible with /std:c++20, which std::span etc. here
+           need. -->
+      <CompileAsWinRT>false</CompileAsWinRT>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <PrecompiledHeaderOutputFile>$(IntDir)pch.pch</PrecompiledHeaderOutputFile>
       <WarningLevel>Level4</WarningLevel>
       <AdditionalOptions>%(AdditionalOptions) /bigobj /utf-8</AdditionalOptions>
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;WINRT_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..;..\src;..\third_party;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..;..\src;..\third_party;..\build;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <GenerateWindowsMetadata>false</GenerateWindowsMetadata>
@@ -110,7 +115,7 @@
            layout; add_dependencies() in ../xenia-canary-uwp/CMakeLists.txt
            orders these to build first. -->
       <AdditionalLibraryDirectories>..\build\obj\Windows\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>xenia-apu.lib;xenia-apu-nop.lib;xenia-apu-xaudio2.lib;xenia-base.lib;xenia-core.lib;xenia-cpu.lib;xenia-cpu-backend-x64.lib;xenia-debug-ui.lib;xenia-gpu.lib;xenia-gpu-d3d12.lib;xenia-gpu-null.lib;xenia-hid.lib;xenia-hid-nop.lib;xenia-hid-xinput.lib;xenia-kernel.lib;xenia-patcher.lib;xenia-ui.lib;xenia-ui-d3d12.lib;aes_128.lib;capstone.lib;discord-rpc.lib;dxbc.lib;fmt.lib;glslang-spirv.lib;imgui.lib;libavcodec.lib;libavutil.lib;mspack.lib;snappy.lib;xxhash.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>xenia-apu.lib;xenia-apu-nop.lib;xenia-apu-xaudio2.lib;xenia-base.lib;xenia-core.lib;xenia-cpu.lib;xenia-cpu-backend-x64.lib;xenia-debug-ui.lib;xenia-gpu.lib;xenia-gpu-d3d12.lib;xenia-gpu-null.lib;xenia-hid.lib;xenia-hid-nop.lib;xenia-hid-portal.lib;xenia-hid-xinput.lib;xenia-kernel.lib;xenia-patcher.lib;xenia-ui.lib;xenia-ui-d3d12.lib;xenia-vfs.lib;aes_128.lib;capstone.lib;discord-rpc.lib;dxbc.lib;fmt.lib;glslang-spirv.lib;imgui.lib;libavcodec.lib;libavformat.lib;libavutil.lib;libusb.lib;mspack.lib;pugixml.lib;snappy.lib;xxhash.lib;zarchive.lib;zlib-ng.lib;zstd.lib;dwmapi.lib;dxgi.lib;dxguid.lib;shlwapi.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
@@ -126,8 +131,6 @@
     <ClCompile>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(SolutionDir)..\src;$(SolutionDir)..\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <LanguageStandard Condition="'$(Configuration)|$(Platform)'=='Release|x64'">stdcpp20</LanguageStandard>
-      <LanguageStandard Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">stdcpp20</LanguageStandard>
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">AdvancedVectorExtensions</EnableEnhancedInstructionSet>
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">AdvancedVectorExtensions</EnableEnhancedInstructionSet>
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">AdvancedVectorExtensions</EnableEnhancedInstructionSet>
@@ -178,6 +181,8 @@
     <Image Include="Assets\guide_images\guide-wide.png" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\src\xenia\app\console_settings_dialog.cc" />
+    <ClCompile Include="..\src\xenia\app\content_list_dialog.cc" />
     <ClCompile Include="..\src\xenia\app\emulator_window.cc" />
     <ClCompile Include="..\src\xenia\app\profile_dialogs.cc" />
     <ClCompile Include="..\src\xenia\app\xenia_main.cc" />
@@ -201,14 +206,4 @@
     </Text>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <ImportGroup Label="ExtensionTargets">
-    <Import Project="..\build\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets" Condition="Exists('..\build\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets')" />
-  </ImportGroup>
-  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
-    <PropertyGroup>
-      <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
-    </PropertyGroup>
-    <Error Condition="!Exists('..\build\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props')" Text="$([System.String]::Format('$(ErrorText)', '..\build\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props'))" />
-    <Error Condition="!Exists('..\build\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\build\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets'))" />
-  </Target>
 </Project>

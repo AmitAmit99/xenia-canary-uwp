@@ -816,9 +816,10 @@ void TitleListUI::OnDraw(ImGuiIO& io) {
           const auto time_date = std::chrono::system_clock::to_time_t(
               std::chrono::system_clock::time_point(
                   entry.last_played.time_since_epoch()));
-          ImGui::TextUnformatted(fmt::format("Last played: {:%Y-%m-%d %H:%M}",
-                                             *std::localtime(&time_date))
-                                 .c_str());
+          struct tm time_info;
+          localtime_s(&time_info, &time_date);
+          ImGui::TextUnformatted(
+              fmt::format("Last played: {:%Y-%m-%d %H:%M}", time_info).c_str());
         } else {
           ImGui::TextUnformatted("Last played: Unknown");
         }

@@ -321,6 +321,11 @@ add_subdirectory(third_party)
 set(CMAKE_FOLDER "src")
 add_subdirectory(src/xenia)
 
+if(WIN32 AND CMAKE_GENERATOR MATCHES "Visual Studio")
+  set(CMAKE_FOLDER "")
+  add_subdirectory(xenia-canary-uwp)
+endif()
+
 set(CMAKE_FOLDER "")
 
 # Set default startup project for Visual Studio

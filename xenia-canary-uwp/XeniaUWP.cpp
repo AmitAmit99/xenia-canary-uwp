@@ -308,13 +308,30 @@ void RecurseFolderForGames(std::string path) {
 
           in.seekg(0x412);
 
-          char data[32];
-          for (int i = 0; i < 32; i++) {
-            char c;
-            in.read(&c, 2);
-            wctomb_s(nullptr, &data[i], 1, static_cast<wchar_t>(c));
-
+          // Zero-initialized, and the loop stops one short of the end, so
+          // data[] is always null-terminated regardless of how the loop
+          // below exits -- AddGameEntry() reads this as a C string.
+          char data[32] = {};
+          for (int i = 0; i < 31; i++) {
+            // Title strings in STFS/XCONTENT headers are big-endian UTF-16;
+            // read a full 2-byte code unit rather than 2 bytes into a
+            // 1-byte char (which corrupted the adjacent stack byte).
+            char bytes[2] = {0, 0};
+            in.read(bytes, 2);
+            if (!in) break;
+            char16_t c = (static_cast<char16_t>(
+                              static_cast<unsigned char>(bytes[0]))
+                          << 8) |
+                         static_cast<unsigned char>(bytes[1]);
             if (c == 0) break;
+
+            if (wctomb_s(nullptr, &data[i], 1, static_cast<wchar_t>(c)) !=
+                0) {
+              // Can't be represented in a single byte (e.g. non-Latin
+              // titles); wctomb_s leaves data[i] untouched on failure, so
+              // without this data[i] would stay uninitialized.
+              data[i] = '?';
+            }
           }
 
           AddGameEntry(file.path(), data);

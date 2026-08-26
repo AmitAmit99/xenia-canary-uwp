@@ -77,6 +77,8 @@ winrt::fire_and_forget PickGame(xe::Emulator* emu) {
     XELOGE("PickGame: file picker failed: {}", winrt::to_string(e.message()));
   } catch (const std::exception& e) {
     XELOGE("PickGame: file picker failed: {}", e.what());
+  } catch (...) {
+    XELOGE("PickGame: file picker failed: unknown exception");
   }
 }
 
@@ -98,6 +100,8 @@ winrt::fire_and_forget PickFolderAsync(
            winrt::to_string(e.message()));
   } catch (const std::exception& e) {
     XELOGE("PickFolderAsync: folder picker failed: {}", e.what());
+  } catch (...) {
+    XELOGE("PickFolderAsync: folder picker failed: unknown exception");
   }
 
   callback(path);
@@ -123,6 +127,8 @@ winrt::fire_and_forget PickFilesAsync(
            winrt::to_string(e.message()));
   } catch (const std::exception& e) {
     XELOGE("PickFilesAsync: file picker failed: {}", e.what());
+  } catch (...) {
+    XELOGE("PickFilesAsync: file picker failed: unknown exception");
   }
 
   callback(paths);
@@ -146,6 +152,8 @@ winrt::fire_and_forget PickFileAsync(
            winrt::to_string(e.message()));
   } catch (const std::exception& e) {
     XELOGE("PickFileAsync: file picker failed: {}", e.what());
+  } catch (...) {
+    XELOGE("PickFileAsync: file picker failed: unknown exception");
   }
 
   callback(path);
@@ -200,8 +208,17 @@ bool IsUIOpen() { return m_ui_open; }
 void SetUIOpen(bool is_open) { m_ui_open = is_open; }
 
 winrt::fire_and_forget LaunchUriAsync(std::string url) {
-  auto uri = winrt::Windows::Foundation::Uri(winrt::to_hstring(url));
-  co_await winrt::Windows::System::Launcher::LaunchUriAsync(uri);
+  try {
+    auto uri = winrt::Windows::Foundation::Uri(winrt::to_hstring(url));
+    co_await winrt::Windows::System::Launcher::LaunchUriAsync(uri);
+  } catch (const winrt::hresult_error& e) {
+    XELOGE("LaunchUriAsync: failed to launch '{}': {}", url,
+           winrt::to_string(e.message()));
+  } catch (const std::exception& e) {
+    XELOGE("LaunchUriAsync: failed to launch '{}': {}", url, e.what());
+  } catch (...) {
+    XELOGE("LaunchUriAsync: failed to launch '{}': unknown exception", url);
+  }
 }
 
 void LaunchUri(const std::string& url) {

@@ -812,12 +812,19 @@ void TitleListUI::OnDraw(ImGuiIO& io) {
                         entry.unlocked_achievements_count, entry.achievements_count,
                         entry.title_earned_gamerscore)
                 .c_str());
+        struct tm time_info = {};
+        bool have_time_info = false;
         if (entry.WasTitlePlayed()) {
           const auto time_date = std::chrono::system_clock::to_time_t(
               std::chrono::system_clock::time_point(
                   entry.last_played.time_since_epoch()));
-          struct tm time_info;
-          localtime_s(&time_info, &time_date);
+#if XE_PLATFORM_WIN32
+          have_time_info = localtime_s(&time_info, &time_date) == 0;
+#else
+          have_time_info = localtime_r(&time_date, &time_info) != nullptr;
+#endif
+        }
+        if (have_time_info) {
           ImGui::TextUnformatted(
               fmt::format("Last played: {:%Y-%m-%d %H:%M}", time_info).c_str());
         } else {

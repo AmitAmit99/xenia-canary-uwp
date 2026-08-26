@@ -51,6 +51,7 @@
 #include "xenia/base/platform.h"
 #include "xenia/base/profiling.h"
 #include "xenia/base/system.h"
+#include "xenia/base/string_util.h"
 #include "xenia/base/threading.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/emulator.h"
@@ -3510,9 +3511,9 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
             }
 
             std::memset(per_game_config_buffer_, 0, sizeof(per_game_config_buffer_));
-            strncpy_s(per_game_config_buffer_, sizeof(per_game_config_buffer_),
-                     initial_contents.c_str(),
-                     sizeof(per_game_config_buffer_) - 1);
+            xe::string_util::copy_truncating(per_game_config_buffer_,
+                                             initial_contents,
+                                             sizeof(per_game_config_buffer_));
             per_game_config_popup_focus_requested_ = true;
             show_per_game_config_editor_ = true;
           };
@@ -6169,9 +6170,9 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
                 std::string generated_config = build_per_game_config_text();
                 std::memset(per_game_config_buffer_, 0,
                             sizeof(per_game_config_buffer_));
-                strncpy_s(per_game_config_buffer_, sizeof(per_game_config_buffer_),
-                         generated_config.c_str(),
-                         sizeof(per_game_config_buffer_) - 1);
+                xe::string_util::copy_truncating(per_game_config_buffer_,
+                                                 generated_config,
+                                                 sizeof(per_game_config_buffer_));
                 ofs.write(generated_config.data(), generated_config.size());
                 ofs.close();
 
@@ -8154,9 +8155,8 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
               cvar::ConfigVars->find("cl")->second);
           std::string cl_text = (std::string)cl->GetTypedConfigValue();
           if (cl_text != cl_buffer_ && cl_buffer_[0] == '\0') {
-            strncpy_s(cl_buffer_, sizeof(cl_buffer_), cl_text.c_str(),
-                     sizeof(cl_buffer_) - 1);
-            cl_buffer_[sizeof(cl_buffer_) - 1] = '\0';
+            xe::string_util::copy_truncating(cl_buffer_, cl_text,
+                                             sizeof(cl_buffer_));
           }
 
           if (ImGui::Button("Set CL")) {

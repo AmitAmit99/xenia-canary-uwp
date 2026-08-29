@@ -4,69 +4,81 @@
     </a>
 </p>
 
-Xenia Canary UWP is an unofficial fork of Xenia Canary to support UWP and the Xbox platforms. It is not associated with the Xenia developers.
+# Xenia Canary for UWP
 
-<h1>Original Readme</h1>
+An unofficial UWP port of Xenia Canary, targeting Windows 10/11 desktop and
+**Xbox One/Series X|S in Developer Mode**. It is not associated with the
+Xenia or Xenia Canary developers, or with Microsoft.
 
-Xenia Canary is an experimental fork of the Xenia emulator. For more information, see the
-[Xenia Canary wiki](https://github.com/xenia-canary/xenia-canary/wiki).
+This repository is a fork of
+[danprice142/xenia-canary-uwp](https://github.com/danprice142/xenia-canary-uwp)
+(the original UWP port), rebased onto current
+[Xenia Canary](https://github.com/xenia-canary/xenia-canary), which is itself
+an experimental fork of [Xenia](https://github.com/xenia-project/xenia). See
+[Credits](#credits) below for the full chain.
 
-Come Join the Xbox Emulation Hub Discord server for help, support and general dissusion: https://discord.gg/WCmxvvxHqu
-For developer chat join `#dev` but stay on topic. Lurking is not only fine, but encouraged!
-Please check the [FAQ](https://github.com/xenia-canary/xenia-canary/wiki/FAQ) page before asking questions.
-We've got jobs/lives/etc, so don't expect instant answers.
+## What's different in this fork
 
-Discussing illegal activities will get you banned.
+- Rebased the UWP port onto current Xenia Canary (~440 commits), including
+  Xenia's move from Premake to CMake as its build system.
+- The UWP app (`xenia-canary-uwp/`) now builds as part of the CMake solution
+  via `include_external_msproject()`, instead of a separate, drifted build.
+- Fixed the desktop CMake build (`xenia-app`), which had silently stopped
+  working: `XE_PLATFORM_WINRT` was hardcoded to `1` for every build, routing
+  desktop code through UWP-only paths with no diagnostic. See
+  `src/xenia/base/platform.h` and `src/xenia/app/uwp_stubs_win.cc`.
+- Added a small always-on ring buffer that logs the last N GPU draws when the
+  device is lost, to help narrow down GPU hangs without needing PIX
+  (`src/xenia/base/recent_draw_log.h`).
+- Various crash fixes in the UWP-specific code: exception handling around the
+  file/folder pickers and other `fire_and_forget` coroutines, a stack
+  corruption bug in LIVE-signature title scanning, and cross-platform CRT
+  fixes (`strncpy_s`/`localtime_s` guarded or replaced with portable
+  equivalents) that had crept into shared code.
 
 ## Status
 
-Buildbot | Status | Releases
--------- | ------ | --------
-Canary (🪟, 🐧) | [![CI](https://github.com/xenia-canary/xenia-canary/actions/workflows/Orchestrator.yml/badge.svg?branch=canary_experimental)](https://github.com/xenia-canary/xenia-canary/actions/workflows/Orchestrator.yml/badge.svg?branch=canary_experimental) [![Codacy Badge](https://app.codacy.com/project/badge/Grade/cd506034fd8148309a45034925648499)](https://app.codacy.com/gh/xenia-canary/xenia-canary/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade) | [Latest](https://github.com/xenia-canary/xenia-canary/releases/latest) ◦ [All](https://github.com/xenia-canary/xenia-canary/releases) ◦ [Old](https://github.com/xenia-canary/xenia-canary-releases/releases)
-
-### Experimental Netplay
-
-Buildbot | Status | Releases
--------- | ------ | --------
-Windows | [![Codacy Badge](https://app.codacy.com/project/badge/Grade/d814c4b6aa444dcc9c1631e0224b2739)](https://app.codacy.com/gh/AdrianCassar/xenia-canary/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade) | [Latest](https://github.com/AdrianCassar/xenia-canary/releases/latest)
-
-## Quickstart
-
-See the [Quickstart](https://github.com/xenia-canary/xenia-canary/wiki/Quickstart) page.
-
-## FAQ
-
-See the [frequently asked questions](https://github.com/xenia-canary/xenia-canary/wiki/FAQ) page.
-
-## Game Compatibility
-
-See the [Game compatibility list](https://github.com/xenia-canary/game-compatibility/issues)
-for currently tracked games, and feel free to contribute your own updates,
-screenshots, and information there following the [existing conventions](https://github.com/xenia-canary/game-compatibility/blob/canary/README.md).
+This is a hobby port, built and tested by one person against a handful of
+titles. Expect rough edges. Desktop (Windows) and UWP (Xbox Dev Mode) Debug
+and Release configurations all build and package successfully as of this
+fork's latest commit.
 
 ## Building
 
-See [building.md](docs/building.md) for setup and information about the
-`xb` script. When writing code, check the [style guide](docs/style_guide.md)
-and be sure to run clang-format!
+The project uses CMake (see [docs/building.md](docs/building.md) for the
+general Xenia build setup). The UWP app additionally requires:
 
-## Contributors Wanted!
+- Visual Studio 2022+ with the **Universal Windows Platform development**
+  workload.
+- A code-signing certificate matching `Package.appxmanifest`'s
+  `Identity Publisher` (generate your own self-signed one for local builds
+  and sideloading; see `xenia-canary-uwp/`).
 
-Have some spare time, know advanced C++, and want to write an emulator?
-Contribute! There's a ton of work that needs to be done, a lot of which
-is wide open greenfield fun.
+Deploying to an actual Xbox requires
+[Developer Mode](https://learn.microsoft.com/en-us/windows/uwp/xbox-apps/devkit-activation)
+and the Xbox Device Portal (Apps → Add, uploading both the `.appxbundle` and
+its dependencies).
 
-**For general rules and guidelines please see [CONTRIBUTING.md](.github/CONTRIBUTING.md).**
+## Game compatibility
 
-Fixes and optimizations are always welcome (please!), but in addition to
-that there are some major work areas still untouched:
+This fork tracks the same games as upstream Xenia Canary — see the
+[official compatibility tracker](https://github.com/xenia-canary/game-compatibility/issues).
 
-* Help work through [missing functionality/bugs in games](https://github.com/xenia-canary/xenia-canary/labels/compat)
-* Reduce the size of Xenia's [huge log files](https://github.com/xenia-canary/xenia-canary/issues/1526)
-* Skilled with Linux? A strong contributor is needed to [help with porting](https://github.com/xenia-canary/xenia-canary/labels/platform-linux)
+For a searchable/sortable snapshot of the full tracker (1,000+ titles, with
+notes on which ones need a non-default config setting to run well), see
+[`docs/compatibility/xenia-compatibility-ledger.xlsx`](docs/compatibility/xenia-compatibility-ledger.xlsx).
+The UWP/Xbox build only has the Direct3D 12 backend available (no native
+Vulkan driver on Xbox), so a handful of titles whose fix on desktop requires
+switching to Vulkan won't have that specific fix available on Xbox.
 
-See more projects [good for contributors](https://github.com/xenia-canary/xenia-canary/labels/good%20first%20issue). It's a good idea to ask on Discord and check the issues page before beginning work on
-something.
+## Credits
+
+- [Xenia](https://github.com/xenia-project/xenia) — the original Xbox 360
+  emulator project.
+- [Xenia Canary](https://github.com/xenia-canary/xenia-canary) — the
+  experimental fork this port tracks.
+- [danprice142/xenia-canary-uwp](https://github.com/danprice142/xenia-canary-uwp) —
+  the original UWP/Xbox port this fork is based on.
 
 ## Disclaimer
 

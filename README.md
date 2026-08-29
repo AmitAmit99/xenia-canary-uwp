@@ -64,8 +64,9 @@ its dependencies).
 This fork tracks the same games as upstream Xenia Canary — see the
 [official compatibility tracker](https://github.com/xenia-canary/game-compatibility/issues).
 
-For a searchable/sortable snapshot of the full tracker (1,000+ titles, with
-notes on which ones need a non-default config setting to run well), see
+For a searchable/sortable snapshot merging the current Canary tracker with
+the older pre-Canary one (1,800+ titles total), with the actual fix pulled
+out of each game's discussion thread rather than just a checkbox, see
 [`docs/compatibility/xenia-compatibility-ledger.xlsx`](docs/compatibility/xenia-compatibility-ledger.xlsx).
 The UWP/Xbox build only has the Direct3D 12 backend available (no native
 Vulkan driver on Xbox), so a handful of titles whose fix on desktop requires

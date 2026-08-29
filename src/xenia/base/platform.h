@@ -23,9 +23,6 @@
 // https://sourceforge.net/p/predef/wiki/OperatingSystems/
 // Original link: https://predef.sourceforge.net/preos.html
 
-// TO-DO: Only set this when needed!
-#define XE_PLATFORM_WINRT 1
-
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #endif
@@ -34,6 +31,40 @@
 #define XE_PLATFORM_MAC 1
 #elif defined(WIN32) || defined(_WIN32)
 #define XE_PLATFORM_WIN32 1
+// WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP) is false only in an
+// actual UWP/Windows Store app-container build (ApplicationType=Windows
+// Store), where desktop Win32 APIs aren't available - a signal the MSVC
+// toolchain sets automatically per translation unit, unlike a hand-written
+// CMake define that only reaches the one target it's added to. winapifamily.h
+// is a standalone header safe to include this early, before <windows.h>.
+// This used to be hardcoded to 1 unconditionally (see the removed TO-DO),
+// which routed every non-UWP build - including this CMake desktop target -
+// through UWP-only code paths (UWP:: stub calls, invalid UWPWindow casts on
+// real Win32 windows, wrong storage-folder resolution) with no diagnostic.
+//
+// KNOWN RESIDUAL LIMITATION: this correctly reflects the compiling project's
+// own ApplicationType for code the *build system* compiles once per final
+// consumer (xenia-app.vcxproj, xenia-canary-uwp.vcxproj's own small
+// ClCompile list). It cannot be correct for xenia-base/xenia-ui/etc: per
+// xenia-canary-uwp/CMakeLists.txt, xenia-canary-uwp.vcxproj links those
+// as prebuilt .lib output from the desktop CMake target (by design -
+// AppContainer packaging isn't expressible in CMake's target model) rather
+// than recompiling them itself, so those shared sources are compiled
+// exactly once, under desktop settings, and that same object code ends up
+// linked into the real Xbox/UWP binary too - meaning any XE_PLATFORM_WINRT-
+// gated behavior inside them (GetUserFolder()'s UWP::GetLocalState() vs.
+// SHGetKnownFolderPath in filesystem_win.cc, the on-screen keyboard
+// invocations in create_profile_ui.cc/signin_ui.cc, xinput_input_driver.cc's
+// UWPWindow calls) resolves to the desktop answer even on real hardware.
+// Fixing this for real means either giving xenia-canary-uwp.vcxproj its own
+// compile of those sources under ApplicationType=Windows Store, or a second
+// CMake configuration dedicated to producing UWP-flavored versions of them -
+// both a build-system change well beyond this macro, and not something
+// verifiable without deploying to an actual Xbox devkit.
+#include <winapifamily.h>
+#if !WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)
+#define XE_PLATFORM_WINRT 1
+#endif
 #elif defined(__ANDROID__)
 #define XE_PLATFORM_ANDROID 1
 #define XE_PLATFORM_LINUX 1

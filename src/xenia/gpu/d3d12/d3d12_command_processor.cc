@@ -16,6 +16,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/profiling.h"
+#include "xenia/base/recent_draw_log.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/d3d12/d3d12_graphics_system.h"
 #include "xenia/gpu/d3d12/d3d12_shader.h"
@@ -3015,6 +3016,15 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
       shared_memory_->UseForWriting();
     }
     SubmitBarriers();
+    // Recorded immediately before the actual draw call, not any earlier -
+    // the indexed branch below can still bail out (return false) resolving
+    // its index buffer, and a draw that was never submitted to the GPU
+    // shouldn't be logged as one that was.
+    xe::RecentDrawLogRecord(
+        vertex_shader->ucode_data_hash(),
+        pixel_shader ? pixel_shader->ucode_data_hash() : 0,
+        primitive_processing_result.host_draw_vertex_count,
+        /*indexed=*/false);
     deferred_command_list_.D3DDrawInstanced(
         primitive_processing_result.host_draw_vertex_count, 1, 0, 0);
   } else {
@@ -3080,6 +3090,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
       shared_memory_->UseForReading();
     }
     SubmitBarriers();
+    xe::RecentDrawLogRecord(
+        vertex_shader->ucode_data_hash(),
+        pixel_shader ? pixel_shader->ucode_data_hash() : 0,
+        primitive_processing_result.host_draw_vertex_count, /*indexed=*/true);
     deferred_command_list_.D3DDrawIndexedInstanced(
         primitive_processing_result.host_draw_vertex_count, 1, 0, 0, 0);
     if (scratch_index_buffer != nullptr) {
@@ -3582,9 +3596,17 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
 
   // Check if the device is still available.
   ID3D12Device* device = GetD3D12Provider().GetDevice();
-  HRESULT device_removed_reason = device->GetDeviceRemovedReason();
+  HRESULT device_removed_reason =
+      xe::ui::d3d12::util::LogDeviceRemovedReason(device, "D3D12 device removed");
   if (FAILED(device_removed_reason)) {
     device_removed_ = true;
+    // BeginSubmission runs on every single GPU submission - far more often
+    // than the presenter's Present() (once per displayed frame) - so this is
+    // very likely to be the first place a device loss is actually observed.
+    // Dump the recent-draws log here rather than relying solely on Present()
+    // to do it, since OnHostGpuLossFromAnyThread below leads to a fatal exit
+    // that would otherwise skip past it entirely for this detection order.
+    xe::RecentDrawLogDump();
     graphics_system_->OnHostGpuLossFromAnyThread(device_removed_reason !=
                                                  DXGI_ERROR_DEVICE_REMOVED);
     return false;

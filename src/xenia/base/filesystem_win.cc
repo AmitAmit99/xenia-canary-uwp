@@ -63,13 +63,17 @@ std::filesystem::path GetUserFolder() {
 #else
   std::filesystem::path result;
   PWSTR path;
-  if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT,
-                                     nullptr, &path))) {
+  HRESULT hr = SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT,
+                                     nullptr, &path);
+  if (SUCCEEDED(hr)) {
     result.assign(path);
     CoTaskMemFree(path);
+  } else {
+    XELOGE("GetUserFolder: SHGetKnownFolderPath failed with HRESULT 0x{:08X}",
+           static_cast<uint32_t>(hr));
   }
 
-  return path;
+  return result;
 #endif
 }
 

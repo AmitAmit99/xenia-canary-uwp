@@ -18,6 +18,7 @@
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
+#include "xenia/base/recent_draw_log.h"
 #include "xenia/ui/d3d12/d3d12_provider.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
 #include "xenia/ui/surface_win.h"
@@ -1112,8 +1113,13 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
   // Discord server.
   paint_context_.present_completion_timeline->SignalAndAdvance(direct_queue);
   switch (present_result) {
-    case DXGI_ERROR_DEVICE_REMOVED:
+    case DXGI_ERROR_DEVICE_REMOVED: {
+      xe::ui::d3d12::util::LogDeviceRemovedReason(
+          provider_.GetDevice(),
+          "D3D12 Present failed with DXGI_ERROR_DEVICE_REMOVED");
+      xe::RecentDrawLogDump();
       return PaintResult::kGpuLostExternally;
+    }
     case DXGI_ERROR_DEVICE_RESET:
       return PaintResult::kGpuLostResponsible;
     default:

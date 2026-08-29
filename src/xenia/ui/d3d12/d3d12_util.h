@@ -93,6 +93,15 @@ void CreateBufferTypedUAV(ID3D12Device* device,
                           ID3D12Resource* buffer, DXGI_FORMAT format,
                           uint32_t num_elements, uint64_t first_element = 0);
 
+// Queries and logs ID3D12Device::GetDeviceRemovedReason(), for the two
+// independent places (a GPU backend's submission path, and its presenter's
+// Present() path) that can each separately observe the same device-loss
+// event. `context` names which of them is reporting, e.g. "BeginSubmission"
+// or "Present failed with DXGI_ERROR_DEVICE_REMOVED", so the two call sites'
+// log lines stay in sync instead of drifting apart independently. Returns
+// the queried reason for the caller's own handling.
+HRESULT LogDeviceRemovedReason(ID3D12Device* device, const char* context);
+
 }  // namespace util
 }  // namespace d3d12
 }  // namespace ui

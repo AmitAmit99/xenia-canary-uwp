@@ -845,10 +845,14 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   }
 
   if (dialogs_.empty()) {
+#if XE_PLATFORM_WINRT
     UWP::SetUIOpen(false);
+#endif  // XE_PLATFORM_WINRT
     return;
   } else {
+#if XE_PLATFORM_WINRT
     UWP::SetUIOpen(true);
+#endif  // XE_PLATFORM_WINRT
   }
 
   ImGui::SetCurrentContext(internal_state_);
@@ -943,7 +947,9 @@ void ImGuiDrawer::ClearDialogs() {
     RemoveDialog(dialogs_[dialog_loop++]);
   }
 
+#if XE_PLATFORM_WINRT
   UWP::SetUIOpen(false);
+#endif  // XE_PLATFORM_WINRT
 }
 
 void ImGuiDrawer::RenderDrawLists(ImDrawData* data,

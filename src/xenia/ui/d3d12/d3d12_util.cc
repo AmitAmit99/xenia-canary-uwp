@@ -129,6 +129,18 @@ void CreateBufferTypedUAV(ID3D12Device* device,
   device->CreateUnorderedAccessView(buffer, nullptr, &desc, handle);
 }
 
+HRESULT LogDeviceRemovedReason(ID3D12Device* device, const char* context) {
+  HRESULT reason = device->GetDeviceRemovedReason();
+  // Only logs on an actual failure - BeginSubmission calls this on every
+  // single GPU submission just to check whether the device is still alive,
+  // so logging unconditionally here would flood the log with a "device
+  // removed" line, mislabeled, for every normal draw.
+  if (FAILED(reason)) {
+    XELOGE("{}, GetDeviceRemovedReason = 0x{:08X}", context, uint32_t(reason));
+  }
+  return reason;
+}
+
 }  // namespace util
 }  // namespace d3d12
 }  // namespace ui

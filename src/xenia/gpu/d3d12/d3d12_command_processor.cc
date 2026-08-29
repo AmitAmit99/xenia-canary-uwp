@@ -3006,6 +3006,11 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   SetPrimitiveTopology(primitive_topology);
   // Must not call anything that may change the primitive topology from now on!
 
+  // Hoisted since both RecentDrawLogRecord() calls below need it, and it's
+  // otherwise repeated a third time elsewhere in this function.
+  uint64_t recent_draw_log_pixel_shader_hash =
+      pixel_shader ? pixel_shader->ucode_data_hash() : 0;
+
   // Draw.
   if (primitive_processing_result.index_buffer_type ==
       PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
@@ -3020,11 +3025,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     // the indexed branch below can still bail out (return false) resolving
     // its index buffer, and a draw that was never submitted to the GPU
     // shouldn't be logged as one that was.
-    xe::RecentDrawLogRecord(
-        vertex_shader->ucode_data_hash(),
-        pixel_shader ? pixel_shader->ucode_data_hash() : 0,
-        primitive_processing_result.host_draw_vertex_count,
-        /*indexed=*/false);
+    xe::RecentDrawLogRecord(vertex_shader->ucode_data_hash(),
+                            recent_draw_log_pixel_shader_hash,
+                            primitive_processing_result.host_draw_vertex_count,
+                            /*indexed=*/false);
     deferred_command_list_.D3DDrawInstanced(
         primitive_processing_result.host_draw_vertex_count, 1, 0, 0);
   } else {
@@ -3090,10 +3094,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
       shared_memory_->UseForReading();
     }
     SubmitBarriers();
-    xe::RecentDrawLogRecord(
-        vertex_shader->ucode_data_hash(),
-        pixel_shader ? pixel_shader->ucode_data_hash() : 0,
-        primitive_processing_result.host_draw_vertex_count, /*indexed=*/true);
+    xe::RecentDrawLogRecord(vertex_shader->ucode_data_hash(),
+                            recent_draw_log_pixel_shader_hash,
+                            primitive_processing_result.host_draw_vertex_count,
+                            /*indexed=*/true);
     deferred_command_list_.D3DDrawIndexedInstanced(
         primitive_processing_result.host_draw_vertex_count, 1, 0, 0, 0);
     if (scratch_index_buffer != nullptr) {

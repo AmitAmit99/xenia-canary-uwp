@@ -45,6 +45,10 @@ else()
 endif()
 
 target_compile_definitions(xenia-app PRIVATE
+  # Lets xenia_main.cc and uwp_stubs_win.cc (compiled separately for this
+  # target vs. the UWP vcxproj) locally correct XE_PLATFORM_WINRT, since
+  # platform.h hardcodes it to 1 for every build. See the comments there.
+  XE_APP_DESKTOP_BUILD
   XBYAK_NO_OP_NAMES
   XBYAK_ENABLE_OMITTED_OPERAND
 )

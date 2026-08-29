@@ -7,19 +7,22 @@
  ******************************************************************************
  */
 
-// Some shared/desktop code still calls into the UWP:: namespace under
-// `#if XE_PLATFORM_WINRT` guards - correctly 0 for this desktop build, per
-// xenia/base/platform.h, so those call sites are compiled out here, but the
-// namespace itself still needs *some* definition for xenia-app to link
-// against wherever a UWP:: symbol is referenced unconditionally (e.g.
-// imgui_drawer.cc/presenter.cc's SetUIOpen calls, before they were also
-// given their own XE_PLATFORM_WINRT guards). The real UWP:: definitions live
-// in xenia-canary-uwp/*.cpp, which are only compiled by the hand maintained
-// xenia-canary-uwp.vcxproj, not by CMake. This file supplies minimal desktop
-// stand-ins so xenia-app can link. It is named with the "_win" suffix so
-// xe_platform_sources() only compiles it into the desktop xenia-app CMake
-// target on Windows; it is never compiled by the xenia-canary-uwp.vcxproj,
-// so it does not affect the Xbox build.
+// XE_PLATFORM_WINRT is hardcoded to 1 in xenia/base/platform.h for every
+// build (see the comment there for why: xenia-base/xenia-kernel/xenia-ui are
+// compiled exactly once, by ordinary desktop CMake, and that same object
+// code is linked directly into the real Xbox/UWP binary, so there is no
+// build-wide signal that means "this compile is for the UWP app" without
+// breaking that shared code on real hardware). That means shared/desktop
+// code still calls into the UWP:: namespace unconditionally under
+// `#if XE_PLATFORM_WINRT` guards even in this desktop build (e.g.
+// imgui_drawer.cc/presenter.cc's SetUIOpen calls), so the namespace needs
+// *some* definition for xenia-app to link against. The real UWP::
+// definitions live in xenia-canary-uwp/*.cpp, which are only compiled by the
+// hand maintained xenia-canary-uwp.vcxproj, not by CMake. This file supplies
+// minimal desktop stand-ins so xenia-app can link. It is named with the
+// "_win" suffix so xe_platform_sources() only compiles it into the desktop
+// xenia-app CMake target on Windows; it is never compiled by the
+// xenia-canary-uwp.vcxproj, so it does not affect the Xbox build.
 
 // platform.h sets WIN32_LEAN_AND_MEAN/NOMINMAX before anything else in this
 // TU can drag in <windows.h> -- otherwise windows.h's min/max macros corrupt
@@ -33,10 +36,14 @@
 // down. The build-system convention (xe_platform_sources() only pulling this
 // "_win" file into the desktop CMake target) is what actually keeps that from
 // happening; this is a compile-time trip-wire in case that ever changes.
-#if XE_PLATFORM_WINRT
+// Checks XE_APP_DESKTOP_BUILD (defined only by src/xenia/app/CMakeLists.txt
+// for this exact target), not XE_PLATFORM_WINRT -- the latter is hardcoded
+// to 1 everywhere (see above) and so can't distinguish this build from a
+// real UWP one.
+#ifndef XE_APP_DESKTOP_BUILD
 #error \
-    "uwp_stubs_win.cc must not be compiled under XE_PLATFORM_WINRT -- it duplicates definitions that live in xenia-canary-uwp/*.cpp."
-#endif  // XE_PLATFORM_WINRT
+    "uwp_stubs_win.cc must only be compiled into the desktop xenia-app CMake target -- it duplicates definitions that live in xenia-canary-uwp/*.cpp."
+#endif  // !XE_APP_DESKTOP_BUILD
 
 #include <windows.h>
 
@@ -51,6 +58,20 @@
 #include "xenia/base/filesystem.h"
 #include "xenia/base/string.h"
 
+// xenia-hid-xinput's xinput_input_driver.cc casts window() to UWPWindow* and
+// calls these (also only defined in xenia-canary-uwp/*.cpp, which the
+// xenia-app CMake target never compiles) under the same always-true
+// XE_PLATFORM_WINRT guard. xenia-app never actually constructs a UWPWindow,
+// so these bodies just need to exist for the link, not do anything real.
+namespace xe {
+namespace ui {
+void UWPWindow::SetXInputDriver(xe::hid::xinput::XInputInputDriver* driver) {
+  input_driver = driver;
+}
+void UWPWindow::ClearXInputDriver() { input_driver = nullptr; }
+}  // namespace ui
+}  // namespace xe
+
 namespace UWP {
 
 std::vector<uint32_t> g_char_buffer;
@@ -64,10 +85,13 @@ void SelectFiles(std::function<void(std::vector<std::string>)> callback) {}
 bool TestPathPermissions(std::string path) { return true; }
 
 std::string GetLocalCache() {
-  // Same "executable's own folder" answer the rest of the desktop build uses
-  // (xe::filesystem::GetExecutableFolder(), via _get_wpgmptr) rather than a
-  // second, independent way of computing it.
-  return xe::to_utf8(xe::filesystem::GetExecutableFolder().u16string());
+  // Deliberately xe::filesystem::GetExecutablePath() (unconditional, no
+  // XE_PLATFORM_WINRT branch), not GetExecutableFolder(): since
+  // XE_PLATFORM_WINRT is hardcoded to 1 for every build (see platform.h),
+  // GetExecutableFolder() itself calls UWP::GetLocalState() -> this
+  // function on this desktop build, which would recurse into itself.
+  return xe::to_utf8(
+      xe::filesystem::GetExecutablePath().parent_path().u16string());
 }
 
 std::string GetLocalState() { return GetLocalCache(); }

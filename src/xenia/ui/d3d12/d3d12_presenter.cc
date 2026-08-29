@@ -1114,13 +1114,27 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
   paint_context_.present_completion_timeline->SignalAndAdvance(direct_queue);
   switch (present_result) {
     case DXGI_ERROR_DEVICE_REMOVED: {
-      xe::ui::d3d12::util::LogDeviceRemovedReason(
+      // Present() returning DXGI_ERROR_DEVICE_REMOVED only means the device
+      // is already gone by this point - GetDeviceRemovedReason() gives the
+      // actual root cause, which can be DXGI_ERROR_DEVICE_HUNG (the app's
+      // own submitted work timed out a TDR) just as easily as a genuinely
+      // external DXGI_ERROR_DEVICE_REMOVED (e.g. the GPU was physically
+      // removed, or its driver was reset by something outside this process).
+      // Matches BeginSubmission()'s is_responsible logic below for the same
+      // reason.
+      HRESULT removed_reason = xe::ui::d3d12::util::LogDeviceRemovedReason(
           provider_.GetDevice(),
           "D3D12 Present failed with DXGI_ERROR_DEVICE_REMOVED");
       xe::RecentDrawLogDump();
-      return PaintResult::kGpuLostExternally;
+      return removed_reason != DXGI_ERROR_DEVICE_REMOVED
+                 ? PaintResult::kGpuLostResponsible
+                 : PaintResult::kGpuLostExternally;
     }
     case DXGI_ERROR_DEVICE_RESET:
+      // The "responsible" case, i.e. the app's own submitted work is what the
+      // TDR blamed - exactly the scenario this diagnostic exists for, so it
+      // must dump too, not just the externally-caused DEVICE_REMOVED case.
+      xe::RecentDrawLogDump();
       return PaintResult::kGpuLostResponsible;
     default:
       return SUCCEEDED(present_result) ? PaintResult::kPresented

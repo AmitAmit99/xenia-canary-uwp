@@ -33,6 +33,23 @@
 #include "xenia/ui/windowed_app_context.h"
 #include "xenia/vfs/devices/host_path_device.h"
 
+// xenia/base/platform.h hardcodes XE_PLATFORM_WINRT to 1 for every build
+// (see the TO-DO there), because this file is compiled separately for the
+// desktop xenia-app CMake target and for the real UWP app (the hand
+// maintained xenia-canary-uwp.vcxproj ClCompiles this same source directly),
+// and there's currently no per-target way to tell CMake's shared static
+// libraries apart from the UWP-specific ones. This file itself isn't a
+// shared library though -- each target gets its own separate object -- so
+// it's safe to locally correct XE_PLATFORM_WINRT for just this translation
+// unit when building the desktop target (XE_APP_DESKTOP_BUILD is defined
+// only by src/xenia/app/CMakeLists.txt, never by the vcxproj), restoring
+// desktop-only functionality (Vulkan, Discord presence, SDL/WinKey input)
+// that these guards exist to gate.
+#if defined(XE_APP_DESKTOP_BUILD) && XE_PLATFORM_WINRT
+#undef XE_PLATFORM_WINRT
+#define XE_PLATFORM_WINRT 0
+#endif
+
 #if !XE_PLATFORM_WINRT
 #include "xenia/app/discord/discord_presence.h"
 #endif

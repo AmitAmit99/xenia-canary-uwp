@@ -14,6 +14,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/profiling.h"
+#include "xenia/base/recent_draw_log.h"
 #include "xenia/base/threading.h"
 #include "xenia/config.h"
 #include "xenia/gpu/command_processor.h"
@@ -254,6 +255,12 @@ void GraphicsSystem::OnHostGpuLossFromAnyThread(
   if (host_gpu_loss_reported_.test_and_set(std::memory_order_relaxed)) {
     return;
   }
+
+  // Ensures any in-flight recent-draws dump (from this same detection, or
+  // from the backend's own independent detection racing on another thread)
+  // has actually finished before FatalError() below frees the logger out
+  // from under it - see the comment on RecentDrawLogDump()'s call_once.
+  xe::RecentDrawLogDump();
 
   config::SaveConfig();
 

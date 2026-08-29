@@ -13,6 +13,7 @@
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform.h"
+#include "xenia/base/recent_draw_log.h"
 #include "xenia/ui/window.h"
 
 #if XE_PLATFORM_WINRT
@@ -74,6 +75,12 @@ namespace ui {
 void Presenter::FatalErrorHostGpuLossCallback(
     [[maybe_unused]] bool is_responsible,
     [[maybe_unused]] bool statically_from_ui_thread) {
+  // See the comment on RecentDrawLogDump()'s call_once: this and
+  // GraphicsSystem::OnHostGpuLossFromAnyThread are two independently
+  // reachable paths into xe::FatalError() for the same underlying GPU-loss
+  // event, so without this, the other path's dump (if in flight on another
+  // thread) could still be running when FatalError() below frees the logger.
+  xe::RecentDrawLogDump();
   xe::FatalError("Graphics device lost (probably due to an internal error)");
 }
 

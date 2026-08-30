@@ -267,6 +267,16 @@ void RecurseFolderForGames(std::string path) {
     std::string loose_xex_name;
     bool has_loose_xex = false;
 
+    // CON/PIRS/ZAR/LIVE-signed files sitting alongside a default.xex are
+    // usually companion resources (e.g. a separately-packaged icon/art
+    // asset, sometimes named things like "<TitleID>.nxeart"), not a second
+    // real game -- STFS/XCONTENT packages can legitimately have those
+    // signatures too. Deferred and only added if this folder turns out to
+    // have no default.xex, so the game list shows one entry per folder
+    // instead of the xex plus a bogus "game" for its own art asset.
+    std::vector<std::pair<std::filesystem::path, std::string>>
+        deferred_content_entries;
+
     for (auto file : std::filesystem::directory_iterator(path)) {
       if (file.is_directory() && file.path().string() != path) {
         RecurseFolderForGames(file.path().string());
@@ -298,8 +308,7 @@ void RecurseFolderForGames(std::string path) {
         case xe::Emulator::FileSignatureType::PIRS:
         case xe::Emulator::FileSignatureType::ZAR: {
           std::string filename = file.path().stem().string();
-
-          AddGameEntry(file.path(), filename);
+          deferred_content_entries.emplace_back(file.path(), filename);
           break;
         }
 
@@ -334,7 +343,7 @@ void RecurseFolderForGames(std::string path) {
             }
           }
 
-          AddGameEntry(file.path(), data);
+          deferred_content_entries.emplace_back(file.path(), std::string(data));
 
           in.close();
         }
@@ -345,6 +354,10 @@ void RecurseFolderForGames(std::string path) {
 
     if (has_loose_xex) {
       AddGameEntry(loose_xex_path, loose_xex_name);
+    } else {
+      for (const auto& entry : deferred_content_entries) {
+        AddGameEntry(entry.first, entry.second);
+      }
     }
   } catch (std::exception) {
     // This folder can't be opened.

@@ -6965,6 +6965,82 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
             gpu_settings_debug_logged = true;
           }
 
+          auto c_gpu = dynamic_cast<cvar::ConfigVar<std::string>*>(
+              cvar::ConfigVars->find("gpu")->second);
+          std::string gpu_value = c_gpu->GetTypedConfigValue();
+          const char* gpu_preview = gpu_value.empty() ? "Any" : gpu_value.c_str();
+          {
+            ScopedAccentComboStyle accent_combo_style;
+            if (ImGui::BeginCombo("Graphics System", gpu_preview)) {
+              if (ImGui::Selectable("Any", gpu_value == "any")) {
+                c_gpu->SetConfigValue("any");
+                config::SaveConfig();
+              }
+
+#if XE_PLATFORM_WIN32
+              if (ImGui::Selectable("D3D12", gpu_value == "d3d12")) {
+                c_gpu->SetConfigValue("d3d12");
+                config::SaveConfig();
+              }
+#endif
+
+#if !XE_PLATFORM_WINRT && !XE_PLATFORM_MAC
+              if (ImGui::Selectable("Vulkan", gpu_value == "vulkan")) {
+                c_gpu->SetConfigValue("vulkan");
+                config::SaveConfig();
+              }
+#endif
+
+#if !XE_PLATFORM_WINRT
+              if (ImGui::Selectable("Null", gpu_value == "null")) {
+                c_gpu->SetConfigValue("null");
+                config::SaveConfig();
+              }
+#endif
+
+              ImGui::EndCombo();
+            }
+          }
+
+          if (ImGui::IsItemFocused()) {
+            tooltip = c_gpu->description();
+          }
+
+          ImGui::TextColored(
+              ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
+              "(Restart required to apply. Xbox only supports D3D12.)");
+
+          auto c_disable_context_promotion =
+              dynamic_cast<cvar::ConfigVar<bool>*>(
+                  cvar::ConfigVars->find("disable_context_promotion")
+                      ->second);
+          if (ImGui::Checkbox("Disable Context Promotion",
+                              c_disable_context_promotion->current_value())) {
+            c_disable_context_promotion->SetConfigValue(
+                !c_disable_context_promotion->GetTypedConfigValue());
+            config::SaveConfig();
+          }
+
+          if (ImGui::IsItemFocused()) {
+            tooltip = c_disable_context_promotion->description();
+          }
+
+          auto c_allow_invalid_upload_range =
+              dynamic_cast<cvar::ConfigVar<bool>*>(
+                  cvar::ConfigVars->find("gpu_allow_invalid_upload_range")
+                      ->second);
+          if (ImGui::Checkbox(
+                  "Allow Invalid Upload Range",
+                  c_allow_invalid_upload_range->current_value())) {
+            c_allow_invalid_upload_range->SetConfigValue(
+                !c_allow_invalid_upload_range->GetTypedConfigValue());
+            config::SaveConfig();
+          }
+
+          if (ImGui::IsItemFocused()) {
+            tooltip = c_allow_invalid_upload_range->description();
+          }
+
           auto c_allow_invalid = dynamic_cast<cvar::ConfigVar<bool>*>(
               cvar::ConfigVars->find("gpu_allow_invalid_fetch_constants")
                   ->second);

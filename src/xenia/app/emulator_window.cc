@@ -2692,12 +2692,26 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
     frontend_splitter.SetCurrentChannel(frontend_draw_list, 3);
 
     const int page_count = static_cast<int>(FrontendPage::kCount);
-    if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) {
+    // Switching blades changes what the rest of this function draws for the
+    // *current* frontend page (game list / settings / paths / about), each
+    // of which owns its own per-page state (selected row, selected settings
+    // section, the per-game config editor, etc.). Any dialog/popup/editor
+    // open at the time (which was opened for whatever page was active then)
+    // would otherwise keep drawing itself against a frontend page that just
+    // changed out from under it - matches the same guard already used for
+    // B/Y elsewhere in this function.
+    const bool blade_switch_blocked =
+        ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId) ||
+        show_game_context_menu_ || show_per_game_config_editor_ ||
+        show_action_status_;
+    if (!blade_switch_blocked &&
+        ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) {
       int page_index = static_cast<int>(active_frontend_page_);
       page_index = (page_index + page_count - 1) % page_count;
       active_frontend_page_ = static_cast<FrontendPage>(page_index);
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) {
+    if (!blade_switch_blocked &&
+        ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) {
       int page_index = static_cast<int>(active_frontend_page_);
       page_index = (page_index + 1) % page_count;
       active_frontend_page_ = static_cast<FrontendPage>(page_index);

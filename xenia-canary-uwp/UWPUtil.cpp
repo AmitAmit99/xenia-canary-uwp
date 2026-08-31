@@ -1004,9 +1004,13 @@ winrt::fire_and_forget DownloadConfigForGameAsync(
     std::transform(normalized.begin(), normalized.end(), normalized.begin(),
                    [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
 
+    // xenia-manager/optimized-settings' "settings/" files are already plain
+    // TOML (with a couple of leading `#`-comment header lines), not JSON --
+    // confirmed against the repo directly. Fetch and write it out as-is;
+    // no JSON parsing/conversion step is needed (or correct) here.
     auto url = fmt::format(
         "https://raw.githubusercontent.com/xenia-manager/optimized-settings/"
-        "main/settings/{}.json",
+        "main/settings/{}.toml",
         normalized);
 
     winrt::Windows::Web::Http::HttpClient client;
@@ -1026,16 +1030,7 @@ winrt::fire_and_forget DownloadConfigForGameAsync(
         co_await response.Content().ReadAsBufferAsync());
     std::vector<uint8_t> buf(reader.UnconsumedBufferLength());
     reader.ReadBytes(winrt::array_view<uint8_t>(buf));
-    std::string json(buf.begin(), buf.end());
-
-    std::string toml;
-    if (!ConvertOptimizedConfigJsonToToml(json, toml)) {
-      XELOGE("[UWP] DownloadConfigForGameAsync: failed to convert optimized settings JSON to TOML for {}",
-             normalized);
-      s_download_in_progress = false;
-      callback(false, "invalid_json");
-      co_return;
-    }
+    std::string toml(buf.begin(), buf.end());
 
     std::filesystem::create_directories(dest_folder);
     std::filesystem::path out_path =

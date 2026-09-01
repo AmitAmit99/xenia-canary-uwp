@@ -136,11 +136,8 @@ void DownloadConfigForGame(const std::string& title_id,
                            std::function<void(bool, std::string)> callback) {
   RejectNotSupported(callback);
 }
-bool ConvertOptimizedConfigJsonToToml(const std::string& json,
-                                      std::string& out_toml) {
-  return false;
-}
 std::string GetMediaIdFromPath(const std::string& game_path) { return ""; }
+void ExitApplication() { ExitProcess(0); }
 void EnsureUnityMetadataFetch(const std::string& title_id) {}
 bool TryGetUnityMetadata(const std::string& title_id,
                          UnityGameMetadata* out_metadata) {

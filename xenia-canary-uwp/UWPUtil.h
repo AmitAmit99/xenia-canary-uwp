@@ -64,9 +64,11 @@ void DownloadPluginsForGame(const std::string& title_id,
 void DownloadConfigForGame(const std::string& title_id,
                            const std::string& dest_folder,
                            std::function<void(bool, std::string)> callback);
-bool ConvertOptimizedConfigJsonToToml(const std::string& json,
-                                      std::string& out_toml);
 std::string GetMediaIdFromPath(const std::string& game_path);
+// Exits the app entirely (used by the in-game pause menu's "Exit Game"
+// option - there is no in-process "return to the Xenia dashboard" from a
+// running title, so leaving the title means leaving the app).
+void ExitApplication();
 void EnsureUnityMetadataFetch(const std::string& title_id);
 bool TryGetUnityMetadata(const std::string& title_id,
                          UnityGameMetadata* out_metadata);

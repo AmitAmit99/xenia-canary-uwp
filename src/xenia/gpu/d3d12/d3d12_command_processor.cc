@@ -2860,6 +2860,12 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   // validity is tracked.
   const Shader::ConstantRegisterMap& constant_map_vertex =
       vertex_shader->constant_register_map();
+  // Captured from within the scope below for RecentDrawLogRecord() further
+  // down, which needs the first vertex fetch's base address (in dwords) to
+  // help diagnose whether a run of otherwise-identical draws is walking
+  // sequential vertex data (a precondition for safely batching them).
+  uint32_t recent_draw_log_vfetch_address = 0;
+  bool recent_draw_log_has_vfetch_address = false;
   {
     uint32_t vfetch_addresses[96];
     uint32_t vfetch_sizes[96];
@@ -2902,6 +2908,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     }
 
     if (vfetch_current_queued) {
+      recent_draw_log_vfetch_address = vfetch_addresses[0];
+      recent_draw_log_has_vfetch_address = true;
       // so far, i have never seen vfetch_current_queued > 4. 1 is most common,
       // 2 happens occasionally. did not test many games though pre-acquire the
       // critical region so we're not repeatedly re-acquiring it in requestrange
@@ -3028,7 +3036,12 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     xe::RecentDrawLogRecord(vertex_shader->ucode_data_hash(),
                             recent_draw_log_pixel_shader_hash,
                             primitive_processing_result.host_draw_vertex_count,
-                            /*indexed=*/false);
+                            /*indexed=*/false, recent_draw_log_vfetch_address,
+                            recent_draw_log_has_vfetch_address,
+                            memexport_ranges_.empty()
+                                ? 0
+                                : memexport_ranges_[0].base_address_dwords,
+                            !memexport_ranges_.empty());
     deferred_command_list_.D3DDrawInstanced(
         primitive_processing_result.host_draw_vertex_count, 1, 0, 0);
   } else {
@@ -3097,7 +3110,12 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     xe::RecentDrawLogRecord(vertex_shader->ucode_data_hash(),
                             recent_draw_log_pixel_shader_hash,
                             primitive_processing_result.host_draw_vertex_count,
-                            /*indexed=*/true);
+                            /*indexed=*/true, recent_draw_log_vfetch_address,
+                            recent_draw_log_has_vfetch_address,
+                            memexport_ranges_.empty()
+                                ? 0
+                                : memexport_ranges_[0].base_address_dwords,
+                            !memexport_ranges_.empty());
     deferred_command_list_.D3DDrawIndexedInstanced(
         primitive_processing_result.host_draw_vertex_count, 1, 0, 0, 0);
     if (scratch_index_buffer != nullptr) {

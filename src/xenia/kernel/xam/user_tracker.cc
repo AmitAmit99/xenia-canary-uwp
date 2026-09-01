@@ -12,6 +12,7 @@
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "third_party/stb/stb_image.h"
+#include "xenia/base/toast_notification.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/user_data.h"
@@ -101,6 +102,9 @@ bool UserTracker::UnlockAchievement(uint64_t xuid, uint32_t achievement_id) {
 
   XELOGI("Player: {} Unlocked Achievement: {}", user->name(),
          achievement_name.c_str());
+  xe::ToastNotificationShow(fmt::format(
+      "Achievement Unlocked: {} ({}G)", achievement_name,
+      static_cast<uint32_t>(spa_achievement->gamerscore)));
 
   gpd_achievement->flags = gpd_achievement->flags |
                            static_cast<uint32_t>(AchievementFlags::kAchieved);

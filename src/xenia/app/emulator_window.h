@@ -243,6 +243,25 @@ class EmulatorWindow {
     float volume_ = 0.0f;
   };
 
+  // Persists for the app's lifetime (never calls Close() on itself) so its
+  // View+Menu chord check in OnDraw runs every frame regardless of whether
+  // the frontend dialog or a game is currently active - see the comment on
+  // pause_menu_dialog_ below for why this can't just live inside
+  // WinRTFrontendDialog, which is destroyed once a title launches.
+  class PauseMenuDialog final : public ui::ImGuiDialog {
+   public:
+    PauseMenuDialog(ui::ImGuiDrawer* imgui_drawer,
+                    EmulatorWindow& emulator_window)
+        : ui::ImGuiDialog(imgui_drawer), emulator_window_(emulator_window) {}
+
+   protected:
+    void OnDraw(ImGuiIO& io) override;
+
+   private:
+    EmulatorWindow& emulator_window_;
+    bool show_menu_ = false;
+  };
+
 #if XE_PLATFORM_WINRT
   class WinRTFrontendDialog final : public ui::ImGuiDialog {
    public:
@@ -467,6 +486,11 @@ class EmulatorWindow {
   bool initializing_shader_storage_ = false;
 
   std::unique_ptr<DisplayConfigDialog> display_config_dialog_;
+  // Created once in the constructor alongside the other dialogs below and
+  // kept alive for the app's lifetime - unlike gamelist_, which is destroyed
+  // when a title launches (see WinRTFrontendDialog::OnDraw's Close() call),
+  // this needs to keep checking its View+Menu chord during gameplay too.
+  std::unique_ptr<EmulatorWindow::PauseMenuDialog> pause_menu_dialog_;
 #if XE_PLATFORM_WINRT
   std::unique_ptr<EmulatorWindow::WinRTFrontendDialog> gamelist_;
 #endif  // XE_PLATFORM_WINRT

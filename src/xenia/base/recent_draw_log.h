@@ -25,7 +25,10 @@ namespace xe {
 
 void RecentDrawLogRecord(uint64_t vertex_shader_hash,
                          uint64_t pixel_shader_hash, uint32_t vertex_count,
-                         bool indexed);
+                         bool indexed, uint32_t first_vertex_fetch_address = 0,
+                         bool has_vertex_fetch_address = false,
+                         uint32_t first_memexport_base_address_dwords = 0,
+                         bool has_memexport = false);
 void RecentDrawLogDump();
 
 }  // namespace xe

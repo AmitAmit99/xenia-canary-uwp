@@ -47,6 +47,7 @@
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/debugging.h"
+#include "xenia/base/toast_notification.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform.h"
 #include "xenia/base/profiling.h"
@@ -332,6 +333,9 @@ EmulatorWindow::EmulatorWindow(Emulator* emulator,
                 ")";
 
   LoadRecentlyLaunchedTitles();
+
+  pause_menu_dialog_ = std::unique_ptr<PauseMenuDialog>(
+      new PauseMenuDialog(imgui_drawer_.get(), *this));
 
 #if XE_PLATFORM_WINRT
   if (cvars::skip_frontend) {
@@ -812,6 +816,121 @@ void EmulatorWindow::ContentInstallDialog::OnDraw(ImGuiIO& io) {
     Close();
     ImGui::End();
     return;
+  }
+  ImGui::End();
+}
+
+void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
+  // Toast notifications (e.g. achievement unlocks) draw regardless of
+  // whether the pause menu itself is open, so they're visible during
+  // gameplay - checked every frame for the same reason the chord below is.
+  std::string toast_text;
+  float toast_alpha = 0.0f;
+  if (xe::ToastNotificationGetCurrent(toast_text, toast_alpha)) {
+    const ImGuiViewport* toast_viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(toast_viewport->Pos.x + toast_viewport->Size.x * 0.5f,
+               toast_viewport->Pos.y + toast_viewport->Size.y * 0.08f),
+        ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.85f * toast_alpha);
+    const ImGuiWindowFlags toast_flags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoFocusOnAppearing;
+    if (ImGui::Begin("##toast_notification", nullptr, toast_flags)) {
+      ImGui::PushStyleColor(ImGuiCol_Text,
+                            ImVec4(1.0f, 1.0f, 1.0f, toast_alpha));
+      ImGui::TextUnformatted(toast_text.c_str());
+      ImGui::PopStyleColor();
+    }
+    ImGui::End();
+  }
+
+  // View held + Menu just pressed toggles the menu open/closed - checked
+  // every frame regardless of whether a game is running or the frontend is
+  // showing, since this dialog never closes/deletes itself (unlike
+  // WinRTFrontendDialog, which is destroyed once a title launches).
+  if (ImGui::IsKeyDown(ImGuiKey_GamepadBack) &&
+      ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)) {
+    show_menu_ = !show_menu_;
+  }
+  if (!show_menu_) {
+    return;
+  }
+
+  const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  ImDrawList* background_draw_list = ImGui::GetBackgroundDrawList();
+  background_draw_list->AddRectFilled(
+      viewport->Pos,
+      ImVec2(viewport->Pos.x + viewport->Size.x,
+             viewport->Pos.y + viewport->Size.y),
+      ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 0.6f)));
+
+  ImGui::SetNextWindowPos(
+      ImVec2(viewport->Pos.x + viewport->Size.x * 0.5f,
+             viewport->Pos.y + viewport->Size.y * 0.5f),
+      ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowFocus();
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+      ImGuiWindowFlags_NoSavedSettings;
+  if (ImGui::Begin("##pause_menu", nullptr, flags)) {
+    ImGui::Text("Paused");
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+    const ImVec2 button_size(260.0f, 0.0f);
+    if (ImGui::Button("Resume", button_size) ||
+        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+      show_menu_ = false;
+    }
+    if (ImGui::Button("Exit Game", button_size)) {
+      UWP::ExitApplication();
+    }
+
+    ImGui::Dummy(ImVec2(0.0f, 8.0f));
+    ImGui::Separator();
+    ImGui::Text("Quick Settings");
+    auto c_mute = dynamic_cast<cvar::ConfigVar<bool>*>(
+        cvar::ConfigVars->find("mute")->second);
+    if (c_mute && ImGui::Checkbox("Mute Audio", c_mute->current_value())) {
+      c_mute->SetConfigValue(!c_mute->GetTypedConfigValue());
+      config::SaveConfig();
+    }
+    auto c_vibration = dynamic_cast<cvar::ConfigVar<bool>*>(
+        cvar::ConfigVars->find("vibration")->second);
+    if (c_vibration && ImGui::Checkbox("Controller Vibration",
+                                       c_vibration->current_value())) {
+      c_vibration->SetConfigValue(!c_vibration->GetTypedConfigValue());
+      config::SaveConfig();
+    }
+
+    // Lets you jump straight to a different recently played title without
+    // backing out to the dashboard first - there's no in-process "return to
+    // dashboard" from a running title on this port (see ExitApplication),
+    // so this is the only mid-game way to switch games at all.
+    if (!emulator_window_.recently_launched_titles_.empty()) {
+      ImGui::Dummy(ImVec2(0.0f, 8.0f));
+      ImGui::Separator();
+      ImGui::Text("Recently Played");
+      int shown = 0;
+      for (const RecentTitleEntry& entry :
+           emulator_window_.recently_launched_titles_) {
+        if (++shown > 5) {
+          break;
+        }
+        const std::string label = entry.title_name.empty()
+                                      ? entry.path_to_file.filename().string()
+                                      : entry.title_name;
+        ImGui::PushID(shown);
+        if (ImGui::Button(label.c_str(), button_size)) {
+          show_menu_ = false;
+          emulator_window_.RunTitle(entry.path_to_file);
+        }
+        ImGui::PopID();
+      }
+    }
   }
   ImGui::End();
 }
@@ -3308,10 +3427,10 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
                     show_action_status_ = true;
                   } else {
                     if (msg == "not_found") {
-                      action_status_ =
-                          "No optimized settings were found online for this title.";
-                      action_popup_mode_ = ActionPopupMode::kInfo;
-                      show_action_status_ = true;
+                      open_manual_prompt(
+                          config_root, ManualInstallKind::kConfig, title_id,
+                          "No optimized settings were found online for this title.\n"
+                          "Do you want to select a config manually?");
                     } else {
                       open_manual_prompt(
                           config_root, ManualInstallKind::kConfig, title_id,
@@ -3559,9 +3678,11 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
 
         const bool is_any_popup_open =
             ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
+        // Kept in sync with blade_switch_blocked above - both exist to block
+        // gamepad shortcuts while a dialog/popup/editor is open.
         const bool is_any_game_context_open =
             is_any_popup_open || show_game_context_menu_ ||
-            show_per_game_config_editor_;
+            show_per_game_config_editor_ || show_action_status_;
 
         if (controller_b_pressed && !is_any_game_context_open) {
           ImGui::SetWindowFocus("##gamelist_left");

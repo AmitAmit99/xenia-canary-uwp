@@ -34,6 +34,10 @@ struct RecentDrawEntry {
   uint64_t pixel_shader_hash = 0;
   uint32_t vertex_count = 0;
   bool indexed = false;
+  uint32_t first_vertex_fetch_address = 0;
+  bool has_vertex_fetch_address = false;
+  uint32_t first_memexport_base_address_dwords = 0;
+  bool has_memexport = false;
   bool valid = false;
 };
 
@@ -88,7 +92,10 @@ std::once_flag g_recent_draws_dump_once;
 
 void RecentDrawLogRecord(uint64_t vertex_shader_hash,
                          uint64_t pixel_shader_hash, uint32_t vertex_count,
-                         bool indexed) {
+                         bool indexed, uint32_t first_vertex_fetch_address,
+                         bool has_vertex_fetch_address,
+                         uint32_t first_memexport_base_address_dwords,
+                         bool has_memexport) {
   if (!cvars::recent_draw_log_count) {
     return;
   }
@@ -96,7 +103,14 @@ void RecentDrawLogRecord(uint64_t vertex_shader_hash,
   uint32_t slot =
       g_recent_draws_next.fetch_add(1, std::memory_order_relaxed) &
       (static_cast<uint32_t>(draws.size()) - 1);
-  draws[slot] = {vertex_shader_hash, pixel_shader_hash, vertex_count, indexed,
+  draws[slot] = {vertex_shader_hash,
+                 pixel_shader_hash,
+                 vertex_count,
+                 indexed,
+                 first_vertex_fetch_address,
+                 has_vertex_fetch_address,
+                 first_memexport_base_address_dwords,
+                 has_memexport,
                  true};
 }
 
@@ -114,9 +128,18 @@ void RecentDrawLogDump() {
       if (!entry.valid) {
         continue;
       }
-      XELOGE("  vs=0x{:016X} ps=0x{:016X} {}_count={}",
+      std::string suffix;
+      if (entry.has_vertex_fetch_address) {
+        suffix += fmt::format(" vfetch_addr=0x{:08X}",
+                              entry.first_vertex_fetch_address);
+      }
+      if (entry.has_memexport) {
+        suffix += fmt::format(" memexport_addr=0x{:08X}",
+                              entry.first_memexport_base_address_dwords << 2);
+      }
+      XELOGE("  vs=0x{:016X} ps=0x{:016X} {}_count={}{}",
             entry.vertex_shader_hash, entry.pixel_shader_hash,
-            entry.indexed ? "index" : "vertex", entry.vertex_count);
+            entry.indexed ? "index" : "vertex", entry.vertex_count, suffix);
     }
   });
 }

@@ -22,6 +22,7 @@
 #include <unordered_map>
 
 #include "third_party/fmt/include/fmt/format.h"
+#include "third_party/tomlplusplus/toml.hpp"
 
 #include <ppl.h>
 #include <ppltasks.h>
@@ -739,6 +740,10 @@ std::string UWP::GetMediaIdFromPath(const std::string& game_path) {
   return FormatMediaId(media_id);
 }
 
+void UWP::ExitApplication() {
+  winrt::Windows::ApplicationModel::Core::CoreApplication::Exit();
+}
+
 static std::vector<std::string> ExtractDownloadUrlsForTitleId(
     const std::string& json, const std::string& title_id) {
   std::vector<std::string> urls;
@@ -891,109 +896,6 @@ void UWP::DownloadPluginsForGame(
   FetchAndDownloadForTitleIdAsync(api_url, title_id, dest_folder, callback);
 }
 
-static std::string EscapeTomlString(const std::string& input) {
-  std::string escaped;
-  escaped.reserve(input.size() + 2);
-  for (char c : input) {
-    if (c == '"' || c == '\\') {
-      escaped.push_back('\\');
-    }
-    escaped.push_back(c);
-  }
-  return escaped;
-}
-
-bool UWP::ConvertOptimizedConfigJsonToToml(const std::string& json,
-                                           std::string& out_toml) {
-  try {
-    auto parsed =
-        winrt::Windows::Data::Json::JsonValue::Parse(winrt::to_hstring(json));
-    if (parsed.ValueType() !=
-        winrt::Windows::Data::Json::JsonValueType::Object) {
-      return false;
-    }
-
-    auto root = parsed.GetObject();
-    if (root.Size() == 0) {
-      return false;
-    }
-
-    std::vector<std::wstring> categories;
-    for (const auto& entry : root) {
-      categories.emplace_back(entry.Key().c_str());
-    }
-
-    std::sort(categories.begin(), categories.end());
-
-    std::ostringstream oss;
-    bool wrote_any = false;
-
-    for (const auto& category_key : categories) {
-      auto category_value = root.Lookup(category_key);
-
-      if (category_value.ValueType() !=
-          winrt::Windows::Data::Json::JsonValueType::Object) {
-        continue;
-      }
-
-      auto category_object = category_value.GetObject();
-      if (category_object.Size() == 0) {
-        continue;
-      }
-
-      oss << "[" << winrt::to_string(category_key) << "]\n";
-      bool wrote_category = false;
-      for (const auto& kvp : category_object) {
-        const auto& value = kvp.Value();
-        std::string value_string;
-        switch (value.ValueType()) {
-          case winrt::Windows::Data::Json::JsonValueType::Boolean: {
-            value_string = value.GetBoolean() ? "true" : "false";
-            break;
-          }
-          case winrt::Windows::Data::Json::JsonValueType::Number: {
-            double number = value.GetNumber();
-            double rounded = std::round(number);
-            if (std::fabs(number - rounded) < 1e-6) {
-              value_string = std::to_string(static_cast<int64_t>(rounded));
-            } else {
-              std::ostringstream num_stream;
-              num_stream << number;
-              value_string = num_stream.str();
-            }
-            break;
-          }
-          case winrt::Windows::Data::Json::JsonValueType::String: {
-            value_string =
-                "\"" + EscapeTomlString(winrt::to_string(value.GetString())) +
-                "\"";
-            break;
-          }
-          default:
-            continue;
-        }
-
-        oss << winrt::to_string(kvp.Key()) << " = " << value_string << "\n";
-        wrote_category = true;
-      }
-
-      if (wrote_category) {
-        oss << "\n";
-        wrote_any = true;
-      }
-    }
-
-    if (!wrote_any) {
-      return false;
-    }
-
-    out_toml = oss.str();
-    return true;
-  } catch (...) {
-    return false;
-  }
-}
-
 winrt::fire_and_forget DownloadConfigForGameAsync(
     std::string title_id, std::string dest_folder,
     std::function<void(bool, std::string)> callback) {
@@ -1030,7 +932,19 @@ winrt::fire_and_forget DownloadConfigForGameAsync(
         co_await response.Content().ReadAsBufferAsync());
     std::vector<uint8_t> buf(reader.UnconsumedBufferLength());
     reader.ReadBytes(winrt::array_view<uint8_t>(buf));
-    std::string toml(buf.begin(), buf.end());
+    std::string toml_text(buf.begin(), buf.end());
+
+    // Guard against writing a malformed response (a rate-limit/error payload,
+    // an HTML interstitial, a truncated read) over the user's existing
+    // per-game config - this used to be caught incidentally by the old
+    // JSON-parsing step before it was replaced with a raw passthrough.
+    try {
+      toml::parse(toml_text);
+    } catch (const toml::parse_error&) {
+      s_download_in_progress = false;
+      callback(false, "invalid_toml");
+      co_return;
+    }
 
     std::filesystem::create_directories(dest_folder);
     std::filesystem::path out_path =
@@ -1042,13 +956,13 @@ winrt::fire_and_forget DownloadConfigForGameAsync(
       std::ifstream existing_ifs(out_path, std::ios::binary);
       std::string existing((std::istreambuf_iterator<char>(existing_ifs)),
                            std::istreambuf_iterator<char>());
-      if (existing == toml) {
+      if (existing == toml_text) {
         already_installed = true;
       }
     }
 
     std::ofstream ofs(out_path, std::ios::binary);
-    ofs.write(toml.data(), toml.size());
+    ofs.write(toml_text.data(), toml_text.size());
     ofs.close();
 
     s_download_in_progress = false;

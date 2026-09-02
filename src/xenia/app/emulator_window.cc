@@ -821,6 +821,14 @@ void EmulatorWindow::ContentInstallDialog::OnDraw(ImGuiIO& io) {
 }
 
 void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
+  // Handled at the very top, before any rendering this frame, so the frame
+  // where "Exit Game" was clicked still finishes and presents normally
+  // instead of tearing down mid-render.
+  if (exit_requested_) {
+    UWP::ExitApplication();
+    return;
+  }
+
   // Toast notifications (e.g. achievement unlocks) draw regardless of
   // whether the pause menu itself is open, so they're visible during
   // gameplay - checked every frame for the same reason the chord below is.
@@ -851,9 +859,11 @@ void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
   // every frame regardless of whether a game is running or the frontend is
   // showing, since this dialog never closes/deletes itself (unlike
   // WinRTFrontendDialog, which is destroyed once a title launches).
+  bool just_opened = false;
   if (ImGui::IsKeyDown(ImGuiKey_GamepadBack) &&
       ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)) {
     show_menu_ = !show_menu_;
+    just_opened = show_menu_;
   }
   if (!show_menu_) {
     return;
@@ -871,7 +881,9 @@ void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
       ImVec2(viewport->Pos.x + viewport->Size.x * 0.5f,
              viewport->Pos.y + viewport->Size.y * 0.5f),
       ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-  ImGui::SetNextWindowFocus();
+  if (just_opened) {
+    ImGui::SetNextWindowFocus();
+  }
   const ImGuiWindowFlags flags =
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
@@ -886,7 +898,7 @@ void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
       show_menu_ = false;
     }
     if (ImGui::Button("Exit Game", button_size)) {
-      UWP::ExitApplication();
+      exit_requested_ = true;
     }
 
     ImGui::Dummy(ImVec2(0.0f, 8.0f));

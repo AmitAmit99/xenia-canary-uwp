@@ -260,6 +260,10 @@ class EmulatorWindow {
    private:
     EmulatorWindow& emulator_window_;
     bool show_menu_ = false;
+    // Set by the "Exit Game" button, acted on at the top of the *next*
+    // OnDraw call rather than immediately - avoids calling
+    // UWP::ExitApplication() mid-frame, partway through rendering.
+    bool exit_requested_ = false;
   };
 
 #if XE_PLATFORM_WINRT

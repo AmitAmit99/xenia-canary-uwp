@@ -10,6 +10,7 @@
 #ifndef XENIA_HID_INPUT_SYSTEM_H_
 #define XENIA_HID_INPUT_SYSTEM_H_
 
+#include <atomic>
 #include <bitset>
 #include <memory>
 #include <vector>
@@ -58,6 +59,15 @@ class InputSystem {
 
   Portal* GetPortal() { return portal_.get(); }
 
+  // While suppressed, GetState() reports "nothing pressed" (not
+  // disconnected - some games react badly to a controller vanishing) and
+  // GetKeystroke() reports no new keystrokes, without actually touching the
+  // real driver state - used by the UWP pause menu so a button also held
+  // down for its own navigation doesn't simultaneously drive the game
+  // underneath it.
+  void SetInputSuppressed(bool suppressed) { input_suppressed_ = suppressed; }
+  bool IsInputSuppressed() const { return input_suppressed_; }
+
   std::unique_lock<xe_unlikely_mutex> lock();
 
  private:
@@ -83,6 +93,10 @@ class InputSystem {
   std::array<std::pair<joystick_value, joystick_value>, XUserMaxUserCount>
       controllers_max_joystick_value = {};
   uint32_t last_used_slot = 0;
+
+  // Set from the UI thread, read from guest threads via GetState()/
+  // GetKeystroke() - see SetInputSuppressed()'s comment above.
+  std::atomic<bool> input_suppressed_{false};
 
   xe_unlikely_mutex lock_;
 };

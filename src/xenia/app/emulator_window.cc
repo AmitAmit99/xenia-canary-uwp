@@ -880,6 +880,13 @@ void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
     show_menu_ = !show_menu_;
     just_opened = show_menu_;
   }
+  // Otherwise the same button presses used to navigate this menu (the B
+  // button to Resume, in particular) would simultaneously reach the running
+  // game's own input handling underneath it.
+  if (emulator_window_.emulator() && emulator_window_.emulator()->input_system()) {
+    emulator_window_.emulator()->input_system()->SetInputSuppressed(
+        show_menu_);
+  }
   if (!show_menu_) {
     return;
   }

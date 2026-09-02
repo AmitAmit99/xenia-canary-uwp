@@ -267,6 +267,17 @@ using namespace xe::gpu;
 const std::string kRecentlyPlayedTitlesFilename = "recent.toml";
 const std::string kBaseTitle = "Xenia-canary";
 
+// cvar::ConfigVars->find(name)->second, used throughout the settings UI
+// below, is undefined behavior if the cvar isn't registered - find()
+// returns end() rather than throwing. Returns nullptr instead in that case.
+template <typename T>
+static cvar::ConfigVar<T>* FindConfigVar(const char* name) {
+  auto it = cvar::ConfigVars->find(name);
+  return it != cvar::ConfigVars->end()
+             ? dynamic_cast<cvar::ConfigVar<T>*>(it->second)
+             : nullptr;
+}
+
 namespace {
 std::shared_ptr<ui::ImmediateTexture> LoadTextureFromFile(
     ui::ImGuiDrawer* imgui_drawer, const std::string& asset_path,
@@ -927,14 +938,21 @@ void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
       config::SaveConfig();
     }
 
-    // Lets you jump straight to a different recently played title without
-    // backing out to the dashboard first - there's no in-process "return to
-    // dashboard" from a running title on this port (see ExitApplication),
-    // so this is the only mid-game way to switch games at all.
+    // RunTitle() (unchanged) refuses to load a title while one is already
+    // open, to avoid crashing the emulator - so this can only actually
+    // switch games from the dashboard, not mid-game. Disabled (rather than
+    // silently no-op'd) with an explanatory note while a title is running,
+    // so tapping an entry mid-game doesn't look like nothing happened.
     if (!emulator_window_.recently_launched_titles_.empty()) {
+      const bool title_open = emulator_window_.emulator()->is_title_open();
       ImGui::Dummy(ImVec2(0.0f, 8.0f));
       ImGui::Separator();
       ImGui::Text("Recently Played");
+      if (title_open) {
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                           "Exit Game first to switch titles.");
+      }
+      ImGui::BeginDisabled(title_open);
       int shown = 0;
       for (const RecentTitleEntry& entry :
            emulator_window_.recently_launched_titles_) {
@@ -951,6 +969,7 @@ void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
         }
         ImGui::PopID();
       }
+      ImGui::EndDisabled();
     }
   }
   ImGui::End();
@@ -7124,49 +7143,51 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
           std::string gpu_value = c_gpu ? c_gpu->GetTypedConfigValue() : "";
           if (!c_gpu) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
-                               "GPU settings unavailable.");
+                               "GPU backend selector unavailable.");
           } else {
-          const char* gpu_preview = gpu_value.empty() ? "Any" : gpu_value.c_str();
-          {
-            ScopedAccentComboStyle accent_combo_style;
-            if (ImGui::BeginCombo("Graphics System", gpu_preview)) {
-              if (ImGui::Selectable("Any", gpu_value == "any")) {
-                c_gpu->SetConfigValue("any");
-                config::SaveConfig();
-              }
+            const char* gpu_preview =
+                gpu_value.empty() ? "Any" : gpu_value.c_str();
+            {
+              ScopedAccentComboStyle accent_combo_style;
+              if (ImGui::BeginCombo("Graphics System", gpu_preview)) {
+                if (ImGui::Selectable("Any", gpu_value == "any")) {
+                  c_gpu->SetConfigValue("any");
+                  config::SaveConfig();
+                }
 
 #if XE_PLATFORM_WIN32
-              if (ImGui::Selectable("D3D12", gpu_value == "d3d12")) {
-                c_gpu->SetConfigValue("d3d12");
-                config::SaveConfig();
-              }
+                if (ImGui::Selectable("D3D12", gpu_value == "d3d12")) {
+                  c_gpu->SetConfigValue("d3d12");
+                  config::SaveConfig();
+                }
 #endif
 
 #if !XE_PLATFORM_WINRT && !XE_PLATFORM_MAC
-              if (ImGui::Selectable("Vulkan", gpu_value == "vulkan")) {
-                c_gpu->SetConfigValue("vulkan");
-                config::SaveConfig();
-              }
+                if (ImGui::Selectable("Vulkan", gpu_value == "vulkan")) {
+                  c_gpu->SetConfigValue("vulkan");
+                  config::SaveConfig();
+                }
 #endif
 
 #if !XE_PLATFORM_WINRT
-              if (ImGui::Selectable("Null", gpu_value == "null")) {
-                c_gpu->SetConfigValue("null");
-                config::SaveConfig();
-              }
+                if (ImGui::Selectable("Null", gpu_value == "null")) {
+                  c_gpu->SetConfigValue("null");
+                  config::SaveConfig();
+                }
 #endif
 
-              ImGui::EndCombo();
+                ImGui::EndCombo();
+              }
             }
-          }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_gpu->description();
-          }
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_gpu->description();
+            }
 
-          ImGui::TextColored(
-              ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
-              "(Restart required to apply. Xbox only supports D3D12.)");
+            ImGui::TextColored(
+                ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
+                "(Restart required to apply. Xbox only supports D3D12.)");
+          }
 
           auto find_disable_context_promotion =
               cvar::ConfigVars->find("disable_context_promotion");
@@ -7230,258 +7251,277 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
             }
           }
 
-          auto c_dxbc_switch = dynamic_cast<cvar::ConfigVar<bool>*>(
-              cvar::ConfigVars->find("dxbc_switch")->second);
-          if (ImGui::Checkbox("DXBC Switch", c_dxbc_switch->current_value())) {
-            c_dxbc_switch->SetConfigValue(
-                !c_dxbc_switch->GetTypedConfigValue());
-            config::SaveConfig();
+          auto c_dxbc_switch = FindConfigVar<bool>("dxbc_switch");
+          if (c_dxbc_switch) {
+            if (ImGui::Checkbox("DXBC Switch",
+                                c_dxbc_switch->current_value())) {
+              c_dxbc_switch->SetConfigValue(
+                  !c_dxbc_switch->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_dxbc_switch->description();
+            }
           }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_dxbc_switch->description();
+          auto c2xmsaa = FindConfigVar<bool>("native_2x_msaa");
+          if (c2xmsaa) {
+            if (ImGui::Checkbox("Native 2X MSAA", c2xmsaa->current_value())) {
+              c2xmsaa->SetConfigValue(!c2xmsaa->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c2xmsaa->description();
+            }
           }
 
-          auto c2xmsaa = dynamic_cast<cvar::ConfigVar<bool>*>(
-              cvar::ConfigVars->find("native_2x_msaa")->second);
-          if (ImGui::Checkbox("Native 2X MSAA", c2xmsaa->current_value())) {
-            c2xmsaa->SetConfigValue(!c2xmsaa->GetTypedConfigValue());
-            config::SaveConfig();
+          auto c_vsync = FindConfigVar<bool>("vsync");
+          if (c_vsync) {
+            if (ImGui::Checkbox("V-Sync", c_vsync->current_value())) {
+              c_vsync->SetConfigValue(!c_vsync->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_vsync->description();
+            }
           }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c2xmsaa->description();
+          auto c_framerate_limit = FindConfigVar<uint64_t>("framerate_limit");
+          if (c_framerate_limit) {
+            int framerate_limit_value =
+                static_cast<int>(c_framerate_limit->GetTypedConfigValue());
+            if (ImGui::SliderInt("Framerate Limit", &framerate_limit_value, 0,
+                                 240)) {
+              c_framerate_limit->SetConfigValue(
+                  static_cast<uint64_t>(framerate_limit_value));
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_framerate_limit->description();
+            }
           }
 
-          auto c_vsync = dynamic_cast<cvar::ConfigVar<bool>*>(
-              cvar::ConfigVars->find("vsync")->second);
-          if (ImGui::Checkbox("V-Sync", c_vsync->current_value())) {
-            c_vsync->SetConfigValue(!c_vsync->GetTypedConfigValue());
-            config::SaveConfig();
-          }
+          auto c_draw_resolution_scaled_texture_offsets = FindConfigVar<bool>(
+              "draw_resolution_scaled_texture_offsets");
+          if (c_draw_resolution_scaled_texture_offsets) {
+            if (ImGui::Checkbox("Draw Resolution Scaled Texture Offsets",
+                                c_draw_resolution_scaled_texture_offsets
+                                    ->current_value())) {
+              c_draw_resolution_scaled_texture_offsets->SetConfigValue(
+                  !c_draw_resolution_scaled_texture_offsets
+                       ->GetTypedConfigValue());
+              config::SaveConfig();
+            }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_vsync->description();
-          }
-
-          auto c_framerate_limit = dynamic_cast<cvar::ConfigVar<uint64_t>*>(
-              cvar::ConfigVars->find("framerate_limit")->second);
-          int framerate_limit_value =
-              static_cast<int>(c_framerate_limit->GetTypedConfigValue());
-          if (ImGui::SliderInt("Framerate Limit", &framerate_limit_value, 0,
-                               240)) {
-            c_framerate_limit->SetConfigValue(
-                static_cast<uint64_t>(framerate_limit_value));
-            config::SaveConfig();
-          }
-
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_framerate_limit->description();
-          }
-
-          auto c_draw_resolution_scaled_texture_offsets =
-              dynamic_cast<cvar::ConfigVar<bool>*>(
-                  cvar::ConfigVars
-                      ->find("draw_resolution_scaled_texture_offsets")
-                      ->second);
-          if (ImGui::Checkbox("Draw Resolution Scaled Texture Offsets",
-                              c_draw_resolution_scaled_texture_offsets
-                                  ->current_value())) {
-            c_draw_resolution_scaled_texture_offsets->SetConfigValue(
-                !c_draw_resolution_scaled_texture_offsets
-                     ->GetTypedConfigValue());
-            config::SaveConfig();
-          }
-
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_draw_resolution_scaled_texture_offsets->description();
+            if (ImGui::IsItemFocused()) {
+              tooltip =
+                  c_draw_resolution_scaled_texture_offsets->description();
+            }
           }
 
           auto c_render_target_path =
-              dynamic_cast<cvar::ConfigVar<std::string>*>(
-                  cvar::ConfigVars->find("render_target_path_d3d12")->second);
-          std::string c_render_target_path_value =
-              c_render_target_path->GetTypedConfigValue();
-          {
-            ScopedAccentComboStyle accent_combo_style;
-            if (ImGui::BeginCombo("Render Target Path",
-                                  (c_render_target_path_value == ""
-                                       ? "Any"
-                                       : c_render_target_path_value.c_str()))) {
-              if (ImGui::Selectable("Any", c_render_target_path_value == "")) {
-                c_render_target_path->SetConfigValue("");
-                config::SaveConfig();
-              }
+              FindConfigVar<std::string>("render_target_path_d3d12");
+          if (c_render_target_path) {
+            std::string c_render_target_path_value =
+                c_render_target_path->GetTypedConfigValue();
+            {
+              ScopedAccentComboStyle accent_combo_style;
+              if (ImGui::BeginCombo(
+                      "Render Target Path",
+                      (c_render_target_path_value == ""
+                           ? "Any"
+                           : c_render_target_path_value.c_str()))) {
+                if (ImGui::Selectable("Any",
+                                      c_render_target_path_value == "")) {
+                  c_render_target_path->SetConfigValue("");
+                  config::SaveConfig();
+                }
 
-              if (ImGui::Selectable("ROV", c_render_target_path_value == "rov")) {
-                c_render_target_path->SetConfigValue("rov");
-                config::SaveConfig();
-              }
+                if (ImGui::Selectable("ROV",
+                                      c_render_target_path_value == "rov")) {
+                  c_render_target_path->SetConfigValue("rov");
+                  config::SaveConfig();
+                }
 
-              if (ImGui::Selectable("RTV", c_render_target_path_value == "rtv")) {
-                c_render_target_path->SetConfigValue("rtv");
-                config::SaveConfig();
-              }
+                if (ImGui::Selectable("RTV",
+                                      c_render_target_path_value == "rtv")) {
+                  c_render_target_path->SetConfigValue("rtv");
+                  config::SaveConfig();
+                }
 
-              ImGui::EndCombo();
+                ImGui::EndCombo();
+              }
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_render_target_path->description();
             }
           }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_render_target_path->description();
+          auto c_gamma_rt = FindConfigVar<bool>("gamma_render_target_as_srgb");
+          if (c_gamma_rt) {
+            if (ImGui::Checkbox("Gamma Render Target As sRGB",
+                                c_gamma_rt->current_value())) {
+              c_gamma_rt->SetConfigValue(!c_gamma_rt->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_gamma_rt->description();
+            }
           }
 
-          auto c_gamma_rt = dynamic_cast<cvar::ConfigVar<bool>*>(
-              cvar::ConfigVars->find("gamma_render_target_as_srgb")->second);
-          if (ImGui::Checkbox("Gamma Render Target As sRGB",
-                              c_gamma_rt->current_value())) {
-            c_gamma_rt->SetConfigValue(!c_gamma_rt->GetTypedConfigValue());
-            config::SaveConfig();
+          auto c_query_lower = FindConfigVar<int32_t>(
+              "query_occlusion_sample_lower_threshold");
+          if (c_query_lower) {
+            int query_lower = c_query_lower->GetTypedConfigValue();
+            if (ImGui::InputInt("Query Occlusion Lower Threshold",
+                                &query_lower)) {
+              c_query_lower->SetConfigValue(query_lower);
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_query_lower->description();
+            }
           }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_gamma_rt->description();
+          auto c_query_upper = FindConfigVar<int32_t>(
+              "query_occlusion_sample_upper_threshold");
+          if (c_query_upper) {
+            int query_upper = c_query_upper->GetTypedConfigValue();
+            if (ImGui::InputInt("Query Occlusion Upper Threshold",
+                                &query_upper)) {
+              c_query_upper->SetConfigValue(query_upper);
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_query_upper->description();
+            }
           }
 
-          auto c_query_lower = dynamic_cast<cvar::ConfigVar<int32_t>*>(
-              cvar::ConfigVars->find("query_occlusion_sample_lower_threshold")
-                  ->second);
-          int query_lower = c_query_lower->GetTypedConfigValue();
-          if (ImGui::InputInt("Query Occlusion Lower Threshold", &query_lower)) {
-            c_query_lower->SetConfigValue(query_lower);
-            config::SaveConfig();
-          }
+          auto c_fuzzy_alpha = FindConfigVar<bool>("use_fuzzy_alpha_epsilon");
+          if (c_fuzzy_alpha) {
+            if (ImGui::Checkbox("Use Fuzzy Alpha Epsilon",
+                                c_fuzzy_alpha->current_value())) {
+              c_fuzzy_alpha->SetConfigValue(
+                  !c_fuzzy_alpha->GetTypedConfigValue());
+              config::SaveConfig();
+            }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_query_lower->description();
-          }
-
-          auto c_query_upper = dynamic_cast<cvar::ConfigVar<int32_t>*>(
-              cvar::ConfigVars->find("query_occlusion_sample_upper_threshold")
-                  ->second);
-          int query_upper = c_query_upper->GetTypedConfigValue();
-          if (ImGui::InputInt("Query Occlusion Upper Threshold", &query_upper)) {
-            c_query_upper->SetConfigValue(query_upper);
-            config::SaveConfig();
-          }
-
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_query_upper->description();
-          }
-
-          auto c_fuzzy_alpha = dynamic_cast<cvar::ConfigVar<bool>*>(
-              cvar::ConfigVars->find("use_fuzzy_alpha_epsilon")->second);
-          if (ImGui::Checkbox("Use Fuzzy Alpha Epsilon",
-                              c_fuzzy_alpha->current_value())) {
-            c_fuzzy_alpha->SetConfigValue(
-                !c_fuzzy_alpha->GetTypedConfigValue());
-            config::SaveConfig();
-          }
-
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_fuzzy_alpha->description();
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_fuzzy_alpha->description();
+            }
           }
 
           auto c_native_stencil_value_output =
-              dynamic_cast<cvar::ConfigVar<bool>*>(
-                  cvar::ConfigVars->find("native_stencil_value_output")
-                      ->second);
-          if (ImGui::Checkbox("Native Stencil Value Output",
-                              c_native_stencil_value_output->current_value())) {
-            c_native_stencil_value_output->SetConfigValue(
-                !c_native_stencil_value_output->GetTypedConfigValue());
-            config::SaveConfig();
-          }
+              FindConfigVar<bool>("native_stencil_value_output");
+          if (c_native_stencil_value_output) {
+            if (ImGui::Checkbox(
+                    "Native Stencil Value Output",
+                    c_native_stencil_value_output->current_value())) {
+              c_native_stencil_value_output->SetConfigValue(
+                  !c_native_stencil_value_output->GetTypedConfigValue());
+              config::SaveConfig();
+            }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_native_stencil_value_output->description();
-          }
-
-          auto c_snorm16_render_target_full_range =
-              dynamic_cast<cvar::ConfigVar<bool>*>(
-                  cvar::ConfigVars->find("snorm16_render_target_full_range")
-                      ->second);
-          if (ImGui::Checkbox("SNORM16 Render Target Full Range",
-                              c_snorm16_render_target_full_range
-                                  ->current_value())) {
-            c_snorm16_render_target_full_range->SetConfigValue(
-                !c_snorm16_render_target_full_range->GetTypedConfigValue());
-            config::SaveConfig();
-          }
-
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_snorm16_render_target_full_range->description();
-          }
-
-          auto c_mrt_edram_used_range_clamp_to_min =
-              dynamic_cast<cvar::ConfigVar<bool>*>(
-                  cvar::ConfigVars
-                      ->find("mrt_edram_used_range_clamp_to_min")
-                      ->second);
-          if (ImGui::Checkbox("MRT EDRAM Used Range Clamp To Min",
-                              c_mrt_edram_used_range_clamp_to_min
-                                  ->current_value())) {
-            c_mrt_edram_used_range_clamp_to_min->SetConfigValue(
-                !c_mrt_edram_used_range_clamp_to_min->GetTypedConfigValue());
-            config::SaveConfig();
-          }
-
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_mrt_edram_used_range_clamp_to_min->description();
-          }
-
-          auto c_store_shaders = dynamic_cast<cvar::ConfigVar<bool>*>(
-              cvar::ConfigVars->find("store_shaders")->second);
-          if (ImGui::Checkbox("Store Shaders", c_store_shaders->current_value())) {
-            c_store_shaders->SetConfigValue(
-                !c_store_shaders->GetTypedConfigValue());
-            config::SaveConfig();
-          }
-
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_store_shaders->description();
-          }
-
-          auto c_scale_x = dynamic_cast<cvar::ConfigVar<int>*>(
-              cvar::ConfigVars->find("draw_resolution_scale_x")->second);
-          auto c_scale_y = dynamic_cast<cvar::ConfigVar<int>*>(
-              cvar::ConfigVars->find("draw_resolution_scale_y")->second);
-          int scale_value = c_scale_x->GetTypedConfigValue();
-          char scale_value_label[32];
-          snprintf(scale_value_label, 32, "%dx", scale_value);
-          {
-            ScopedAccentComboStyle accent_combo_style;
-            if (ImGui::BeginCombo("Draw Resolution Scale", scale_value_label)) {
-              if (ImGui::Selectable("1x", scale_value == 1)) {
-                c_scale_x->SetConfigValue(1);
-                c_scale_y->SetConfigValue(1);
-                config::SaveConfig();
-              }
-
-              if (ImGui::Selectable("2x", scale_value == 2)) {
-                c_scale_x->SetConfigValue(2);
-                c_scale_y->SetConfigValue(2);
-                config::SaveConfig();
-              }
-
-              if (ImGui::Selectable("3x", scale_value == 3)) {
-                c_scale_x->SetConfigValue(3);
-                c_scale_y->SetConfigValue(3);
-                config::SaveConfig();
-              }
-
-              ImGui::EndCombo();
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_native_stencil_value_output->description();
             }
           }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_scale_x->description();
+          auto c_snorm16_render_target_full_range =
+              FindConfigVar<bool>("snorm16_render_target_full_range");
+          if (c_snorm16_render_target_full_range) {
+            if (ImGui::Checkbox("SNORM16 Render Target Full Range",
+                                c_snorm16_render_target_full_range
+                                    ->current_value())) {
+              c_snorm16_render_target_full_range->SetConfigValue(
+                  !c_snorm16_render_target_full_range->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_snorm16_render_target_full_range->description();
+            }
           }
 
-          ImGui::TextColored(
-              ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
-              "(Changing this from x1 will cause all games to crash on Xbox)");
-          }  // c_gpu
+          auto c_mrt_edram_used_range_clamp_to_min =
+              FindConfigVar<bool>("mrt_edram_used_range_clamp_to_min");
+          if (c_mrt_edram_used_range_clamp_to_min) {
+            if (ImGui::Checkbox("MRT EDRAM Used Range Clamp To Min",
+                                c_mrt_edram_used_range_clamp_to_min
+                                    ->current_value())) {
+              c_mrt_edram_used_range_clamp_to_min->SetConfigValue(
+                  !c_mrt_edram_used_range_clamp_to_min->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_mrt_edram_used_range_clamp_to_min->description();
+            }
+          }
+
+          auto c_store_shaders = FindConfigVar<bool>("store_shaders");
+          if (c_store_shaders) {
+            if (ImGui::Checkbox("Store Shaders",
+                                c_store_shaders->current_value())) {
+              c_store_shaders->SetConfigValue(
+                  !c_store_shaders->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_store_shaders->description();
+            }
+          }
+
+          auto c_scale_x = FindConfigVar<int>("draw_resolution_scale_x");
+          auto c_scale_y = FindConfigVar<int>("draw_resolution_scale_y");
+          if (c_scale_x && c_scale_y) {
+            int scale_value = c_scale_x->GetTypedConfigValue();
+            char scale_value_label[32];
+            snprintf(scale_value_label, 32, "%dx", scale_value);
+            {
+              ScopedAccentComboStyle accent_combo_style;
+              if (ImGui::BeginCombo("Draw Resolution Scale",
+                                    scale_value_label)) {
+                if (ImGui::Selectable("1x", scale_value == 1)) {
+                  c_scale_x->SetConfigValue(1);
+                  c_scale_y->SetConfigValue(1);
+                  config::SaveConfig();
+                }
+
+                if (ImGui::Selectable("2x", scale_value == 2)) {
+                  c_scale_x->SetConfigValue(2);
+                  c_scale_y->SetConfigValue(2);
+                  config::SaveConfig();
+                }
+
+                if (ImGui::Selectable("3x", scale_value == 3)) {
+                  c_scale_x->SetConfigValue(3);
+                  c_scale_y->SetConfigValue(3);
+                  config::SaveConfig();
+                }
+
+                ImGui::EndCombo();
+              }
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_scale_x->description();
+            }
+
+            ImGui::TextColored(
+                ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
+                "(Changing this from x1 will cause all games to crash on "
+                "Xbox)");
+          }
         }
 
         if (settings_selected_section == 4) {

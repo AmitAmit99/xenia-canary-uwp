@@ -94,6 +94,15 @@ bool UserTracker::UnlockAchievement(uint64_t xuid, uint32_t achievement_id) {
     return false;
   }
 
+  // Guest code (or a save/profile edge case) re-triggering an unlock for an
+  // already-unlocked achievement used to just double-count it silently; now
+  // that it also shows a toast, that would be a second, spurious on-screen
+  // notification for the exact same achievement.
+  if (gpd_achievement->flags &
+      static_cast<uint32_t>(AchievementFlags::kAchieved)) {
+    return true;
+  }
+
   title_info->achievements_unlocked++;
   title_info->gamerscore_earned += spa_achievement->gamerscore;
 

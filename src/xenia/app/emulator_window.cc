@@ -334,9 +334,6 @@ EmulatorWindow::EmulatorWindow(Emulator* emulator,
 
   LoadRecentlyLaunchedTitles();
 
-  pause_menu_dialog_ = std::unique_ptr<PauseMenuDialog>(
-      new PauseMenuDialog(imgui_drawer_.get(), *this));
-
 #if XE_PLATFORM_WINRT
   if (cvars::skip_frontend) {
     UWP::SelectGameFromWinRT(emulator_);
@@ -345,6 +342,13 @@ EmulatorWindow::EmulatorWindow(Emulator* emulator,
         new WinRTFrontendDialog(imgui_drawer_.get(), *this));
   }
 #endif  // XE_PLATFORM_WINRT
+
+  // Registered after gamelist_ above (was briefly registered before it,
+  // which changed the pre-existing dialog draw order for the first time
+  // ever - restored the original order out of caution given a reported
+  // crash on frontend startup with no diagnostic logged before it).
+  pause_menu_dialog_ = std::unique_ptr<PauseMenuDialog>(
+      new PauseMenuDialog(imgui_drawer_.get(), *this));
 }
 
 std::unique_ptr<EmulatorWindow> EmulatorWindow::Create(

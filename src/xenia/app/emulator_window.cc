@@ -892,14 +892,19 @@ void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
     ImGui::Dummy(ImVec2(0.0f, 8.0f));
     ImGui::Separator();
     ImGui::Text("Quick Settings");
-    auto c_mute = dynamic_cast<cvar::ConfigVar<bool>*>(
-        cvar::ConfigVars->find("mute")->second);
+    auto find_mute = cvar::ConfigVars->find("mute");
+    auto c_mute = find_mute != cvar::ConfigVars->end()
+                      ? dynamic_cast<cvar::ConfigVar<bool>*>(find_mute->second)
+                      : nullptr;
     if (c_mute && ImGui::Checkbox("Mute Audio", c_mute->current_value())) {
       c_mute->SetConfigValue(!c_mute->GetTypedConfigValue());
       config::SaveConfig();
     }
-    auto c_vibration = dynamic_cast<cvar::ConfigVar<bool>*>(
-        cvar::ConfigVars->find("vibration")->second);
+    auto find_vibration = cvar::ConfigVars->find("vibration");
+    auto c_vibration =
+        find_vibration != cvar::ConfigVars->end()
+            ? dynamic_cast<cvar::ConfigVar<bool>*>(find_vibration->second)
+            : nullptr;
     if (c_vibration && ImGui::Checkbox("Controller Vibration",
                                        c_vibration->current_value())) {
       c_vibration->SetConfigValue(!c_vibration->GetTypedConfigValue());
@@ -7095,14 +7100,16 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
         }
 
         if (settings_selected_section == 3) {
-          static bool gpu_settings_debug_logged = false;
-          if (!gpu_settings_debug_logged) {
-            gpu_settings_debug_logged = true;
-          }
-
-          auto c_gpu = dynamic_cast<cvar::ConfigVar<std::string>*>(
-              cvar::ConfigVars->find("gpu")->second);
-          std::string gpu_value = c_gpu->GetTypedConfigValue();
+          auto find_gpu_cvar = cvar::ConfigVars->find("gpu");
+          auto c_gpu = find_gpu_cvar != cvar::ConfigVars->end()
+                           ? dynamic_cast<cvar::ConfigVar<std::string>*>(
+                                 find_gpu_cvar->second)
+                           : nullptr;
+          std::string gpu_value = c_gpu ? c_gpu->GetTypedConfigValue() : "";
+          if (!c_gpu) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                               "GPU settings unavailable.");
+          } else {
           const char* gpu_preview = gpu_value.empty() ? "Any" : gpu_value.c_str();
           {
             ScopedAccentComboStyle accent_combo_style;
@@ -7145,49 +7152,66 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
               ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
               "(Restart required to apply. Xbox only supports D3D12.)");
 
+          auto find_disable_context_promotion =
+              cvar::ConfigVars->find("disable_context_promotion");
           auto c_disable_context_promotion =
-              dynamic_cast<cvar::ConfigVar<bool>*>(
-                  cvar::ConfigVars->find("disable_context_promotion")
-                      ->second);
-          if (ImGui::Checkbox("Disable Context Promotion",
-                              c_disable_context_promotion->current_value())) {
-            c_disable_context_promotion->SetConfigValue(
-                !c_disable_context_promotion->GetTypedConfigValue());
-            config::SaveConfig();
+              find_disable_context_promotion != cvar::ConfigVars->end()
+                  ? dynamic_cast<cvar::ConfigVar<bool>*>(
+                        find_disable_context_promotion->second)
+                  : nullptr;
+          if (c_disable_context_promotion) {
+            if (ImGui::Checkbox(
+                    "Disable Context Promotion",
+                    c_disable_context_promotion->current_value())) {
+              c_disable_context_promotion->SetConfigValue(
+                  !c_disable_context_promotion->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_disable_context_promotion->description();
+            }
           }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_disable_context_promotion->description();
-          }
-
+          auto find_allow_invalid_upload_range =
+              cvar::ConfigVars->find("gpu_allow_invalid_upload_range");
           auto c_allow_invalid_upload_range =
-              dynamic_cast<cvar::ConfigVar<bool>*>(
-                  cvar::ConfigVars->find("gpu_allow_invalid_upload_range")
-                      ->second);
-          if (ImGui::Checkbox(
-                  "Allow Invalid Upload Range",
-                  c_allow_invalid_upload_range->current_value())) {
-            c_allow_invalid_upload_range->SetConfigValue(
-                !c_allow_invalid_upload_range->GetTypedConfigValue());
-            config::SaveConfig();
+              find_allow_invalid_upload_range != cvar::ConfigVars->end()
+                  ? dynamic_cast<cvar::ConfigVar<bool>*>(
+                        find_allow_invalid_upload_range->second)
+                  : nullptr;
+          if (c_allow_invalid_upload_range) {
+            if (ImGui::Checkbox(
+                    "Allow Invalid Upload Range",
+                    c_allow_invalid_upload_range->current_value())) {
+              c_allow_invalid_upload_range->SetConfigValue(
+                  !c_allow_invalid_upload_range->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_allow_invalid_upload_range->description();
+            }
           }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_allow_invalid_upload_range->description();
-          }
+          auto find_allow_invalid =
+              cvar::ConfigVars->find("gpu_allow_invalid_fetch_constants");
+          auto c_allow_invalid =
+              find_allow_invalid != cvar::ConfigVars->end()
+                  ? dynamic_cast<cvar::ConfigVar<bool>*>(
+                        find_allow_invalid->second)
+                  : nullptr;
+          if (c_allow_invalid) {
+            if (ImGui::Checkbox("Allow Invalid Fetch Constants",
+                                c_allow_invalid->current_value())) {
+              c_allow_invalid->SetConfigValue(
+                  !c_allow_invalid->GetTypedConfigValue());
+              config::SaveConfig();
+            }
 
-          auto c_allow_invalid = dynamic_cast<cvar::ConfigVar<bool>*>(
-              cvar::ConfigVars->find("gpu_allow_invalid_fetch_constants")
-                  ->second);
-          if (ImGui::Checkbox("Allow Invalid Fetch Constants",
-                              c_allow_invalid->current_value())) {
-            c_allow_invalid->SetConfigValue(
-                !c_allow_invalid->GetTypedConfigValue());
-            config::SaveConfig();
-          }
-
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_allow_invalid->description();
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_allow_invalid->description();
+            }
           }
 
           auto c_dxbc_switch = dynamic_cast<cvar::ConfigVar<bool>*>(
@@ -7441,6 +7465,7 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
           ImGui::TextColored(
               ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
               "(Changing this from x1 will cause all games to crash on Xbox)");
+          }  // c_gpu
         }
 
         if (settings_selected_section == 4) {

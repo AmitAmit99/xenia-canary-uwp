@@ -105,6 +105,17 @@ DEFINE_bool(fullscreen, false, "Whether to launch the emulator in fullscreen.",
 DEFINE_bool(controller_hotkeys, false,
         "Hotkeys for Xbox and PS controllers.", "General");
 
+// Never actually registered despite the Settings UI (section 0's Language
+// combo, and the per-game config editor's enum handling for it) always
+// having assumed it exists - cvar::ConfigVars->find("user_language") was
+// landing on end() and getting dereferenced unconditionally, an immediate
+// crash on literally every visit to the Settings tab (it always resets to
+// section 0 on open). Values match kernel::XLanguage (1=English, 2=Japanese,
+// ... 12=Russian, per the kLanguageOptions/enum_values lists already in this
+// file).
+DEFINE_int32(user_language, 1, "Guest system language (1=English, 2=Japanese, 3=German, 4=French, 5=Spanish, 6=Italian, 7=Korean, 8=Traditional Chinese, 9=Portuguese, 10=Simplified Chinese, 11=Polish, 12=Russian).",
+            "General");
+
 DECLARE_bool(skip_frontend);
 
 DEFINE_bool(skip_frontend, false,

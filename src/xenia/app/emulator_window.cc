@@ -2920,7 +2920,37 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
           io.DisplaySize);
       frontend_draw_list->PopClipRect();
     }
-    
+
+    // Tint the panel background with a color unique to the active blade -
+    // matching the real Xbox dashboard's per-blade background color (each
+    // blade tints its whole panel, not just its tab label). Drawn under the
+    // interface overlay graphic and all UI content, same as the real
+    // dashboard layers its blade color under the metallic rail artwork.
+    {
+      const ImU32 kBladeTintColors[4] = {
+          IM_COL32(20, 130, 20, 255),   // games - green
+          IM_COL32(20, 70, 150, 255),   // settings - blue
+          IM_COL32(150, 100, 10, 255),  // paths - amber
+          IM_COL32(120, 20, 120, 255),  // about - purple
+      };
+      constexpr float kBladeTintFadeInSeconds = 0.25f;
+      constexpr float kBladeTintMaxAlpha = 90.0f;
+      float seconds_since_switch = std::chrono::duration<float>(
+                                       std::chrono::steady_clock::now() -
+                                       last_page_switch_time_)
+                                       .count();
+      float tint_fade =
+          std::clamp(seconds_since_switch / kBladeTintFadeInSeconds, 0.0f,
+                    1.0f);
+      ImU32 tint = kBladeTintColors[static_cast<int>(active_frontend_page_)];
+      uint8_t tint_alpha =
+          static_cast<uint8_t>(kBladeTintMaxAlpha * tint_fade);
+      tint = (tint & 0x00FFFFFFu) | (static_cast<ImU32>(tint_alpha) << 24);
+      frontend_draw_list->PushClipRectFullScreen();
+      frontend_draw_list->AddRectFilled(ImVec2(0, 0), io.DisplaySize, tint);
+      frontend_draw_list->PopClipRect();
+    }
+
     // Draw interface overlay on top if available (top layer)
     frontend_splitter.SetCurrentChannel(frontend_draw_list, 2);
     if (auto background_tex = GetOrCreateBackground()) {
@@ -9013,27 +9043,7 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
          22.0f * uy}};
 
     const char* tab_labels[4] = {"games", "settings", "paths", "about"};
-    // One color per tab (not per slot) so a given tab keeps its identity as
-    // it moves between slot positions while cycling with LB/RB - loosely
-    // matching the real Xbox Blades UI's per-blade color coding.
-    const ImU32 tab_colors[4] = {
-        IM_COL32(30, 110, 30, 255),    // games - green
-        IM_COL32(30, 60, 140, 255),    // settings - blue
-        IM_COL32(140, 100, 20, 255),   // paths - amber
-        IM_COL32(110, 30, 110, 255),   // about - purple
-    };
     int active_index = static_cast<int>(active_frontend_page_);
-
-    // Fade the tab labels in over a short window after a blade switch,
-    // instead of them snapping straight to full opacity - a small nod to
-    // the real Blades UI's tab-change animation.
-    constexpr float kTabFadeInSeconds = 0.25f;
-    float seconds_since_switch = std::chrono::duration<float>(
-                                     std::chrono::steady_clock::now() -
-                                     last_page_switch_time_)
-                                     .count();
-    float tab_fade_alpha =
-        std::clamp(seconds_since_switch / kTabFadeInSeconds, 0.0f, 1.0f);
 
     // Check if tabs text should be hidden
     auto c_hide_tabs = dynamic_cast<cvar::ConfigVar<bool>*>(
@@ -9043,16 +9053,8 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
     if (!hide_tabs_text) {
       for (int i = 0; i < 4; ++i) {
         int slot_index = (active_index + i) % 4;
-        ImU32 color = tab_colors[slot_index];
-        // Only the newly-active tab (slot 0) animates in - the other three
-        // are unaffected by which one just became active.
-        if (i == 0) {
-          uint8_t alpha = static_cast<uint8_t>(
-              255.0f * (0.4f + 0.6f * tab_fade_alpha));
-          color = (color & 0x00FFFFFFu) | (static_cast<ImU32>(alpha) << 24);
-        }
         draw_rotated_text(tab_labels[slot_index], slots[i].pos, slots[i].font_size,
-                          color, slots[i].rotation);
+                          IM_COL32(0, 0, 0, 255), slots[i].rotation);
       }
     }
     const float footer_text_size = 13.5f * uy;

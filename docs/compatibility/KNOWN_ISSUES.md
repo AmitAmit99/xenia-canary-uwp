@@ -24,5 +24,10 @@ Reported via a third-party video showing an extreme, rotated close-up during a d
 ### Settings/main-menu blade crash — FIXED
 Was crashing on every visit to the Settings tab (it always resets to its first section on open). Root cause confirmed via crash-log trace logging: that section's Language dropdown looked up a setting, `user_language`, that was never actually registered anywhere in the code, despite three places in the UI assuming it existed - dereferencing a failed lookup unconditionally is undefined behavior. Fixed by registering the missing cvar. Two earlier guesses (a cvar guard in an unrelated section, dialog registration order) were both red herrings.
 
+A second instance of the same bug class was found and fixed shortly after: scrolling into Settings section 9 (Video) crashed the same way, this time over a resolution setting (`internal_display_resolution`) that also never existed. A systematic sweep of every setting lookup in the Settings UI against the actual registered settings found 5 more UI controls referencing settings that don't exist, but none of them can crash - they're all guarded and just don't render. As of this sweep, no more crash-causing missing-setting lookups are known to remain in Settings.
+
 ### Mid-game pause menu closing itself after ~1 second — FIXED
 The fix for the pause menu's controller input conflicting with the game's own input (both reacting to the same button presses) initially suppressed the wrong function, which also blinded the pause menu's own gamepad navigation. Fixed by moving the suppression to the same mechanism Xenia's built-in system dialogs already use, which only affects the guest game, not the UI.
+
+## UI polish
+- Each blade tab (games/settings/paths/about) now tints the whole panel background with its own color, plus a brief fade-in when switching blades with LB/RB - matching the real Xbox 360 dashboard's per-blade background coloring (the first attempt at this only colored the tab label text, not the background - corrected after a reference screenshot comparison).

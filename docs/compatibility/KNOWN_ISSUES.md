@@ -4,10 +4,12 @@ Findings confirmed through actual testing on Xbox Series X in Developer Mode, as
 
 ## Blocked — no fix possible on Xbox
 
-### WWE SmackDown vs. Raw 2011 (SVR11)
+### WWE SmackDown vs. Raw 2011 (SVR11), title ID `5451085D`
 Hangs the D3D12 backend during gameplay. Root-caused to ~148,000 single-vertex memexport draws issued in a tight loop, overwhelming D3D12's per-draw submission overhead within Windows' TDR window. Draw-batching was ruled out as a fix — most of these draws don't read from a walkable vertex buffer at all (memexport-only), so there's no safe way to merge them.
 
 The only known working fix is switching to the Vulkan graphics backend, which handles this draw pattern without issue on PC. **Vulkan does not exist on Xbox at the driver level at all** (confirmed by actually linking it into the Xbox build and testing — it's not a missing flag, there's no Vulkan driver on Xbox hardware for any app, ever). This title cannot currently be fixed on this port without a much deeper D3D12 backend rewrite.
+
+As of the version noted in `CHANGELOG.md`, launching this specific title ID is now blocked with an explanatory message instead of being allowed to hang with no explanation. See `EmulatorWindow::RunTitle`'s `kVulkanRequiredTitleIds` set — add a title ID there for any other title confirmed to have the same "only fixable via Vulkan" root cause.
 
 ## Under investigation
 
@@ -19,5 +21,8 @@ Reported via a third-party video showing an extreme, rotated close-up during a d
 
 ## App-level issues (not game-specific)
 
-### Settings/main-menu blade crash
-Multiple users have reported the app crashing when navigating to the Settings blade via LB/RB, sometimes immediately on frontend startup with no deliberate interaction. Two hypotheses have been tested and ruled out (a missing-cvar guard, and dialog registration order) — neither fixed it. Diagnostic logging has been added (as of the version noted in `CHANGELOG.md`) to pinpoint the exact crash location on the next occurrence, since further blind fixes aren't productive without that data.
+### Settings/main-menu blade crash — FIXED
+Was crashing on every visit to the Settings tab (it always resets to its first section on open). Root cause confirmed via crash-log trace logging: that section's Language dropdown looked up a setting, `user_language`, that was never actually registered anywhere in the code, despite three places in the UI assuming it existed - dereferencing a failed lookup unconditionally is undefined behavior. Fixed by registering the missing cvar. Two earlier guesses (a cvar guard in an unrelated section, dialog registration order) were both red herrings.
+
+### Mid-game pause menu closing itself after ~1 second — FIXED
+The fix for the pause menu's controller input conflicting with the game's own input (both reacting to the same button presses) initially suppressed the wrong function, which also blinded the pause menu's own gamepad navigation. Fixed by moving the suppression to the same mechanism Xenia's built-in system dialogs already use, which only affects the guest game, not the UI.

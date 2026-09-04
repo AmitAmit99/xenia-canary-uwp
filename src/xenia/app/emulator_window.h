@@ -10,6 +10,7 @@
 #ifndef XENIA_APP_EMULATOR_WINDOW_H_
 #define XENIA_APP_EMULATOR_WINDOW_H_
 
+#include <chrono>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -264,6 +265,11 @@ class EmulatorWindow {
     // OnDraw call rather than immediately - avoids calling
     // UWP::ExitApplication() mid-frame, partway through rendering.
     bool exit_requested_ = false;
+    // Set once, at construction (effectively app startup, since this dialog
+    // is created once in EmulatorWindow's constructor) - shown in the pause
+    // menu as a simple running session-length display.
+    std::chrono::steady_clock::time_point session_start_time_ =
+        std::chrono::steady_clock::now();
   };
 
 #if XE_PLATFORM_WINRT

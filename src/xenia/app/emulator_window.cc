@@ -976,6 +976,26 @@ void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
       c_vibration->SetConfigValue(!c_vibration->GetTypedConfigValue());
       config::SaveConfig();
     }
+    auto find_vsync = cvar::ConfigVars->find("vsync");
+    auto c_vsync =
+        find_vsync != cvar::ConfigVars->end()
+            ? dynamic_cast<cvar::ConfigVar<bool>*>(find_vsync->second)
+            : nullptr;
+    if (c_vsync &&
+        ImGui::Checkbox("V-Sync", c_vsync->current_value())) {
+      c_vsync->SetConfigValue(!c_vsync->GetTypedConfigValue());
+      config::SaveConfig();
+    }
+
+    {
+      auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::steady_clock::now() - session_start_time_);
+      int64_t total_seconds = elapsed.count();
+      ImGui::Text("Session time: %02lld:%02lld:%02lld",
+                  static_cast<long long>(total_seconds / 3600),
+                  static_cast<long long>((total_seconds / 60) % 60),
+                  static_cast<long long>(total_seconds % 60));
+    }
 
     // RunTitle() (unchanged) refuses to load a title while one is already
     // open, to avoid crashing the emulator - so this can only actually
@@ -2609,6 +2629,24 @@ xe::X_STATUS EmulatorWindow::RunTitle(const std::filesystem::path& path_to_file)
     xe::ui::ImGuiDialog::ShowMessageBox(
         imgui_drawer_.get(), "Title Launch Failed!",
         "Failed to launch title.\n\nCheck xenia.log for technical details.");
+  } else if (const std::set<uint32_t> kVulkanRequiredTitleIds = {
+                 0x5451085D,  // WWE SmackDown vs. Raw 2011: hangs the D3D12
+                              // backend under sustained memexport draw load;
+                              // the only known fix is the Vulkan backend,
+                              // which has no driver on Xbox at all.
+             };
+             kVulkanRequiredTitleIds.count(emulator_->title_id())) {
+    // Terminate now, before the guest reaches whatever draw pattern
+    // actually hangs the backend, rather than letting the user sit through
+    // a hang with no explanation.
+    emulator_->TerminateTitle();
+    xe::ui::ImGuiDialog::ShowMessageBox(
+        imgui_drawer_.get(), "Title Cannot Run on Xbox",
+        "This title's known D3D12 hang can only be worked around by "
+        "switching to the Vulkan graphics backend, which requires a "
+        "Vulkan driver that does not exist on Xbox hardware at all (D3D12 "
+        "is the only backend the console supports). This title cannot "
+        "currently run on this port.");
   } else {
     AddRecentlyLaunchedTitle(path_to_file, std::string(emulator_->title_name()));
 

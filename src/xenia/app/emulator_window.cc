@@ -2951,6 +2951,7 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
       int page_index = static_cast<int>(active_frontend_page_);
       page_index = (page_index + page_count - 1) % page_count;
       active_frontend_page_ = static_cast<FrontendPage>(page_index);
+      last_page_switch_time_ = std::chrono::steady_clock::now();
       XELOGI("Frontend: LB -> page {}", page_index);
     }
     if (!blade_switch_blocked &&
@@ -2958,6 +2959,7 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
       int page_index = static_cast<int>(active_frontend_page_);
       page_index = (page_index + 1) % page_count;
       active_frontend_page_ = static_cast<FrontendPage>(page_index);
+      last_page_switch_time_ = std::chrono::steady_clock::now();
       XELOGI("Frontend: RB -> page {}", page_index);
     }
 
@@ -8339,54 +8341,102 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
         }
 
         if (settings_selected_section == 9) {
-          auto c_internal_resolution = dynamic_cast<cvar::ConfigVar<uint32_t>*>(
-              cvar::ConfigVars->find("internal_display_resolution")->second);
-          uint32_t resolution_value = c_internal_resolution->GetTypedConfigValue();
-          const char* resolution_labels[] = {
-              "640x480",   "640x576",   "720x480",   "720x576",  "800x600",
-              "848x480",   "1024x768",  "1152x864",  "1280x720", "1280x768",
-              "1280x960",  "1280x1024", "1360x768",  "1440x900", "1680x1050",
-              "1920x540",  "1920x1080"};
-          const uint32_t max_resolution_index = 17;
-          uint32_t ui_index = resolution_value;
-          if (ui_index > max_resolution_index) {
-            ui_index = max_resolution_index;
-          }
-          const char* resolution_preview =
-              ui_index == 17 ? "Custom" : resolution_labels[ui_index];
-          {
-            ScopedAccentComboStyle accent_combo_style;
-            if (ImGui::BeginCombo("Internal Display Resolution", resolution_preview)) {
-              for (uint32_t i = 0; i <= 16; ++i) {
-                if (ImGui::Selectable(resolution_labels[i], ui_index == i)) {
-                  c_internal_resolution->SetConfigValue(i);
+          // There is no "internal_display_resolution" preset-index cvar -
+          // never was (grep confirms no DEFINE_ for it anywhere), despite
+          // this section unconditionally dereferencing a lookup for it -
+          // guaranteed crash, same bug class as the user_language one fixed
+          // earlier. The two cvars that actually exist and are actually
+          // read by GraphicsSystem::GetResolution() are
+          // custom_internal_display_resolution_x/y (0 on either means "not
+          // set, fall back to the guest's own XConfig setting") - rewritten
+          // below to drive those directly instead of a cvar that was never
+          // real.
+          auto find_custom_x =
+              cvar::ConfigVars->find("custom_internal_display_resolution_x");
+          auto find_custom_y =
+              cvar::ConfigVars->find("custom_internal_display_resolution_y");
+          auto c_internal_resolution_x =
+              find_custom_x != cvar::ConfigVars->end()
+                  ? dynamic_cast<cvar::ConfigVar<uint32_t>*>(
+                        find_custom_x->second)
+                  : nullptr;
+          auto c_internal_resolution_y =
+              find_custom_y != cvar::ConfigVars->end()
+                  ? dynamic_cast<cvar::ConfigVar<uint32_t>*>(
+                        find_custom_y->second)
+                  : nullptr;
+          if (!c_internal_resolution_x || !c_internal_resolution_y) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                               "Display resolution settings unavailable.");
+          } else {
+            struct ResolutionPreset {
+              const char* label;
+              uint32_t width;
+              uint32_t height;
+            };
+            static constexpr ResolutionPreset kResolutionPresets[] = {
+                {"640x480", 640, 480},     {"640x576", 640, 576},
+                {"720x480", 720, 480},     {"720x576", 720, 576},
+                {"800x600", 800, 600},     {"848x480", 848, 480},
+                {"1024x768", 1024, 768},   {"1152x864", 1152, 864},
+                {"1280x720", 1280, 720},   {"1280x768", 1280, 768},
+                {"1280x960", 1280, 960},   {"1280x1024", 1280, 1024},
+                {"1360x768", 1360, 768},   {"1440x900", 1440, 900},
+                {"1680x1050", 1680, 1050}, {"1920x540", 1920, 540},
+                {"1920x1080", 1920, 1080},
+            };
+
+            uint32_t current_x = c_internal_resolution_x->GetTypedConfigValue();
+            uint32_t current_y = c_internal_resolution_y->GetTypedConfigValue();
+            const char* resolution_preview =
+                (current_x == 0 && current_y == 0) ? "Default (guest setting)"
+                                                    : "Custom";
+            for (const auto& preset : kResolutionPresets) {
+              if (current_x == preset.width && current_y == preset.height) {
+                resolution_preview = preset.label;
+                break;
+              }
+            }
+            {
+              ScopedAccentComboStyle accent_combo_style;
+              if (ImGui::BeginCombo("Internal Display Resolution",
+                                    resolution_preview)) {
+                if (ImGui::Selectable("Default (guest setting)",
+                                      current_x == 0 && current_y == 0)) {
+                  c_internal_resolution_x->SetConfigValue(0);
+                  c_internal_resolution_y->SetConfigValue(0);
                   config::SaveConfig();
                 }
+                for (const auto& preset : kResolutionPresets) {
+                  if (ImGui::Selectable(preset.label,
+                                        current_x == preset.width &&
+                                            current_y == preset.height)) {
+                    c_internal_resolution_x->SetConfigValue(preset.width);
+                    c_internal_resolution_y->SetConfigValue(preset.height);
+                    config::SaveConfig();
+                  }
+                }
+                if (ImGui::Selectable("Custom",
+                                      resolution_preview[0] == 'C')) {
+                  // Leave x/y as-is - the Custom Width/Height fields below
+                  // edit them directly. Nudge off (0, 0) so the combo
+                  // doesn't keep showing "Default" if the user picks
+                  // "Custom" without having typed anything yet.
+                  if (current_x == 0 && current_y == 0) {
+                    c_internal_resolution_x->SetConfigValue(1280);
+                    c_internal_resolution_y->SetConfigValue(720);
+                    config::SaveConfig();
+                  }
+                }
+                ImGui::EndCombo();
               }
-              if (ImGui::Selectable("Custom", ui_index == 17)) {
-                c_internal_resolution->SetConfigValue(17);
-                config::SaveConfig();
-              }
-              ImGui::EndCombo();
             }
-          }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_internal_resolution->description();
-          }
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_internal_resolution_x->description();
+            }
 
-          if (c_internal_resolution->GetTypedConfigValue() == 17) {
-            auto c_internal_resolution_x =
-                dynamic_cast<cvar::ConfigVar<uint32_t>*>(
-                    cvar::ConfigVars->find("internal_display_resolution_x")
-                        ->second);
-            auto c_internal_resolution_y =
-                dynamic_cast<cvar::ConfigVar<uint32_t>*>(
-                    cvar::ConfigVars->find("internal_display_resolution_y")
-                        ->second);
-
-            int custom_x =
-                static_cast<int>(c_internal_resolution_x->GetTypedConfigValue());
+            int custom_x = static_cast<int>(current_x);
             if (ImGui::InputInt("Custom Resolution Width", &custom_x)) {
               if (custom_x < 1) custom_x = 1;
               if (custom_x > 1920) custom_x = 1920;
@@ -8395,8 +8445,7 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
               config::SaveConfig();
             }
 
-            int custom_y =
-                static_cast<int>(c_internal_resolution_y->GetTypedConfigValue());
+            int custom_y = static_cast<int>(current_y);
             if (ImGui::InputInt("Custom Resolution Height", &custom_y)) {
               if (custom_y < 1) custom_y = 1;
               if (custom_y > 1080) custom_y = 1080;
@@ -8406,40 +8455,44 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
             }
           }
 
-          auto c_widescreen = dynamic_cast<cvar::ConfigVar<bool>*>(
-              cvar::ConfigVars->find("widescreen")->second);
-          if (ImGui::Checkbox("Widescreen", c_widescreen->current_value())) {
-            c_widescreen->SetConfigValue(!c_widescreen->GetTypedConfigValue());
-            config::SaveConfig();
+          auto c_widescreen = FindConfigVar<bool>("widescreen");
+          if (c_widescreen) {
+            if (ImGui::Checkbox("Widescreen",
+                                c_widescreen->current_value())) {
+              c_widescreen->SetConfigValue(!c_widescreen->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_widescreen->description();
+            }
           }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_widescreen->description();
+          auto c_use_50hz_mode = FindConfigVar<bool>("use_50Hz_mode");
+          if (c_use_50hz_mode) {
+            if (ImGui::Checkbox("Use 50Hz Video Mode",
+                                c_use_50hz_mode->current_value())) {
+              c_use_50hz_mode->SetConfigValue(
+                  !c_use_50hz_mode->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_use_50hz_mode->description();
+            }
           }
 
-          auto c_use_50hz_mode = dynamic_cast<cvar::ConfigVar<bool>*>(
-              cvar::ConfigVars->find("use_50Hz_mode")->second);
-          if (ImGui::Checkbox("Use 50Hz Video Mode",
-                              c_use_50hz_mode->current_value())) {
-            c_use_50hz_mode->SetConfigValue(
-                !c_use_50hz_mode->GetTypedConfigValue());
-            config::SaveConfig();
-          }
+          auto c_interlaced = FindConfigVar<bool>("interlaced");
+          if (c_interlaced) {
+            if (ImGui::Checkbox("Interlaced Video Mode",
+                                c_interlaced->current_value())) {
+              c_interlaced->SetConfigValue(!c_interlaced->GetTypedConfigValue());
+              config::SaveConfig();
+            }
 
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_use_50hz_mode->description();
-          }
-
-          auto c_interlaced = dynamic_cast<cvar::ConfigVar<bool>*>(
-              cvar::ConfigVars->find("interlaced")->second);
-          if (ImGui::Checkbox("Interlaced Video Mode",
-                              c_interlaced->current_value())) {
-            c_interlaced->SetConfigValue(!c_interlaced->GetTypedConfigValue());
-            config::SaveConfig();
-          }
-
-          if (ImGui::IsItemFocused()) {
-            tooltip = c_interlaced->description();
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_interlaced->description();
+            }
           }
         }
 
@@ -8960,18 +9013,46 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
          22.0f * uy}};
 
     const char* tab_labels[4] = {"games", "settings", "paths", "about"};
+    // One color per tab (not per slot) so a given tab keeps its identity as
+    // it moves between slot positions while cycling with LB/RB - loosely
+    // matching the real Xbox Blades UI's per-blade color coding.
+    const ImU32 tab_colors[4] = {
+        IM_COL32(30, 110, 30, 255),    // games - green
+        IM_COL32(30, 60, 140, 255),    // settings - blue
+        IM_COL32(140, 100, 20, 255),   // paths - amber
+        IM_COL32(110, 30, 110, 255),   // about - purple
+    };
     int active_index = static_cast<int>(active_frontend_page_);
-    
+
+    // Fade the tab labels in over a short window after a blade switch,
+    // instead of them snapping straight to full opacity - a small nod to
+    // the real Blades UI's tab-change animation.
+    constexpr float kTabFadeInSeconds = 0.25f;
+    float seconds_since_switch = std::chrono::duration<float>(
+                                     std::chrono::steady_clock::now() -
+                                     last_page_switch_time_)
+                                     .count();
+    float tab_fade_alpha =
+        std::clamp(seconds_since_switch / kTabFadeInSeconds, 0.0f, 1.0f);
+
     // Check if tabs text should be hidden
     auto c_hide_tabs = dynamic_cast<cvar::ConfigVar<bool>*>(
         cvar::ConfigVars->find("ui_hide_tabs_text")->second);
     bool hide_tabs_text = c_hide_tabs ? c_hide_tabs->GetTypedConfigValue() : false;
-    
+
     if (!hide_tabs_text) {
       for (int i = 0; i < 4; ++i) {
         int slot_index = (active_index + i) % 4;
+        ImU32 color = tab_colors[slot_index];
+        // Only the newly-active tab (slot 0) animates in - the other three
+        // are unaffected by which one just became active.
+        if (i == 0) {
+          uint8_t alpha = static_cast<uint8_t>(
+              255.0f * (0.4f + 0.6f * tab_fade_alpha));
+          color = (color & 0x00FFFFFFu) | (static_cast<ImU32>(alpha) << 24);
+        }
         draw_rotated_text(tab_labels[slot_index], slots[i].pos, slots[i].font_size,
-                          IM_COL32(0, 0, 0, 255), slots[i].rotation);
+                          color, slots[i].rotation);
       }
     }
     const float footer_text_size = 13.5f * uy;

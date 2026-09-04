@@ -357,6 +357,11 @@ class EmulatorWindow {
     std::string selected_game_name_;
     bool show_path_warning_ = false;
     FrontendPage active_frontend_page_ = FrontendPage::kGameList;
+    // Set whenever active_frontend_page_ changes, used to fade the blade
+    // tab labels in over a short duration instead of them snapping
+    // instantly - a small nod to the real Xbox Blades UI's tab transitions.
+    std::chrono::steady_clock::time_point last_page_switch_time_ =
+        std::chrono::steady_clock::now();
     bool show_action_status_ = false;
     std::string action_status_;
     ActionPopupMode action_popup_mode_ = ActionPopupMode::kInfo;

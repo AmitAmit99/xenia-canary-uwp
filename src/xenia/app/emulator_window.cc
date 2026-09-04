@@ -836,6 +836,17 @@ void EmulatorWindow::ContentInstallDialog::OnDraw(ImGuiIO& io) {
 }
 
 void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
+  // One-time trace so a future crash log's last line pinpoints whether
+  // execution ever reached here at all - two guesses at the frontend-startup
+  // crash (a cvar-lookup guard, then dialog registration order) have both
+  // failed to fix it, so bisecting via logging is the next step rather than
+  // a third blind guess.
+  static bool logged_first_draw = false;
+  if (!logged_first_draw) {
+    logged_first_draw = true;
+    XELOGI("PauseMenuDialog::OnDraw first frame reached.");
+  }
+
   // Handled at the very top, before any rendering this frame, so the frame
   // where "Exit Game" was clicked still finishes and presents normally
   // instead of tearing down mid-render.
@@ -2797,6 +2808,12 @@ void EmulatorWindow::WinRTFrontendDialog::DrawNoProfilePrompt(ImGuiIO& io) {
 }
 
 void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
+  static bool logged_first_draw = false;
+  if (!logged_first_draw) {
+    logged_first_draw = true;
+    XELOGI("WinRTFrontendDialog::OnDraw first frame reached.");
+  }
+
   if (UWP::HasGamePath()) {
     UWP::SelectGameFromWinRT(emulator_window_.emulator());
     Close();
@@ -2875,12 +2892,14 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
       int page_index = static_cast<int>(active_frontend_page_);
       page_index = (page_index + page_count - 1) % page_count;
       active_frontend_page_ = static_cast<FrontendPage>(page_index);
+      XELOGI("Frontend: LB -> page {}", page_index);
     }
     if (!blade_switch_blocked &&
         ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) {
       int page_index = static_cast<int>(active_frontend_page_);
       page_index = (page_index + 1) % page_count;
       active_frontend_page_ = static_cast<FrontendPage>(page_index);
+      XELOGI("Frontend: RB -> page {}", page_index);
     }
 
     auto draw_nav_button = [this, display_scale](const char* label,
@@ -3006,6 +3025,7 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
       static double gamelist_last_x_open_time = -1000.0;
 
       if (settings_tab_open && !settings_tab_was_open) {
+        XELOGI("Settings: tab opened, section reset to 0");
         settings_selected_section = 0;
         settings_focus_requested = true;
         settings_focus_right_requested = false;
@@ -6581,6 +6601,9 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
                                  ImGuiSelectableFlags_None, item_size);
               ImGui::PopStyleColor(4);
               if (ImGui::IsItemClicked()) {
+                if (settings_selected_section != i) {
+                  XELOGI("Settings: clicked -> section {}", i);
+                }
                 settings_selected_section = i;
               }
               ImDrawList* settings_draw_list = ImGui::GetWindowDrawList();
@@ -6615,6 +6638,9 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
               ImGui::PopID();
               ImGui::Dummy(ImVec2(0.0f, 6.0f * display_scale));
               if (entry_focused) {
+                if (settings_selected_section != i) {
+                  XELOGI("Settings: focus -> section {}", i);
+                }
                 settings_selected_section = i;
                 settings_focus_requested = false;
                 settings_focus_on_right = false;

@@ -124,11 +124,6 @@ X_RESULT InputSystem::GetState(uint32_t user_index, uint32_t flags,
                                X_INPUT_STATE* out_state) {
   SCOPE_profile_cpu_f("hid");
 
-  if (input_suppressed_) {
-    *out_state = {};
-    return X_ERROR_SUCCESS;
-  }
-
   std::vector<InputDriver*> filtered_drivers = FilterDrivers(flags);
   if (filtered_drivers.empty()) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
@@ -166,10 +161,6 @@ X_RESULT InputSystem::SetState(uint32_t user_index,
 X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
                                    X_INPUT_KEYSTROKE* out_keystroke) {
   SCOPE_profile_cpu_f("hid");
-
-  if (input_suppressed_) {
-    return X_ERROR_EMPTY;
-  }
 
   std::vector<InputDriver*> filtered_drivers = FilterDrivers(flags);
 

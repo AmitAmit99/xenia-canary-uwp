@@ -904,10 +904,20 @@ void EmulatorWindow::PauseMenuDialog::OnDraw(ImGuiIO& io) {
   }
   // Otherwise the same button presses used to navigate this menu (the B
   // button to Resume, in particular) would simultaneously reach the running
-  // game's own input handling underneath it.
-  if (emulator_window_.emulator() && emulator_window_.emulator()->input_system()) {
-    emulator_window_.emulator()->input_system()->SetInputSuppressed(
-        show_menu_);
+  // game's own input handling underneath it. is_xam_dialog_present_ is the
+  // same flag Xenia's own system dialogs (message boxes, on-screen keyboard)
+  // already use for this - it only affects the guest's XamInputGetState
+  // call (see xam_input.cc), not xenia-ui's own input_system_->GetState()
+  // calls, so it doesn't also blind this menu's own gamepad navigation the
+  // way suppressing InputSystem::GetState() itself did (tried and reverted -
+  // ImGuiDrawer::UpdateGamepads() reads through that same function to
+  // decide which controller to read for the UI, so that approach broke
+  // this menu's own input within about a frame of opening).
+  if (emulator_window_.emulator() && emulator_window_.emulator()->kernel_state()) {
+    emulator_window_.emulator()
+        ->kernel_state()
+        ->xam_state()
+        ->is_xam_dialog_present_.store(show_menu_);
   }
   if (!show_menu_) {
     return;

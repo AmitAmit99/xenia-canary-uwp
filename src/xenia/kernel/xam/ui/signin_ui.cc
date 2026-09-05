@@ -342,6 +342,9 @@ void SigninUI::OnDraw(ImGuiIO& io) {
       creating_profile_ = false;
       creating_profile_focus_requested_ = false;
       focus_requested_ = true;
+#if XE_PLATFORM_WINRT
+      UWP::HideKeyboard();
+#endif
     }
 
     const xe::app::OverlayHeaderLayout create_header_layout =
@@ -394,6 +397,9 @@ void SigninUI::OnDraw(ImGuiIO& io) {
       creating_profile_focus_requested_ = false;
       focus_requested_ = true;
       ReloadProfiles(false);
+#if XE_PLATFORM_WINRT
+      UWP::HideKeyboard();
+#endif
     }
     ImGui::EndDisabled();
     ImGui::SameLine(0.0f, create_button_gap);
@@ -403,6 +409,9 @@ void SigninUI::OnDraw(ImGuiIO& io) {
       creating_profile_ = false;
       creating_profile_focus_requested_ = false;
       focus_requested_ = true;
+#if XE_PLATFORM_WINRT
+      UWP::HideKeyboard();
+#endif
     }
 
     const float create_footer_text_size = 13.5f * uy;

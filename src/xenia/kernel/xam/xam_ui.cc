@@ -28,6 +28,9 @@
 #include "xenia/kernel/xam/ui/gamercard_ui.h"
 #include "xenia/kernel/xam/ui/passcode_ui.h"
 #include "xenia/kernel/xam/ui/signin_ui.h"
+#if XE_PLATFORM_WINRT
+#include "xenia-canary-uwp/WinRTKeyboard.h"
+#endif
 
 DEFINE_bool(storage_selection_dialog, false,
             "Show storage device selection dialog when the game requests it.",
@@ -550,6 +553,9 @@ void KeyboardInputDialog::OnDraw(ImGuiIO& io) {
     ImGui::OpenPopup(title_.c_str());
     has_opened_ = true;
     first_draw = true;
+#if XE_PLATFORM_WINRT
+    UWP::ShowKeyboard();
+#endif
   }
   if (ImGui::BeginPopupModal(title_.c_str(), nullptr,
                              ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -579,12 +585,18 @@ void KeyboardInputDialog::OnDraw(ImGuiIO& io) {
       text_ = std::string(text_buffer_.data(), text_buffer_.size());
       cancelled_ = false;
       ImGui::CloseCurrentPopup();
+#if XE_PLATFORM_WINRT
+      UWP::HideKeyboard();
+#endif
       Close();
     }
     if (ImGui::Button("OK")) {
       text_ = std::string(text_buffer_.data(), text_buffer_.size());
       cancelled_ = false;
       ImGui::CloseCurrentPopup();
+#if XE_PLATFORM_WINRT
+      UWP::HideKeyboard();
+#endif
       Close();
     }
     ImGui::SameLine();
@@ -592,6 +604,9 @@ void KeyboardInputDialog::OnDraw(ImGuiIO& io) {
       text_ = "";
       cancelled_ = true;
       ImGui::CloseCurrentPopup();
+#if XE_PLATFORM_WINRT
+      UWP::HideKeyboard();
+#endif
       Close();
     }
     ImGui::Spacing();

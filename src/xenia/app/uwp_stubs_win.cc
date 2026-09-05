@@ -161,6 +161,7 @@ std::vector<std::string> GetPaths() { return {}; }
 void SetGamePaths(std::vector<std::string> paths) {}
 
 void ShowKeyboard() {}
+void HideKeyboard() {}
 void HandleCharacter(uint32_t keycode) {}
 
 }  // namespace UWP

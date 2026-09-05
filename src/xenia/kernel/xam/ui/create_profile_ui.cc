@@ -158,6 +158,7 @@ void CreateProfileUI::OnDraw(ImGuiIO& io) {
   ImGui::PopStyleVar(3);
 
   if (should_close) {
+    UWP::HideKeyboard();
     Close();
   }
 #else

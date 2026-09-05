@@ -3861,6 +3861,7 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
             search_panel_list_focus_requested_ = false;
             gamelist_window_focus_requested = true;
             gamelist_focus_selected_request = true;
+            UWP::HideKeyboard();
           }
         }
         search_gamepad_y_was_down_ = controller_y_down;

@@ -39,6 +39,10 @@ original [danprice142/xenia-canary-uwp](https://github.com/danprice142/xenia-can
   without needing PIX.
 - **"Apply Optimized Settings" manual-browse fallback** when no community
   config exists online for a title, instead of a dead-end message.
+- **Custom frontend background image**: Settings > UI now has a "Browse for
+  Custom Background..." picker that lets you use any image file as the
+  dashboard background, on top of the existing preset dropdown - the blade
+  tab bar and interface overlay are unaffected.
 
 ### Fixed (bugs present in the original)
 - Game list showed duplicate entries for titles with both `default.xex` and a

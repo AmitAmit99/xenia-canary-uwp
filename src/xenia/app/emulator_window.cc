@@ -152,6 +152,12 @@ DEFINE_string(ui_background_image, "xenia.png",
               "Background image to display in the frontend when no overlay is present. Must be a PNG file in Assets/backgrounds/.",
               "UI");
 
+DEFINE_string(ui_custom_background_path, "",
+              "Absolute path to a user-picked custom background image. "
+              "Takes priority over Background Image when set; leave empty "
+              "to use the preset picker instead.",
+              "UI");
+
 DEFINE_bool(ui_enable_dynamic_game_backgrounds, true,
             "Enable dynamic game-specific background artwork in the frontend.",
             "UI");
@@ -8187,6 +8193,56 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
             ImGui::Text("No background images found in Assets/backgrounds/");
           }
 
+          // Custom background image - lets the user pick any image file
+          // from storage instead of the Assets/backgrounds/ presets above.
+          // Only the plain background layer changes; the blade tab bar and
+          // interface overlay are drawn on top of this exactly as before.
+          auto c_custom_background = dynamic_cast<cvar::ConfigVar<std::string>*>(
+              cvar::ConfigVars->find("ui_custom_background_path")->second);
+          std::string custom_background_path =
+              c_custom_background ? c_custom_background->GetTypedConfigValue()
+                                  : "";
+
+          if (!custom_background_path.empty()) {
+            ImGui::TextWrapped("Custom background: %s",
+                               std::filesystem::path(custom_background_path)
+                                   .filename()
+                                   .string()
+                                   .c_str());
+          }
+
+          if (ImGui::Button(custom_background_path.empty()
+                                ? "Browse for Custom Background..."
+                                : "Change Custom Background...")) {
+            imgui_drawer()->SetIgnoreInput(true);
+            UWP::SelectFile([this, c_custom_background](std::string file_path) {
+              imgui_drawer()->SetIgnoreInput(false);
+              if (file_path.empty() || c_custom_background == nullptr) {
+                return;
+              }
+              c_custom_background->SetConfigValue(file_path);
+              config::SaveConfig();
+              background_fallback_tex_.reset();
+            });
+          }
+          if (ImGui::IsItemFocused()) {
+            tooltip =
+                "Pick any image file to use as the frontend background. "
+                "Overrides the Background Image preset above until cleared.";
+          }
+
+          if (!custom_background_path.empty()) {
+            ImGui::SameLine();
+            if (ImGui::Button("Clear Custom Background")) {
+              c_custom_background->SetConfigValue(std::string());
+              config::SaveConfig();
+              background_fallback_tex_.reset();
+            }
+            if (ImGui::IsItemFocused()) {
+              tooltip = "Revert to the Background Image preset above.";
+            }
+          }
+
           // Dynamic game backgrounds toggle
           auto c_dynamic_bg = dynamic_cast<cvar::ConfigVar<bool>*>(
               cvar::ConfigVars->find("ui_enable_dynamic_game_backgrounds")->second);
@@ -9175,8 +9231,23 @@ EmulatorWindow::WinRTFrontendDialog::GetOrCreateBackgroundFallback() {
     return background_fallback_tex_;
   }
 
+  // A user-picked custom background takes priority over the preset picker
+  // below when set. Falls through to the presets if the file no longer
+  // exists (e.g. it was on removable storage that got disconnected).
+  auto c_custom_background = dynamic_cast<cvar::ConfigVar<std::string>*>(
+      cvar::ConfigVars->find("ui_custom_background_path")->second);
+  std::string custom_background_path =
+      c_custom_background ? c_custom_background->GetTypedConfigValue() : "";
+  if (!custom_background_path.empty()) {
+    auto custom_tex = GetOrCreateImageTexture(custom_background_path);
+    if (custom_tex != nullptr) {
+      background_fallback_tex_ = custom_tex;
+      return background_fallback_tex_;
+    }
+  }
+
   std::string path;
-  
+
   // Get the selected background from config
   auto c_background = dynamic_cast<cvar::ConfigVar<std::string>*>(
       cvar::ConfigVars->find("ui_background_image")->second);

@@ -66,11 +66,14 @@ This fork tracks the same games as upstream Xenia Canary — see the
 
 For a searchable/sortable snapshot merging the current Canary tracker with
 the older pre-Canary one (1,800+ titles total), with the actual fix pulled
-out of each game's discussion thread rather than just a checkbox, see
-[`docs/compatibility/xenia-compatibility-ledger-v2.xlsx`](docs/compatibility/xenia-compatibility-ledger-v2.xlsx),
-or open [`docs/compatibility/compatibility_list_v1.1.7.27.html`](docs/compatibility/compatibility_list_v1.1.7.27.html)
+out of each game's discussion thread rather than just a checkbox, and every
+title this port currently blocks (see below) flagged and sorted to the top,
+see [`docs/compatibility/compatibility_list_v1.1.7.27.xlsx`](docs/compatibility/compatibility_list_v1.1.7.27.xlsx)
+(includes a Legend sheet), or open
+[`docs/compatibility/compatibility_list_v1.1.7.27.html`](docs/compatibility/compatibility_list_v1.1.7.27.html)
 directly in a browser for the same data with in-page search/sort and no
-spreadsheet program needed.
+spreadsheet program needed. `xenia-compatibility-ledger-v2.xlsx` is the
+original unannotated bulk-imported ledger these are both generated from.
 Real-device findings from actual Xbox testing (as opposed to the
 bulk-imported ledger above) are tracked separately in
 [`docs/compatibility/KNOWN_ISSUES.md`](docs/compatibility/KNOWN_ISSUES.md).

@@ -67,13 +67,19 @@ This fork tracks the same games as upstream Xenia Canary — see the
 For a searchable/sortable snapshot merging the current Canary tracker with
 the older pre-Canary one (1,800+ titles total), with the actual fix pulled
 out of each game's discussion thread rather than just a checkbox, see
-[`docs/compatibility/xenia-compatibility-ledger-v2.xlsx`](docs/compatibility/xenia-compatibility-ledger-v2.xlsx).
+[`docs/compatibility/xenia-compatibility-ledger-v2.xlsx`](docs/compatibility/xenia-compatibility-ledger-v2.xlsx),
+or open [`docs/compatibility/compatibility_list_v1.1.7.27.html`](docs/compatibility/compatibility_list_v1.1.7.27.html)
+directly in a browser for the same data with in-page search/sort and no
+spreadsheet program needed.
 Real-device findings from actual Xbox testing (as opposed to the
 bulk-imported ledger above) are tracked separately in
 [`docs/compatibility/KNOWN_ISSUES.md`](docs/compatibility/KNOWN_ISSUES.md).
 The UWP/Xbox build only has the Direct3D 12 backend available (no native
-Vulkan driver on Xbox), so a handful of titles whose fix on desktop requires
-switching to Vulkan won't have that specific fix available on Xbox.
+Vulkan driver on Xbox), so titles whose only known fix is switching to
+Vulkan are blocked from launching entirely, with an explanation, rather
+than being allowed to hang or render incorrectly — see
+`EmulatorWindow::RunTitle`'s `kVulkanRequiredTitleIds` and the "Blocked"
+section of `KNOWN_ISSUES.md` for the full, named list.
 
 ## Credits
 

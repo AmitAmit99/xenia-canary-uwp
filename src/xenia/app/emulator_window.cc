@@ -2638,21 +2638,41 @@ xe::X_STATUS EmulatorWindow::RunTitle(const std::filesystem::path& path_to_file)
   } else if (const std::set<uint32_t> kVulkanRequiredTitleIds = {
                  0x5451085D,  // WWE SmackDown vs. Raw 2011: hangs the D3D12
                               // backend under sustained memexport draw load;
-                              // the only known fix is the Vulkan backend,
-                              // which has no driver on Xbox at all.
+                              // confirmed via direct testing on this port.
+                 // The rest below are community-reported gpu="vulkan" fixes
+                 // pulled from the compatibility ledger (best-effort text
+                 // extracted from xenia-canary/game-compatibility tracker
+                 // discussions - not independently re-verified on this
+                 // port). The underlying D3D12 issue isn't necessarily a
+                 // hang like SVR11's, but Vulkan is the only known fix for
+                 // it, and Vulkan doesn't exist on Xbox, so these are
+                 // blocked the same way. Update docs/compatibility/
+                 // KNOWN_ISSUES.md when adding to this list.
+                 0x545407F2,  // Grand Theft Auto IV
+                 0x534307E7,  // Just Cause 2
+                 0x545407E6,  // Mafia II
+                 0x4B4E085C,  // Metal Gear Solid V: Ground Zeroes
+                 0x58411202,  // Sonic Adventure 2
+                 0x58410B5D,  // Burnout CRASH!
+                 0x45410891,  // EA SPORTS Grand Slam Tennis 2
+                 0x535107E4,  // Final Fantasy XIII
+                 0x4D5307FA,  // Lost Odyssey
+                 0x584108B3,  // Rez HD
+                 0x45410852,  // The Lord of the Rings: Conquest
+                 0x45410811,  // UEFA Champions League 2006-2007
+                 0x5451080B,  // WWE SmackDown vs. Raw 2008
              };
              kVulkanRequiredTitleIds.count(emulator_->title_id())) {
     // Terminate now, before the guest reaches whatever draw pattern
-    // actually hangs the backend, rather than letting the user sit through
-    // a hang with no explanation.
+    // actually hangs or corrupts rendering, rather than letting the user
+    // sit through it with no explanation.
     emulator_->TerminateTitle();
     xe::ui::ImGuiDialog::ShowMessageBox(
         imgui_drawer_.get(), "Title Cannot Run on Xbox",
-        "This title's known D3D12 hang can only be worked around by "
-        "switching to the Vulkan graphics backend, which requires a "
-        "Vulkan driver that does not exist on Xbox hardware at all (D3D12 "
-        "is the only backend the console supports). This title cannot "
-        "currently run on this port.");
+        "This title needs the Vulkan graphics backend to run correctly, "
+        "which requires a Vulkan driver that does not exist on Xbox "
+        "hardware at all (D3D12 is the only backend the console supports). "
+        "This title cannot currently run on this port.");
   } else {
     AddRecentlyLaunchedTitle(path_to_file, std::string(emulator_->title_name()));
 

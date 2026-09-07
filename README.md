@@ -74,9 +74,13 @@ see [`docs/compatibility/compatibility_list_v1.1.7.27.xlsx`](docs/compatibility/
 directly in a browser for the same data with in-page search/sort and no
 spreadsheet program needed. `xenia-compatibility-ledger-v2.xlsx` is the
 original unannotated bulk-imported ledger these are both generated from.
-Real-device findings from actual Xbox testing (as opposed to the
-bulk-imported ledger above) are tracked separately in
-[`docs/compatibility/KNOWN_ISSUES.md`](docs/compatibility/KNOWN_ISSUES.md).
+**The ledger's Status/Config columns are desktop PC Xenia Canary tracker
+data, not verified on this Xbox UWP port** — treat them as a starting
+reference, not a verdict; a title can (and does) play differently on Xbox
+than what's listed. Real-device findings from actual Xbox testing are
+tracked separately in
+[`docs/compatibility/KNOWN_ISSUES.md`](docs/compatibility/KNOWN_ISSUES.md),
+which also explains why.
 The UWP/Xbox build only has the Direct3D 12 backend available (no native
 Vulkan driver on Xbox), so titles whose only known fix is switching to
 Vulkan are blocked from launching entirely, with an explanation, rather

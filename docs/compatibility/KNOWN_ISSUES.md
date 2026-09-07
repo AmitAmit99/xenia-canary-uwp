@@ -1,6 +1,8 @@
 # Known Issues (real-device testing)
 
-Findings confirmed through actual testing on Xbox Series X in Developer Mode, as opposed to the bulk-imported data in `xenia-compatibility-ledger-v2.xlsx`. Updated as issues are investigated.
+Findings confirmed through actual testing on Xbox Series X in Developer Mode, as opposed to the bulk-imported data in `xenia-compatibility-ledger-v2.xlsx` and the generated `compatibility_list_v*.xlsx`/`.html`. Updated as issues are investigated.
+
+**Read this before trusting a status from the compatibility list:** every Status/Config value in that ledger (Playable/Gameplay/Reaches UI only/Broken/Untriaged) is bulk-imported from the **desktop** `xenia-canary/game-compatibility` tracker — some rows even further back, from an older pre-Canary tracker whose own entries are explicitly marked "unverified on Canary." None of it has been re-tested on this specific Xbox UWP port. Concrete example: the ledger lists WWE 2K16 as "Reaches UI only" (from the legacy tracker), but it's been reported as playing with no issues on this port — the ledger simply hasn't caught up, in either direction. Treat the ledger as a starting reference, not a verdict on this port; the only statuses this project has actually confirmed itself are what's documented below, plus the "Unplayable" titles blocked in-app (see the next section) — everything else in the spreadsheet could be stale, PC-specific, or simply wrong for Xbox. If you hit a mismatch, that's the ledger being wrong, not you.
 
 ## Blocked — needs Vulkan, which doesn't exist on Xbox
 

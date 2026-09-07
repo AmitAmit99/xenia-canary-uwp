@@ -157,6 +157,23 @@ header {
   flex: none;
 }
 
+.disclaimer {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--status-ui);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--status-ui) 12%, transparent);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.disclaimer svg { flex: none; margin-top: 2px; color: var(--status-ui); }
+.disclaimer b { color: var(--status-ui); }
+.disclaimer a { color: var(--status-ui); }
+
 .controls {
   display: flex;
   gap: 10px;
@@ -324,10 +341,24 @@ footer a { color: var(--accent); }
 <header>
   <div class="header-top">
     <div class="title-block">
-      <h1>Xbox 360 Compatibility <span class="version">v1.1.7.26</span></h1>
+      <h1>Xbox 360 Compatibility <span class="version">v1.1.7.27</span></h1>
       <p>1830 titles from the merged compatibility ledger (xenia-canary + legacy trackers). "Config" is the community's actual per-title fix from tracker discussions, extracted best-effort - not a manual re-verification of every thread.</p>
     </div>
     <div class="stat-strip" id="statStrip"></div>
+  </div>
+  <div class="disclaimer">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+    <div><b>This Status column is desktop PC data, not this Xbox UWP port.</b> Every status
+    and config below (Playable/Gameplay/Reaches UI only/Broken/Untriaged) comes from the
+    upstream <b>desktop</b> Xenia Canary tracker - and for entries whose Source says "Legacy
+    tracker," an even older pre-Canary one, explicitly marked unverified even on current
+    desktop Canary. None of it has been re-tested on this specific Xbox/UWP build: PC and
+    Xbox share the same D3D12 backend but run different drivers on different hardware, so a
+    title can play fine on one and not the other in either direction. The only rows this port
+    has actually confirmed itself are the 14 marked <b>Unplayable</b> (blocked in-app because
+    their fix needs Vulkan, which doesn't exist on Xbox) and whatever's in
+    <code>KNOWN_ISSUES.md</code>. Got a game that plays differently than listed here? That's
+    expected, not a bug in this list - open an issue so it can be corrected.</div>
   </div>
   <div class="controls">
     <div class="search-wrap">
@@ -356,7 +387,7 @@ footer a { color: var(--accent); }
 </div>
 
 <footer>
-  Blocked (Vulkan) = launch is refused in-app with an explanation, since Vulkan has no driver on Xbox at all. See <span class="mono">docs/compatibility/KNOWN_ISSUES.md</span> for the full reasoning per title. Data current as of release v1.1.7.26.
+Unplayable = launch is refused in-app with an explanation, since Vulkan has no driver on Xbox at all. See <span class="mono">docs/compatibility/KNOWN_ISSUES.md</span> for the full reasoning per title. Data current as of release v1.1.7.27.
 </footer>
 
 <script>
@@ -378,7 +409,7 @@ function statusPillHtml(row) {
   if (row.blocked) {
     const meta = STATUS_META[row.status];
     return `<div class="status-cell">
-      <span class="pill pill-blocked"><span class="dot"></span>Blocked &middot; Vulkan</span>
+      <span class="pill pill-blocked"><span class="dot"></span>Unplayable</span>
       <span class="orig">was: ${esc(row.status)}</span>
     </div>`;
   }
@@ -421,7 +452,7 @@ function buildStatChips() {
   const strip = document.getElementById("statStrip");
   const chips = [{ key: "all", label: "All", n: DATA.length, dot: "var(--text-faint)" }];
   statusOrder.forEach(s => chips.push({ key: s, label: s, n: counts[s] || 0, dot: statusDotVar[s] }));
-  chips.push({ key: "Blocked", label: "Blocked (Vulkan)", n: blockedCount, dot: statusDotVar["Blocked"] });
+  chips.push({ key: "Blocked", label: "Unplayable (Vulkan)", n: blockedCount, dot: statusDotVar["Blocked"] });
 
   strip.innerHTML = chips.map(c => `
     <div class="stat-chip" data-filter="${c.key}" style="--dot:${c.dot}">
@@ -443,7 +474,7 @@ function buildStatusSelect() {
   const sel = document.getElementById("statusFilter");
   const opts = [["all", "All statuses"]].concat(
     statusOrder.map(s => [s, s])
-  ).concat([["Blocked", "Blocked (Vulkan)"]]);
+  ).concat([["Blocked", "Unplayable (Vulkan)"]]);
   sel.innerHTML = opts.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("");
   sel.addEventListener("change", applyFilters);
 }

@@ -64,20 +64,28 @@ its dependencies).
 This fork tracks the same games as upstream Xenia Canary — see the
 [official compatibility tracker](https://github.com/xenia-canary/game-compatibility/issues).
 
+**For what's actually confirmed on this Xbox UWP port** — games tested
+directly on real Xbox hardware, plus every title this port's own code
+blocks — see [`docs/compatibility/uwp_compatibility_list.xlsx`](docs/compatibility/uwp_compatibility_list.xlsx).
+It's a short list on purpose: nobody has run all 1,800+ titles on an
+actual Xbox yet, so every other title is honestly marked "Untested on
+UWP" rather than borrowing a PC status for it. Grows as real testing
+comes in — see its Read Me sheet.
+
 For a searchable/sortable snapshot merging the current Canary tracker with
 the older pre-Canary one (1,800+ titles total), with the actual fix pulled
-out of each game's discussion thread rather than just a checkbox, and every
-title this port currently blocks (see below) flagged and sorted to the top,
-see [`docs/compatibility/compatibility_list_v1.1.7.27.xlsx`](docs/compatibility/compatibility_list_v1.1.7.27.xlsx)
+out of each game's discussion thread rather than just a checkbox, see
+[`docs/compatibility/compatibility_list_v1.1.7.27.xlsx`](docs/compatibility/compatibility_list_v1.1.7.27.xlsx)
 (includes a Legend sheet), or open
 [`docs/compatibility/compatibility_list_v1.1.7.27.html`](docs/compatibility/compatibility_list_v1.1.7.27.html)
 directly in a browser for the same data with in-page search/sort and no
 spreadsheet program needed. `xenia-compatibility-ledger-v2.xlsx` is the
 original unannotated bulk-imported ledger these are both generated from.
-**The ledger's Status/Config columns are desktop PC Xenia Canary tracker
-data, not verified on this Xbox UWP port** — treat them as a starting
+**This one's Status/Config columns are desktop PC Xenia Canary tracker
+data, not verified on this Xbox UWP port** — treat it as a starting
 reference, not a verdict; a title can (and does) play differently on Xbox
-than what's listed. Real-device findings from actual Xbox testing are
+than what's listed (use `uwp_compatibility_list.xlsx` above for what's
+actually confirmed). Real-device findings from actual Xbox testing are
 tracked separately in
 [`docs/compatibility/KNOWN_ISSUES.md`](docs/compatibility/KNOWN_ISSUES.md),
 which also explains why.

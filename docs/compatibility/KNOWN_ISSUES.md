@@ -46,6 +46,13 @@ Reported to produce an error on install/launch regardless of whether Disc 1 is i
 ### Unidentified title — cutscene camera/rendering glitch
 Reported via a third-party video showing an extreme, rotated close-up during a dialogue cutscene. Game title not yet identified; could be an existing upstream Xenia rendering quirk rather than something specific to this port, since no rendering/shader code has been touched by this fork. Needs a game name and a reproducible case before it can be diagnosed.
 
+## Performance
+
+### Preload Shader Cache (new option, Settings > GPU)
+Requested: a way to prevent lag during gameplay. Xenia already persists a per-title shader/pipeline cache to disk (`store_shaders`, on by default) and reloads it on the next launch, compiling it in the background while the game's own loading screens play - `async_shader_compilation` skips a draw rather than stalling if its pipeline isn't ready yet, so this doesn't freeze the game, but it can still cause momentary pop-in/missing draws right as gameplay starts if the game's own loading screen finishes before the background compilation does.
+
+The new "Preload Shader Cache" toggle makes that step blocking instead: the previously-stored cache finishes warming up (using all available cores, same as before) *before* the title starts, eliminating that pop-in on a return playthrough. First-time launches with nothing cached yet aren't affected either way. **Trade-off, and why it's off by default:** title launch runs synchronously on the same thread as the frontend, and that thread has no path to keep rendering an animated frame while blocked - so turning this on trades a longer, unanimated pause between clicking a game and it starting for a smoother playthrough once it does. Verified to build and link correctly; **not yet confirmed on real Xbox hardware** - specifically whether that pause reads as "loading" or as "frozen" needs an on-device check with a title that already has a warm cache (play it once, exit, relaunch it, toggle the setting).
+
 ## App-level issues (not game-specific)
 
 ### Settings/main-menu blade crash — FIXED

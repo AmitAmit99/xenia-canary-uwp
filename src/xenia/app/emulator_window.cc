@@ -7632,6 +7632,21 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
             }
           }
 
+          auto c_preload_shader_cache =
+              FindConfigVar<bool>("preload_shader_cache");
+          if (c_preload_shader_cache) {
+            if (ImGui::Checkbox("Preload Shader Cache",
+                                c_preload_shader_cache->current_value())) {
+              c_preload_shader_cache->SetConfigValue(
+                  !c_preload_shader_cache->GetTypedConfigValue());
+              config::SaveConfig();
+            }
+
+            if (ImGui::IsItemFocused()) {
+              tooltip = c_preload_shader_cache->description();
+            }
+          }
+
           auto c_scale_x = FindConfigVar<int>("draw_resolution_scale_x");
           auto c_scale_y = FindConfigVar<int>("draw_resolution_scale_y");
           if (c_scale_x && c_scale_y) {

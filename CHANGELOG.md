@@ -43,6 +43,10 @@ original [danprice142/xenia-canary-uwp](https://github.com/danprice142/xenia-can
   Custom Background..." picker that lets you use any image file as the
   dashboard background, on top of the existing preset dropdown - the blade
   tab bar and interface overlay are unaffected.
+- **Preload Shader Cache** (Settings > GPU): optionally blocks title launch
+  until the stored shader/pipeline cache from a previous playthrough has
+  fully warmed up, trading a longer pause before the game starts for no
+  pipeline pop-in once it does. Off by default - see `KNOWN_ISSUES.md`.
 
 ### Fixed (bugs present in the original)
 - Game list showed duplicate entries for titles with both `default.xex` and a

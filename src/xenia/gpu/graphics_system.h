@@ -18,6 +18,7 @@
 #include <string>
 #include <thread>
 
+#include "xenia/base/cvar.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/gpu/register_file.h"
 #include "xenia/kernel/xthread.h"
@@ -26,6 +27,8 @@
 #include "xenia/ui/presenter.h"
 #include "xenia/ui/windowed_app_context.h"
 #include "xenia/xbox.h"
+
+DECLARE_bool(preload_shader_cache);
 
 namespace xe {
 class Emulator;

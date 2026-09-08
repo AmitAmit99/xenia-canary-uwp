@@ -269,6 +269,10 @@ void PipelineCache::InitializeShaderStorage(
   shader_storage_file_flush_needed_ = false;
   pipeline_storage_file_flush_needed_ = false;
 
+  shader_storage_preload_done_.store(0, std::memory_order_relaxed);
+  shader_storage_preload_total_.store(pipeline_stored_descriptions.size(),
+                                      std::memory_order_relaxed);
+
   // Create the pipelines.
   if (!pipeline_stored_descriptions.empty()) {
     uint64_t pipeline_creation_start_ = xe::Clock::QueryHostTickCount();
@@ -322,6 +326,7 @@ void PipelineCache::InitializeShaderStorage(
       }
       if (pipeline_found) {
         ++pipelines_already_exist;
+        shader_storage_preload_done_.fetch_add(1, std::memory_order_relaxed);
         continue;
       }
 
@@ -330,6 +335,7 @@ void PipelineCache::InitializeShaderStorage(
           shaders_.find(pipeline_description.vertex_shader_hash);
       if (vertex_shader_it == shaders_.end()) {
         ++pipelines_vs_not_found;
+        shader_storage_preload_done_.fetch_add(1, std::memory_order_relaxed);
         XELOGW("Pipeline cache: VS {:016X} not found in shader storage",
                pipeline_description.vertex_shader_hash);
         continue;
@@ -343,6 +349,7 @@ void PipelineCache::InitializeShaderStorage(
           !pipeline_runtime_description.vertex_shader->is_translated() ||
           !pipeline_runtime_description.vertex_shader->is_valid()) {
         ++pipelines_vs_translation_missing;
+        shader_storage_preload_done_.fetch_add(1, std::memory_order_relaxed);
         XELOGW(
             "Pipeline cache: VS {:016X} mod {:016X} translation "
             "missing/invalid",
@@ -356,6 +363,7 @@ void PipelineCache::InitializeShaderStorage(
             shaders_.find(pipeline_description.pixel_shader_hash);
         if (pixel_shader_it == shaders_.end()) {
           ++pipelines_ps_not_found;
+          shader_storage_preload_done_.fetch_add(1, std::memory_order_relaxed);
           XELOGW("Pipeline cache: PS {:016X} not found in shader storage",
                  pipeline_description.pixel_shader_hash);
           continue;
@@ -369,6 +377,7 @@ void PipelineCache::InitializeShaderStorage(
             !pipeline_runtime_description.pixel_shader->is_translated() ||
             !pipeline_runtime_description.pixel_shader->is_valid()) {
           ++pipelines_ps_translation_missing;
+          shader_storage_preload_done_.fetch_add(1, std::memory_order_relaxed);
           XELOGW(
               "Pipeline cache: PS {:016X} mod {:016X} translation "
               "missing/invalid",
@@ -400,6 +409,7 @@ void PipelineCache::InitializeShaderStorage(
                       .vertex.host_vertex_shader_type));
       if (!pipeline_runtime_description.root_signature) {
         ++pipelines_root_sig_failed;
+        shader_storage_preload_done_.fetch_add(1, std::memory_order_relaxed);
         XELOGW(
             "Pipeline cache: Root signature failed for VS {:016X} PS {:016X}",
             pipeline_description.vertex_shader_hash,
@@ -437,6 +447,7 @@ void PipelineCache::InitializeShaderStorage(
         new_pipeline->state.store(
             CreateD3D12Pipeline(pipeline_runtime_description),
             std::memory_order_release);
+        shader_storage_preload_done_.fetch_add(1, std::memory_order_relaxed);
       }
       ++pipelines_created;
     }
@@ -3385,6 +3396,7 @@ void PipelineCache::CreationThread(size_t thread_index) {
                        .ucode_data_hash()
                  : 0);
     }
+    shader_storage_preload_done_.fetch_add(1, std::memory_order_relaxed);
 
     // Pipeline created - the thread is not busy anymore, safe to set the
     // completion event if needed (at the next iteration, or in some other
@@ -3425,6 +3437,7 @@ void PipelineCache::CreateQueuedPipelinesOnProcessorThread() {
     } else {
       XELOGW("ProcessorThread: Pipeline creation failed");
     }
+    shader_storage_preload_done_.fetch_add(1, std::memory_order_relaxed);
   }
 }
 

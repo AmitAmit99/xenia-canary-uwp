@@ -158,6 +158,16 @@ class CommandProcessor {
       const std::filesystem::path& cache_root, uint32_t title_id, bool blocking,
       std::function<void()> completion_callback = nullptr);
 
+  // Progress of the shader/pipeline warm-up started by the most recent
+  // InitializeShaderStorage call, for a UI to poll. total_out/done_out are 0
+  // on backends that don't track this (default implementation) or when
+  // there was nothing stored to warm up.
+  virtual void GetShaderStoragePreloadProgress(size_t& total_out,
+                                               size_t& done_out) const {
+    total_out = 0;
+    done_out = 0;
+  }
+
   virtual void RequestFrameTrace(const std::filesystem::path& root_path);
   virtual void BeginTracing(const std::filesystem::path& root_path);
   virtual void EndTracing();

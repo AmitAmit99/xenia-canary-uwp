@@ -39,14 +39,14 @@ DEFINE_bool(
 
 DEFINE_bool(
     preload_shader_cache, false,
-    "Wait for the stored shader/pipeline cache to finish warming up before "
-    "the game starts, instead of compiling it in the background during the "
-    "game's own loading screens. Removes the pop-in/missing draws that can "
-    "happen while a pipeline is still compiling in the background, at the "
-    "cost of a longer, unanimated pause before the game starts on titles "
-    "you've played before (does nothing on a first run with no existing "
-    "cache to preload). Off by default; has no effect unless store_shaders "
-    "is also enabled.",
+    "Wait for the stored shader/pipeline cache to finish warming up (shown "
+    "as an on-screen progress bar) before the game starts, instead of "
+    "compiling it in the background during the game's own loading screens. "
+    "Removes the pop-in/missing draws that can happen while a pipeline is "
+    "still compiling in the background, at the cost of a longer pause "
+    "before the game starts on titles you've played before (does nothing "
+    "on a first run with no existing cache to preload). Off by default; "
+    "has no effect unless store_shaders is also enabled.",
     "GPU.Debug");
 
 namespace xe {

@@ -1819,12 +1819,17 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   // ready, so this is safe, though it can still cause momentary pop-in/
   // missing draws right as gameplay starts if the game's own loading screen
   // was shorter than the background compilation. cvars::preload_shader_cache
-  // opts into blocking here instead: title launch (this whole call chain,
-  // from EmulatorWindow::RunTitle down) runs synchronously on the thread
-  // that's calling it, so this trades a longer, unanimated pause on that
-  // thread before the game starts for zero pipeline pop-in once it does -
-  // acceptable for a title you've already played (there's a cache to warm
-  // up), a no-op otherwise (nothing queued to wait on).
+  // opts into blocking here instead, trading a longer pause before the game
+  // starts for zero pipeline pop-in once it does - acceptable for a title
+  // you've already played (there's a cache to warm up), a no-op otherwise
+  // (nothing queued to wait on). Always blocks the UI thread specifically:
+  // this whole function unconditionally re-dispatches itself onto it near
+  // the top (see the IsInUIThread() check above) since it also touches the
+  // window icon and game config UI callbacks, so calling LaunchPath from a
+  // different thread doesn't avoid the freeze, just adds a hop.
+  // GetShaderStoragePreloadProgress() on the command processor exposes how
+  // far the warm-up has gotten, for whenever a way to animate through this
+  // freeze (or to lift the IsInUIThread() requirement) is worth pursuing.
   if (graphics_system_) {
     on_shader_storage_initialization(true);
     graphics_system_->InitializeShaderStorage(

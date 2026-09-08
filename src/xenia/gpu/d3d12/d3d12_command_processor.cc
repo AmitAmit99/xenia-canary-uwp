@@ -82,6 +82,12 @@ void D3D12CommandProcessor::InitializeShaderStorage(
                                            std::move(completion_callback));
 }
 
+void D3D12CommandProcessor::GetShaderStoragePreloadProgress(
+    size_t& total_out, size_t& done_out) const {
+  total_out = pipeline_cache_->GetShaderStoragePreloadTotal();
+  done_out = pipeline_cache_->GetShaderStoragePreloadDone();
+}
+
 void D3D12CommandProcessor::RequestFrameTrace(
     const std::filesystem::path& root_path) {
   // Capture with PIX if attached.

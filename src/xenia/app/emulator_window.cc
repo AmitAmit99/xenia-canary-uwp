@@ -2623,6 +2623,17 @@ xe::X_STATUS EmulatorWindow::RunTitle(const std::filesystem::path& path_to_file)
     return X_STATUS_UNSUCCESSFUL;
   }
 
+  // Tried dispatching LaunchPath to a background thread here so the UI
+  // could keep rendering a live progress overlay during a blocking shader
+  // cache preload (see Preload Shader Cache) instead of freezing - reverted
+  // after finding that Emulator::CompleteLaunch (where the actual blocking
+  // wait happens) unconditionally re-dispatches itself onto the UI thread
+  // via CallInUIThreadSynchronous if it's not already running there (it
+  // touches the window icon and game config UI callbacks). So the freeze
+  // happens on the UI thread no matter which thread calls LaunchPath -
+  // there's no way to keep the frontend animating during it without a
+  // deeper, riskier change to that guard itself, which isn't safe to do
+  // blind without real hardware to test a title launch against.
   auto result = emulator_->LaunchPath(abs_path);
 
   disable_hotkeys_ = false;

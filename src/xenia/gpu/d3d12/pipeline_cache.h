@@ -69,6 +69,19 @@ class PipelineCache {
       std::function<void()> completion_callback = nullptr);
   void ShutdownShaderStorage();
 
+  // Progress of the pipeline warm-up kicked off by InitializeShaderStorage,
+  // for a UI to poll and show as "N of M". Both are 0 before the first call
+  // and while there was nothing stored to recreate; total stays fixed for
+  // the duration of one warm-up, done counts up to it (including pipelines
+  // that failed to recreate - they still count as "resolved", just not
+  // successfully).
+  size_t GetShaderStoragePreloadTotal() const {
+    return shader_storage_preload_total_.load(std::memory_order_relaxed);
+  }
+  size_t GetShaderStoragePreloadDone() const {
+    return shader_storage_preload_done_.load(std::memory_order_relaxed);
+  }
+
   void EndSubmission();
   bool IsCreatingPipelines();
   // Waits for any pipeline creation needed by the current draw path to finish
@@ -432,6 +445,10 @@ class PipelineCache {
   // Storage writer for shaders and pipelines (owns file handles and storage
   // index).
   ShaderStorageWriter<PipelineStoredDescription> storage_writer_;
+
+  // See GetShaderStoragePreloadTotal/Done.
+  std::atomic<size_t> shader_storage_preload_total_{0};
+  std::atomic<size_t> shader_storage_preload_done_{0};
 
   // Pipeline creation threads.
   void CreationThread(size_t thread_index);
